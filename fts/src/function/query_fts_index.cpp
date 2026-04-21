@@ -247,8 +247,9 @@ using VCQueryTerm = std::variant<std::string, std::unique_ptr<RE2>>;
 class MatchTermsVertexCompute final : public VertexCompute {
 public:
     explicit MatchTermsVertexCompute(std::unordered_map<offset_t, uint64_t>& resDfs,
-        std::vector<VCQueryTerm>& queryTerms)
-        : resDfs{resDfs}, queryTerms{queryTerms} {}
+        std::vector<VCQueryTerm>& queryTerms,
+        std::shared_ptr<std::mutex> resDfsMutex = std::make_shared<std::mutex>())
+        : resDfs{resDfs}, queryTerms{queryTerms}, resDfsMutex{std::move(resDfsMutex)} {}
     void vertexCompute(const graph::VertexScanState::Chunk& chunk) override {
         auto terms = chunk.getProperties<string_t>(0);
         auto dfs = chunk.getProperties<uint64_t>(1);
@@ -259,6 +260,7 @@ public:
                 std::string& queryString = std::get<0>(queryTerm);
                 for (auto i = 0u; i < chunk.size(); ++i) {
                     if (queryString == terms[i].getAsString()) {
+                        std::lock_guard guard{*resDfsMutex};
                         resDfs[nodeIds[i].offset] = dfs[i];
                     }
                 }
@@ -266,6 +268,7 @@ public:
                 RE2& regex = *std::get<1>(queryTerm);
                 for (auto i = 0u; i < chunk.size(); ++i) {
                     if (RE2::FullMatch(terms[i].getAsString(), regex)) {
+                        std::lock_guard guard{*resDfsMutex};
                         resDfs[nodeIds[i].offset] = dfs[i];
                     }
                 }
@@ -273,12 +276,13 @@ public:
         }
     }
     std::unique_ptr<VertexCompute> copy() override {
-        return std::make_unique<MatchTermsVertexCompute>(resDfs, queryTerms);
+        return std::make_unique<MatchTermsVertexCompute>(resDfs, queryTerms, resDfsMutex);
     }
 
 private:
     std::unordered_map<offset_t, uint64_t>& resDfs;
     std::vector<VCQueryTerm>& queryTerms;
+    std::shared_ptr<std::mutex> resDfsMutex;
 };
 
 static constexpr char SCORE_PROP_NAME[] = "score";
