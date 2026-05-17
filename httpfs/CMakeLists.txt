@@ -22,6 +22,7 @@ add_library(httpfs_extension_source
         src/httpfs.cpp
         src/httpfs_extension.cpp
         src/s3fs.cpp
+        src/xetfs.cpp
         src/crypto.cpp
         src/http_config.cpp
         src/cached_file_manager.cpp

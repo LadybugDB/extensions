@@ -6,6 +6,7 @@
 #include "main/database.h"
 #include "s3fs.h"
 #include "s3fs_config.h"
+#include "xetfs.h"
 
 namespace lbug {
 namespace httpfs_extension {
@@ -26,6 +27,7 @@ static void registerExtensionOptions(main::Database* db) {
 
 static void registerFileSystem(main::Database* db) {
     db->registerFileSystem(std::make_unique<HTTPFileSystem>());
+    db->registerFileSystem(std::make_unique<XetFileSystem>());
     for (auto& fsConfig : S3FileSystemConfig::getAvailableConfigs()) {
         db->registerFileSystem(std::make_unique<S3FileSystem>(fsConfig));
     }
