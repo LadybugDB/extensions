@@ -1,11 +1,11 @@
 -DATASET CSV empty
+-SKIP_MUSL
 
 --
 
 -CASE SqlQueryInPG
--SKIP
 -LOAD_DYNAMIC_EXTENSION postgres
--STATEMENT ATTACH 'dbname=pgscan user=ci host=localhost' as tinysnb (dbtype POSTGRES);
+-STATEMENT ATTACH '${POSTGRES_CONNECTION_STRING}' as tinysnb (dbtype POSTGRES);
 ---- ok
 -STATEMENT CALL SQL_QUERY('tinysnb', 'select * from person') RETURN *
 ---- 8
@@ -78,9 +78,8 @@ DEsWork|Dan
 9|Greg|2|False|False|40|4.900000|1980-10-26|1976-12-23 11:21:42|10 years 5 months 13:00:00.000024|[1]|[Grad]|1.600000|a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a17
 
 -CASE SqlQueryError
--SKIP
 -LOAD_DYNAMIC_EXTENSION postgres
--STATEMENT ATTACH 'dbname=pgscan user=ci host=localhost' as tinysnb (dbtype POSTGRES);
+-STATEMENT ATTACH '${POSTGRES_CONNECTION_STRING}' as tinysnb (dbtype POSTGRES);
 ---- ok
 -STATEMENT CALL SQL_QUERY('tinysnb', 'create table tep(id int)') RETURN *
 ---- error
@@ -105,9 +104,8 @@ Attached database successfully.
 Binder exception: sql queries can only be executed in attached postgres.
 
 -CASE SqlQueryInPGWithQuote
--SKIP
 -LOAD_DYNAMIC_EXTENSION postgres
--STATEMENT ATTACH 'dbname=pgscan user=ci host=localhost' as tinysnb (dbtype POSTGRES);
+-STATEMENT ATTACH '${POSTGRES_CONNECTION_STRING}' as tinysnb (dbtype POSTGRES);
 ---- ok
 -STATEMENT CALL SQL_QUERY('tinysnb', "select * from person where fName = 'Alice'") RETURN fname
 ---- 1
@@ -135,7 +133,6 @@ Alice
 -STATEMENT CALL SQL_QUERY('tinysnb', 'select regexp_match(fname, \'Alice\') from person') RETURN *
 ---- 8
 [Alice]
-
 
 
 

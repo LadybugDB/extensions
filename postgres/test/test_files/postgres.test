@@ -1,11 +1,11 @@
 -DATASET CSV empty
+-SKIP_MUSL
 
 --
 
 -CASE ScanPostgresTable
--SKIP
 -LOAD_DYNAMIC_EXTENSION postgres
--STATEMENT ATTACH 'dbname=pgscan user=ci host=localhost' as tinysnb (dbtype POSTGRES);
+-STATEMENT ATTACH '${POSTGRES_CONNECTION_STRING}' as tinysnb (dbtype POSTGRES);
 ---- ok
 -STATEMENT create node table person_copy (ID INt64, fName StRING, gender INT64, isStudent BoOLEAN, isWorker BOOLEAN, age INT64, eyeSight DOUBLE, birthdate DATE, registerTime TIMESTAMP, lastJobDuration interval, workedHours INT64[], usedNames STRING[], height double, u UUID, PRIMARY KEY (ID));
 ---- ok
@@ -48,7 +48,7 @@ Catalog exception: person1 does not exist in catalog.
 -STATEMENT LOAD FROM tinysnb1.person RETURN *;
 ---- error
 Runtime exception: No database named tinysnb1.
--STATEMENT ATTACH 'dbname=pgscan user=ci host=localhost' (dbtype POSTGRES);
+-STATEMENT ATTACH '${POSTGRES_CONNECTION_STRING}' (dbtype POSTGRES);
 ---- ok
 -STATEMENT LOAD FROM pgscan.movies RETURN count(*);
 ---- 1
@@ -102,7 +102,7 @@ The 😂😃🧘🏻‍♂️🌍🌦️🍞🚗 movie
 12|height|DOUBLE|NULL
 13|u|UUID|NULL
 -LOG AttachPGWithNonDefaultSchema
--STATEMENT ATTACH 'dbname=pgscan user=ci host=localhost' as lbug (dbtype POSTGRES, SCHEMA = 'lbug');
+-STATEMENT ATTACH '${POSTGRES_CONNECTION_STRING}' as lbug (dbtype POSTGRES, SCHEMA = 'lbug');
 ---- 1
 Attached database successfully.
 -STATEMENT LOAD FROM lbug.user RETURN *;
