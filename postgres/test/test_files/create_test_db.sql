@@ -26,6 +26,15 @@ CREATE SCHEMA lbug;
 ALTER SCHEMA lbug OWNER TO ci;
 
 --
+-- Name: pushdown; Type: SCHEMA; Schema: -; Owner: ci
+--
+
+CREATE SCHEMA pushdown;
+
+
+ALTER SCHEMA pushdown OWNER TO ci;
+
+--
 -- Name: audience_type; Type: TYPE; Schema: public; Owner: ci
 --
 
@@ -116,6 +125,31 @@ CREATE TABLE lbug."user" (
 ALTER TABLE lbug."user" OWNER TO ci;
 
 --
+-- Name: edges; Type: TABLE; Schema: pushdown; Owner: ci
+--
+
+CREATE TABLE pushdown.edges (
+    src bigint,
+    dst bigint,
+    weight bigint
+);
+
+
+ALTER TABLE pushdown.edges OWNER TO ci;
+
+--
+-- Name: nodes; Type: TABLE; Schema: pushdown; Owner: ci
+--
+
+CREATE TABLE pushdown.nodes (
+    id bigint NOT NULL,
+    name character varying
+);
+
+
+ALTER TABLE pushdown.nodes OWNER TO ci;
+
+--
 -- Name: movies; Type: TABLE; Schema: public; Owner: ci
 --
 
@@ -199,6 +233,30 @@ COPY lbug."user" (id, org, rate) FROM stdin;
 
 
 --
+-- Data for Name: edges; Type: TABLE DATA; Schema: pushdown; Owner: ci
+--
+
+COPY pushdown.edges (src, dst, weight) FROM stdin;
+1	2	12
+1	3	13
+2	4	24
+3	4	34
+\.
+
+
+--
+-- Data for Name: nodes; Type: TABLE DATA; Schema: pushdown; Owner: ci
+--
+
+COPY pushdown.nodes (id, name) FROM stdin;
+1	alice
+2	bob
+3	carol
+4	dan
+\.
+
+
+--
 -- Data for Name: movies; Type: TABLE DATA; Schema: public; Owner: ci
 --
 
@@ -269,6 +327,13 @@ ALTER TABLE ONLY public.person
 
 
 --
--- PostgreSQL database dump complete
+-- Name: nodes nodes_pkey; Type: CONSTRAINT; Schema: pushdown; Owner: ci
 --
 
+ALTER TABLE ONLY pushdown.nodes
+    ADD CONSTRAINT nodes_pkey PRIMARY KEY (id);
+
+
+--
+-- PostgreSQL database dump complete
+--

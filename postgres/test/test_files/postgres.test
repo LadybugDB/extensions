@@ -110,3 +110,28 @@ Attached database successfully.
 5|apple|4
 7|ms|5
 9|blackberry|7
+
+-CASE PostgresGraphJoinPushDown
+-SKIP_FSM_LEAK_CHECK
+-LOAD_DYNAMIC_EXTENSION postgres
+-STATEMENT ATTACH '${POSTGRES_CONNECTION_STRING}' as pushdown (dbtype POSTGRES, SCHEMA = 'pushdown');
+---- 1
+Attached database successfully.
+-STATEMENT CREATE REL TABLE pg_edges (FROM pushdown.nodes TO pushdown.nodes, weight INT64) WITH (storage = 'pushdown.edges');
+---- 1
+Table pg_edges has been created.
+-STATEMENT MATCH (a:pushdown.nodes)-[e:pg_edges]->(b:pushdown.nodes) RETURN count(*);
+---- 1
+4
+-STATEMENT MATCH (a:pushdown.nodes)-[e:pg_edges]->(b:pushdown.nodes) RETURN a.name, b.name;
+---- 4
+alice|bob
+alice|carol
+bob|dan
+carol|dan
+-STATEMENT MATCH (a:pushdown.nodes)-[e:pg_edges]->(b:pushdown.nodes) WHERE e.weight > 20 RETURN a.name, e.weight, b.name ORDER BY e.weight;
+---- 2
+bob|24|dan
+carol|34|dan
+-STATEMENT EXPLAIN MATCH (a:pushdown.nodes)-[e:pg_edges]->(b:pushdown.nodes) RETURN a.id, e.weight, b.id;
+---- ok
