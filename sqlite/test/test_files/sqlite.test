@@ -50,6 +50,23 @@ The 😂😃🧘🏻‍♂️🌍🌦️🍞🚗 movie|2544| the movie is very v
 ---- 2
 28532|74|72.472423|1|1977-08-16|TKn|[94, 92]|[AUSrJTUWVOESDor, ODOS6RfqMhsFO9aFUa, ziauQj]|[[123, 55, 181], [32]]|{'ID': 666, 'name': DiqSQ5u5UhS8aZi}
 49992|50|31.582059|0|2056-05-02||[62, 24, 94]|[LpQO8OT3x45a]|[[268, 281, 166], [144, 16, 126, 208, 298], [22, 287]]|{'ID': 936, 'name': sGPSafxMAhKiP}
+-STATEMENT MATCH (a:tinysnb.person) RETURN count(*);
+---- 1
+8
+-STATEMENT MATCH (a:tinysnb.person) WHERE a.age > 30 RETURN count(*);
+---- 1
+4
+-STATEMENT MATCH (a:tinysnb.person) RETURN a.ID ORDER BY a.ID LIMIT 3;
+---- 3
+0
+2
+3
+-STATEMENT MATCH (a:tinysnb.person) WHERE a.age > 20 RETURN a.ID ORDER BY a.age DESC LIMIT 2;
+---- 2
+10
+3
+-STATEMENT EXPLAIN MATCH (a:tinysnb.person) WHERE a.age > 20 RETURN a.ID ORDER BY a.age DESC LIMIT 2;
+---- ok
 -STATEMENT LOAD FROM tinysnb.person1 RETURN *;
 ---- error
 Catalog exception: person1 does not exist in catalog.
@@ -57,6 +74,27 @@ Catalog exception: person1 does not exist in catalog.
 -STATEMENT DETACH tinysnb;
 ---- 1
 Detached database successfully.
+
+-CASE SqliteGraphJoinPushDown
+-SKIP_FSM_LEAK_CHECK
+-LOAD_DYNAMIC_EXTENSION sqlite
+-STATEMENT ATTACH '${LBUG_ROOT_DIRECTORY}/extension/sqlite/test/sqlite_database/pushdown' as pushdown (dbtype sqlite);
+---- 1
+Attached database successfully.
+-STATEMENT CREATE REL TABLE sqlite_edges (FROM pushdown.nodes TO pushdown.nodes, weight INT64) WITH (storage = 'pushdown.edges');
+---- 1
+Table sqlite_edges has been created.
+-STATEMENT MATCH (a:pushdown.nodes)-[e:sqlite_edges]->(b:pushdown.nodes) RETURN count(*);
+---- 1
+4
+-STATEMENT MATCH (a:pushdown.nodes)-[e:sqlite_edges]->(b:pushdown.nodes) RETURN a.name, b.name;
+---- 4
+alice|bob
+alice|carol
+bob|dan
+carol|dan
+-STATEMENT EXPLAIN MATCH (a:pushdown.nodes)-[e:sqlite_edges]->(b:pushdown.nodes) RETURN a.id, e.weight, b.id;
+---- ok
 
 -CASE ScanSqliteDynamicTable
 -SKIP_FSM_LEAK_CHECK
