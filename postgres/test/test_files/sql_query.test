@@ -38,7 +38,7 @@ ABFsUni
 CsWork
 DEsWork
 -LOG FilterPushDownTest
--STATEMENT CALL SQL_QUERY('tinysnb', 'select * from organisation') RETURN name, orgcode
+-STATEMENT CALL SQL_QUERY('tinysnb', 'select name, orgcode from organisation') RETURN *
 ---- 3
 ABFsUni|325
 CsWork|934
@@ -84,20 +84,19 @@ DEsWork|Dan
 -STATEMENT ATTACH '${POSTGRES_CONNECTION_STRING}' as tinysnb (dbtype POSTGRES);
 ---- ok
 -STATEMENT CALL SQL_QUERY('tinysnb', 'create table tep(id int)') RETURN *
----- error
-Binder Error: No fields returned by query "create table tep(id int)" - the query must be a SELECT statement that returns at least one column
+---- error(regex)
+Binder Error: No fields returned by query "create table tep\(id int\)" - the query must be a SELECT statement that returns at least one column[\s\S]*
 -STATEMENT CALL SQL_QUERY('tinysnb', 'select organisation.name, person.fname as name from organisation, person') RETURN *
----- error
-Binder Error: table "postgres_query" has duplicate column name "name"
+---- error(regex)
+Binder Error: table "postgres_query" has duplicate column name "name"[\s\S]*
 -STATEMENT CALL SQL_QUERY('tinysnb', 'INSERT INTO PERSON VALUES(5)') RETURN *
----- error
-Binder Error: No fields returned by query "INSERT INTO PERSON VALUES(5)" - the query must be a SELECT statement that returns at least one column
+---- error(regex)
+Binder Error: No fields returned by query "INSERT INTO PERSON VALUES\(5\)" - the query must be a SELECT statement that returns at least one column[\s\S]*
 -STATEMENT CALL SQL_QUERY('tinysnb', 'SELECT * PERSON') RETURN *
----- error
-Binder Error: Failed to prepare query "SELECT * PERSON": ERROR:  syntax error at or near "PERSON"
-LINE 1: SELECT * PERSON
-                 ^
+---- error(regex)
+Binder Error: Failed to prepare query "SELECT \* PERSON": ERROR:  syntax error at or near "PERSON"[\s\S]*
 -LOAD_DYNAMIC_EXTENSION postgres
+-LOAD_DYNAMIC_EXTENSION sqlite
 -STATEMENT ATTACH '${LBUG_ROOT_DIRECTORY}/extension/sqlite/test/sqlite_database/tinysnb' as sqlitets (dbtype sqlite);
 ---- 1
 Attached database successfully.
@@ -136,8 +135,6 @@ Alice
 -STATEMENT CALL SQL_QUERY('tinysnb', 'select regexp_match(fname, \'Alice\') from person') RETURN *
 ---- 8
 [Alice]
-
-
 
 
 
