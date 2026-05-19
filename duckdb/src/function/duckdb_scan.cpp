@@ -1,6 +1,7 @@
 #include "function/duckdb_scan.h"
 
 #include "binder/binder.h"
+#include "common/constants.h"
 #include "common/exception/runtime.h"
 #include "connector/duckdb_connector.h"
 #include "function/table/bind_input.h"
@@ -14,23 +15,32 @@ using namespace lbug::common;
 namespace lbug {
 namespace duckdb_extension {
 
-std::string DuckDBScanBindData::getColumnsToSelect() const {
-    std::string columnNames = "";
+std::vector<uint32_t> DuckDBScanBindData::getColumnIndicesToSelect() const {
     auto columnSkips = getColumnSkips();
     auto numSkippedColumns =
         std::count_if(columnSkips.begin(), columnSkips.end(), [](auto item) { return item; });
     if (getNumColumns() == numSkippedColumns) {
-        return columnNamesInDuckDB[0];
+        return {0};
     }
-    bool first = true;
+    std::vector<uint32_t> result;
     for (auto i = 0u; i < getNumColumns(); i++) {
-        // Always include rowid (first column) even if marked as skipped.
+        // Always include the synthesized internal ID column even if marked as skipped.
         // This ensures consistent column ordering between DuckDB results and the converter.
-        bool isRowid =
-            (i == 0 && !columnNamesInDuckDB.empty() && columnNamesInDuckDB[0] == "rowid");
-        if (columnSkips[i] && !isRowid) {
+        bool isInternalID =
+            i == 0 && !columns.empty() &&
+            columns[0]->getUniqueName().ends_with(std::format(".{}", InternalKeyword::ID));
+        if (columnSkips[i] && !isInternalID) {
             continue;
         }
+        result.push_back(i);
+    }
+    return result;
+}
+
+std::string DuckDBScanBindData::getColumnsToSelect() const {
+    std::string columnNames = "";
+    bool first = true;
+    for (auto i : getColumnIndicesToSelect()) {
         if (!first) {
             columnNames += ",";
         }
@@ -40,7 +50,7 @@ std::string DuckDBScanBindData::getColumnsToSelect() const {
     return columnNames;
 }
 
-std::string DuckDBScanBindData::getDescription() const {
+std::string DuckDBScanBindData::getSQL() const {
     auto columns = getColumnsToSelect();
     std::string predicatesString = "";
     for (auto& predicates : getColumnPredicates()) {
@@ -64,6 +74,10 @@ std::string DuckDBScanBindData::getDescription() const {
         q += std::format(" LIMIT {}", getLimitNum());
     }
     return q;
+}
+
+std::string DuckDBScanBindData::getDescription() const {
+    return getSQL();
 }
 
 DuckDBScanSharedState::DuckDBScanSharedState(
@@ -90,29 +104,7 @@ struct DuckDBScanFunction {
 std::unique_ptr<TableFuncSharedState> DuckDBScanFunction::initSharedState(
     const TableFuncInitSharedStateInput& input) {
     auto scanBindData = input.bindData->constPtrCast<DuckDBScanBindData>();
-    auto columnNames = scanBindData->getColumnsToSelect();
-    std::string predicatesString = "";
-    for (auto& predicates : scanBindData->getColumnPredicates()) {
-        if (predicates.isEmpty()) {
-            continue;
-        }
-        if (predicatesString.empty()) {
-            predicatesString = " WHERE " + predicates.toString();
-        } else {
-            predicatesString += std::format(" AND {}", predicates.toString());
-        }
-    }
-    std::string finalQuery = scanBindData->query;
-    size_t pos = finalQuery.find("{}");
-    if (pos != std::string::npos) {
-        finalQuery.replace(pos, 2, columnNames);
-    }
-    finalQuery += predicatesString;
-    finalQuery += scanBindData->getOrderBy();
-    if (scanBindData->getLimitNum() != INVALID_ROW_IDX) {
-        finalQuery += std::format(" LIMIT {}", scanBindData->getLimitNum());
-    }
-    auto result = scanBindData->connector.executeQuery(finalQuery);
+    auto result = scanBindData->connector.executeQuery(scanBindData->getSQL());
     if (result->HasError()) {
         throw RuntimeException(
             std::format("Failed to execute query due to error: {}", result->GetError()));
@@ -140,7 +132,7 @@ offset_t DuckDBScanFunction::tableFunc(const TableFuncInput& input, TableFuncOut
         return 0;
     }
     duckdbScanBindData->converter.convertDuckDBResultToVector(*result, output.dataChunk,
-        duckdbScanBindData->getColumnSkips());
+        duckdbScanBindData->getColumnSkips(), duckdbScanBindData->getColumnIndicesToSelect());
     return output.dataChunk.state->getSelVector().getSelSize();
 }
 

@@ -123,7 +123,8 @@ static bool getTableInfo(const DuckDBConnector& connector, const std::string& ta
     std::vector<common::LogicalType>& columnTypes, std::vector<std::string>& columnNames,
     bool skipUnsupportedTable) {
     auto query = std::format("select data_type,column_name from information_schema.columns where "
-                             "table_name = '{}' and table_schema = '{}' and table_catalog = '{}';",
+                             "table_name = '{}' and table_schema = '{}' and table_catalog = '{}' "
+                             "order by ordinal_position;",
         tableName, schemaName, catalogName);
     auto result = connector.executeQuery(query);
     if (result->RowCount() == 0) {

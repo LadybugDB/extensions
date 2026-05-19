@@ -1,5 +1,7 @@
 #include "connector/duckdb_result_converter.h"
 
+#include <numeric>
+
 #include "common/type_utils.h"
 #include "common/types/types.h"
 
@@ -116,9 +118,18 @@ DuckDBResultConverter::DuckDBResultConverter(const std::vector<LogicalType>& typ
 }
 
 void DuckDBResultConverter::convertDuckDBResultToVector(duckdb::DataChunk& duckDBResult,
-    DataChunk& result, std::optional<std::vector<bool>> columnSkips) const {
+    DataChunk& result, std::optional<std::vector<bool>> columnSkips,
+    std::optional<std::vector<uint32_t>> columnIndicesToRead) const {
     auto duckdbResultColIdx = 0u;
-    for (auto i = 0u; i < conversionFunctions.size(); i++) {
+    auto outputColIdx = 0u;
+    auto useCompactOutput = result.getNumValueVectors() < conversionFunctions.size();
+    std::vector<uint32_t> defaultColumnIndices;
+    if (!columnIndicesToRead) {
+        defaultColumnIndices.resize(conversionFunctions.size());
+        std::iota(defaultColumnIndices.begin(), defaultColumnIndices.end(), 0);
+        columnIndicesToRead = defaultColumnIndices;
+    }
+    for (auto i : columnIndicesToRead.value()) {
         result.state->getSelVectorUnsafe().setSelSize(duckDBResult.size());
         if (columnSkips && columnSkips.value()[i]) {
             // For rowid (first column), we always fetch it from DuckDB but skip writing to output.
@@ -130,10 +141,11 @@ void DuckDBResultConverter::convertDuckDBResultToVector(duckdb::DataChunk& duckD
         }
         DASSERT(duckDBResult.data[duckdbResultColIdx].GetVectorType() ==
                 duckdb::VectorType::FLAT_VECTOR);
-        // Write to output vector at position i (the original column index)
+        auto resultColIdx = useCompactOutput ? outputColIdx : i;
         conversionFunctions[i](duckDBResult.data[duckdbResultColIdx],
-            result.getValueVectorMutable(i), result.state->getSelVector().getSelSize());
+            result.getValueVectorMutable(resultColIdx), result.state->getSelVector().getSelSize());
         duckdbResultColIdx++;
+        outputColIdx++;
     }
 }
 

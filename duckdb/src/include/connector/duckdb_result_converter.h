@@ -21,7 +21,8 @@ struct DuckDBResultConverter {
 
     explicit DuckDBResultConverter(const std::vector<common::LogicalType>& types);
     void convertDuckDBResultToVector(duckdb::DataChunk& duckDBResult, common::DataChunk& result,
-        std::optional<std::vector<bool>> columnSkips = std::nullopt) const;
+        std::optional<std::vector<bool>> columnSkips = std::nullopt,
+        std::optional<std::vector<uint32_t>> columnIndicesToRead = std::nullopt) const;
 
     static void getDuckDBVectorConversionFunc(common::PhysicalTypeID physicalTypeID,
         duckdb_conversion_func_t& conversion_func);

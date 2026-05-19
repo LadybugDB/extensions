@@ -43,7 +43,7 @@ std::unique_ptr<binder::BoundTableScanInfo> DuckDBTableCatalogEntry::getBoundSca
     // Build column names for DuckDB query - include rowid if needed
     std::vector<std::string> duckdbColumnNames;
     if (!nodeUniqueName.empty()) {
-        duckdbColumnNames.push_back("rowid");
+        duckdbColumnNames.push_back(scanInfo->getInternalIDColumnName());
     }
     duckdbColumnNames.insert(duckdbColumnNames.end(), columnNames.begin(), columnNames.end());
 

@@ -16,5 +16,13 @@ void PostgresConnector::connect(const std::string& dbPath, const std::string& ca
         catalogName, schemaName));
 }
 
+std::shared_ptr<duckdb_extension::DuckDBTableScanInfo> PostgresConnector::getTableScanInfo(
+    std::string query, std::vector<common::LogicalType> columnTypes,
+    std::vector<std::string> columnNames) const {
+    auto internalIDColumnName = columnNames.empty() ? "id" : columnNames[0];
+    return std::make_shared<duckdb_extension::DuckDBTableScanInfo>(std::move(query),
+        std::move(columnTypes), std::move(columnNames), *this, std::move(internalIDColumnName));
+}
+
 } // namespace postgres_extension
 } // namespace lbug

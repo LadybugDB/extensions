@@ -17,6 +17,12 @@ public:
         std::vector<std::string> columnNames, const DuckDBConnector& connector)
         : templateQuery{std::move(templateQuery)}, columnTypes{std::move(columnTypes)},
           columnNames{std::move(columnNames)}, connector{connector} {}
+    DuckDBTableScanInfo(std::string templateQuery, std::vector<common::LogicalType> columnTypes,
+        std::vector<std::string> columnNames, const DuckDBConnector& connector,
+        std::string internalIDColumnName)
+        : templateQuery{std::move(templateQuery)}, columnTypes{std::move(columnTypes)},
+          columnNames{std::move(columnNames)}, connector{connector},
+          internalIDColumnName{std::move(internalIDColumnName)} {}
 
     DuckDBTableScanInfo(const DuckDBTableScanInfo& other) = default;
 
@@ -33,6 +39,8 @@ public:
 
     std::vector<std::string> getColumnNames() const { return columnNames; }
 
+    const std::string& getInternalIDColumnName() const { return internalIDColumnName; }
+
     const DuckDBConnector& getConnector() const { return connector; }
 
 private:
@@ -40,6 +48,7 @@ private:
     std::vector<common::LogicalType> columnTypes;
     std::vector<std::string> columnNames;
     const DuckDBConnector& connector;
+    std::string internalIDColumnName = "rowid";
 };
 
 struct DuckDBScanBindData : function::TableFuncBindData {
@@ -56,9 +65,11 @@ struct DuckDBScanBindData : function::TableFuncBindData {
     DuckDBScanBindData(const DuckDBScanBindData& other)
         : TableFuncBindData{other}, query{other.query},
           columnNamesInDuckDB{other.columnNamesInDuckDB}, connector{other.connector},
-          converter{other.converter} {}
+          converter{binder::ExpressionUtil::getDataTypes(this->columns)} {}
 
     std::string getColumnsToSelect() const;
+    std::vector<uint32_t> getColumnIndicesToSelect() const;
+    std::string getSQL() const;
 
     std::string getDescription() const override;
 

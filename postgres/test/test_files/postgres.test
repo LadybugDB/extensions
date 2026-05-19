@@ -58,6 +58,12 @@ Runtime exception: No database named tinysnb1.
 -STATEMENT LOAD FROM pgscan.movies where length > 2500 RETURN name;
 ---- 1
 The 😂😃🧘🏻‍♂️🌍🌦️🍞🚗 movie
+-STATEMENT MATCH (p:pgscan.person) WHERE p.age > 30 RETURN p.id ORDER BY p.age DESC LIMIT 2;
+---- 2
+10
+3
+-STATEMENT EXPLAIN MATCH (p:pgscan.person) WHERE p.age > 30 RETURN p.id ORDER BY p.age DESC LIMIT 2;
+---- ok
 # TODO(Ziyi): the error message is dependent on platforms. We have to implement regex in testing framework to handle this.
 #-LOG IncorrectConnectionStr
 #-STATEMENT ATTACH 'dbname=test2132131 user=ci host=127.0.0.1' as tinysnb (dbtype 'POSTGRES');
