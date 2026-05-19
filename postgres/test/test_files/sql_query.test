@@ -38,7 +38,7 @@ ABFsUni
 CsWork
 DEsWork
 -LOG FilterPushDownTest
--STATEMENT CALL SQL_QUERY('tinysnb', 'select name, orgcode from organisation') RETURN *
+-STATEMENT CALL SQL_QUERY('tinysnb', 'select * from organisation') RETURN name, orgcode
 ---- 3
 ABFsUni|325
 CsWork|934
@@ -101,7 +101,7 @@ Binder Error: Failed to prepare query "SELECT \* PERSON": ERROR:  syntax error a
 -LOAD_DYNAMIC_EXTENSION postgres
 -STATEMENT ATTACH '${POSTGRES_CONNECTION_STRING}' as tinysnb (dbtype POSTGRES);
 ---- ok
--STATEMENT CALL SQL_QUERY('tinysnb', "select fname from person where fname = 'Alice'") RETURN fname
+-STATEMENT CALL SQL_QUERY('tinysnb', "select * from person where fname = 'Alice'") RETURN fname
 ---- 1
 Alice
 -STATEMENT CALL SQL_QUERY('tinysnb', "select regexp_match(fname, '\\w') from person") RETURN *
@@ -127,6 +127,5 @@ Alice
 -STATEMENT CALL SQL_QUERY('tinysnb', 'select regexp_match(fname, \'Alice\') from person') RETURN *
 ---- 8
 [Alice]
-
 
 
