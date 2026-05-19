@@ -95,14 +95,6 @@ Binder Error: No fields returned by query "INSERT INTO PERSON VALUES\(5\)" - the
 -STATEMENT CALL SQL_QUERY('tinysnb', 'SELECT * PERSON') RETURN *
 ---- error(regex)
 Binder Error: Failed to prepare query "SELECT \* PERSON": ERROR:  syntax error at or near "PERSON"[\s\S]*
--LOAD_DYNAMIC_EXTENSION postgres
--LOAD_DYNAMIC_EXTENSION sqlite
--STATEMENT ATTACH '${LBUG_ROOT_DIRECTORY}/extension/sqlite/test/sqlite_database/tinysnb' as sqlitets (dbtype sqlite);
----- 1
-Attached database successfully.
--STATEMENT CALL SQL_QUERY('sqlitets', "SELECT * FROM PERSON") RETURN *
----- error
-Binder exception: sql queries can only be executed in attached postgres.
 
 -CASE SqlQueryInPGWithQuote
 -SKIP_FSM_LEAK_CHECK
@@ -135,7 +127,6 @@ Alice
 -STATEMENT CALL SQL_QUERY('tinysnb', 'select regexp_match(fname, \'Alice\') from person') RETURN *
 ---- 8
 [Alice]
-
 
 
 

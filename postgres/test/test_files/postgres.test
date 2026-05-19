@@ -59,13 +59,16 @@ Runtime exception: No database named tinysnb1.
 # auxiliary tables to store type information in postgres. When the user calls show_tables(), those auxiliary tables will also
 # be displayed.
 -STATEMENT CALL SHOW_TABLES() RETURN *;
----- 6
+---- 9
 0|movies|ATTACHED|tinysnb(POSTGRES)|
 0|movies|NODE|shadow(graph)|
-0|person_copy|NODE|main(graph)|
+1|organisation|ATTACHED|tinysnb(POSTGRES)|
 1|organisation|NODE|shadow(graph)|
+2|person|ATTACHED|tinysnb(POSTGRES)|
 2|person|NODE|shadow(graph)|
+3|persontest|ATTACHED|tinysnb(POSTGRES)|
 3|persontest|NODE|shadow(graph)|
+4|person_copy|NODE|main(graph)|
 
 -STATEMENT CALL TABLE_INFO('tinysnb.person') RETURN *;
 ---- 14
