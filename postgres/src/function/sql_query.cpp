@@ -3,6 +3,7 @@
 #include "binder/binder.h"
 #include "catalog/duckdb_catalog.h"
 #include "common/exception/binder.h"
+#include "common/exception/runtime.h"
 #include "connector/duckdb_type_converter.h"
 #include "function/duckdb_scan.h"
 #include "main/database_manager.h"
@@ -67,6 +68,10 @@ static std::unique_ptr<TableFuncBindData> bindFunc(const ClientContext* context,
 std::unique_ptr<TableFuncSharedState> initSharedState(const TableFuncInitSharedStateInput& input) {
     auto scanBindData = input.bindData->constPtrCast<DuckDBScanBindData>();
     auto result = scanBindData->connector.executeQuery(scanBindData->getSQL());
+    if (result->HasError()) {
+        throw RuntimeException(
+            std::format("Failed to execute query due to error: {}", result->GetError()));
+    }
     return std::make_unique<DuckDBScanSharedState>(std::move(result));
 }
 
