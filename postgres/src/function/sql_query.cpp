@@ -87,7 +87,7 @@ offset_t tableFunc(const TableFuncInput& input, TableFuncOutput& output) {
         return 0;
     }
     bindData->converter.convertDuckDBResultToVector(*result, output.dataChunk,
-        bindData->getColumnSkips());
+        bindData->getColumnSkips(), bindData->getColumnIndicesToSelect());
     return output.dataChunk.state->getSelVector().getSelSize();
 }
 
