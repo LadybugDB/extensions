@@ -300,6 +300,8 @@ You can load it by: load extension postgres;
 -STATEMENT ATTACH 'notexist.db' (dbtype sqlite);
 ---- error
 Runtime exception: No loaded extension can handle database type: sqlite.
+Did you forget to load sqlite extension?
+You can load it by: load extension sqlite;
 
 -CASE InstallOfficialExtension
 -SKIP

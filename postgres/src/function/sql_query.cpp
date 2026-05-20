@@ -66,9 +66,7 @@ static std::unique_ptr<TableFuncBindData> bindFunc(const ClientContext* context,
 
 std::unique_ptr<TableFuncSharedState> initSharedState(const TableFuncInitSharedStateInput& input) {
     auto scanBindData = input.bindData->constPtrCast<DuckDBScanBindData>();
-    auto columnsToSelect = scanBindData->getColumnsToSelect();
-    auto finalQuery = std::vformat(scanBindData->query, std::make_format_args(columnsToSelect));
-    auto result = scanBindData->connector.executeQuery(finalQuery);
+    auto result = scanBindData->connector.executeQuery(scanBindData->getSQL());
     return std::make_unique<DuckDBScanSharedState>(std::move(result));
 }
 
