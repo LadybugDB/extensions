@@ -1,4 +1,4 @@
-set(EXTENSION_LIST azure delta duckdb fts httpfs iceberg json llm postgres sqlite unity_catalog vector neo4j algo)
+set(EXTENSION_LIST adbc azure delta duckdb fts httpfs iceberg json llm postgres sqlite unity_catalog vector neo4j algo)
 
 #set(EXTENSION_STATIC_LINK_LIST fts)
 foreach(extension IN LISTS EXTENSION_STATIC_LINK_LIST)

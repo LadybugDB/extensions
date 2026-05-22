@@ -1,0 +1,17 @@
+-DATASET CSV empty
+
+--
+
+-CASE ADBCDuckDBDriver
+-LOAD_DYNAMIC_EXTENSION adbc
+-STATEMENT ATTACH '${LBUG_ROOT_DIRECTORY}/extension/adbc/test/adbc.duckdb' AS adbc_duckdb (dbtype adbc, driver='duckdb', tables='games');
+---- 1
+Attached database successfully.
+-STATEMENT LOAD FROM adbc_duckdb.games RETURN id, title, score ORDER BY id;
+---- 3
+1|Portal|95
+2|Celeste|94
+3|Hades|93
+-STATEMENT DETACH adbc_duckdb;
+---- 1
+Detached database successfully.

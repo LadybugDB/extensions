@@ -79,6 +79,7 @@ function(add_extension_if_enabled_and_skip_32bit extension)
 endfunction()
 
 add_extension_if_enabled_and_skip_32bit("duckdb")
+add_extension_if_enabled_and_skip_32bit("adbc")
 add_extension_if_enabled_and_skip_32bit("postgres")
 add_extension_if_enabled_and_skip_32bit("sqlite")
 add_extension_if_enabled_and_skip_32bit("delta")
