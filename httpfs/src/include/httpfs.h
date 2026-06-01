@@ -17,6 +17,7 @@ using HeaderMap = common::case_insensitive_map_t<std::string>;
 
 struct HTTPResponse {
     HTTPResponse(httplib::Response& res, std::string url);
+    HTTPResponse(int code, std::string error, HeaderMap headers, std::string url, std::string body);
 
     int code;
     std::string error;

@@ -1,10 +1,20 @@
 #include "httpfs.h"
 
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
+#include <sstream>
+#include <vector>
+
 #include "common/cast.h"
 #include "common/exception/io.h"
 #include "common/exception/not_implemented.h"
 #include "transaction/transaction.h"
 #include <format>
+
+#ifdef __WASM__
+#include <emscripten.h>
+#endif
 
 namespace lbug {
 namespace httpfs_extension {
@@ -17,6 +27,171 @@ HTTPResponse::HTTPResponse(httplib::Response& res, std::string url)
         headers[name] = value;
     }
 }
+
+HTTPResponse::HTTPResponse(int code, std::string error, HeaderMap headers, std::string url,
+    std::string body)
+    : code{code}, error{std::move(error)}, headers{std::move(headers)}, url{std::move(url)},
+      body{std::move(body)} {}
+
+#ifdef __WASM__
+namespace {
+
+std::string trimHeaderValue(std::string value) {
+    auto begin = std::find_if_not(value.begin(), value.end(),
+        [](unsigned char c) { return std::isspace(c); });
+    auto end = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char c) {
+        return std::isspace(c);
+    }).base();
+    if (begin >= end) {
+        return {};
+    }
+    return std::string(begin, end);
+}
+
+HeaderMap parseResponseHeaders(const std::string& rawHeaders) {
+    HeaderMap headers;
+    std::istringstream stream(rawHeaders);
+    std::string line;
+    while (std::getline(stream, line)) {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        auto separator = line.find(':');
+        if (separator == std::string::npos) {
+            continue;
+        }
+        headers[line.substr(0, separator)] = trimHeaderValue(line.substr(separator + 1));
+    }
+    return headers;
+}
+
+std::unique_ptr<HTTPResponse> runBrowserRequest(const std::string& method, const std::string& url,
+    HeaderMap& headerMap, const uint8_t* inputBuffer = nullptr, uint64_t inputBufferLen = 0) {
+    std::vector<const char*> headerPairs;
+    headerPairs.reserve(headerMap.size() * 2);
+    for (auto& entry : headerMap) {
+        headerPairs.push_back(entry.first.c_str());
+        headerPairs.push_back(entry.second.c_str());
+    }
+
+    // clang-format off
+    void* rawResponse = reinterpret_cast<void*>(EM_ASM_PTR({
+        var method = UTF8ToString($0);
+        var url = UTF8ToString($1);
+        var headerCount = $2;
+        var headerPairs = $3;
+        var bodyPtr = $4;
+        var bodyLen = $5;
+        var status = 0;
+        var statusText = "";
+        var responseHeaders = "";
+        var responseBytes = new Uint8Array(0);
+
+        try {
+            var xhr = new XMLHttpRequest();
+            xhr.open(method, url, false);
+            xhr.responseType = "arraybuffer";
+
+            for (var i = 0; i < headerCount * 2; i += 2) {
+                var namePtr = HEAPU32[(headerPairs >> 2) + i];
+                var valuePtr = HEAPU32[(headerPairs >> 2) + i + 1];
+                var name = UTF8ToString(namePtr);
+                if (name === "Host" || name === "User-Agent") {
+                    continue;
+                }
+                xhr.setRequestHeader(name, UTF8ToString(valuePtr));
+            }
+
+            if (bodyLen > 0) {
+                xhr.send(HEAPU8.slice(bodyPtr, bodyPtr + bodyLen));
+            } else {
+                xhr.send(null);
+            }
+
+            status = xhr.status;
+            statusText = xhr.statusText || "";
+            responseHeaders = xhr.getAllResponseHeaders() || "";
+            if (xhr.response) {
+                responseBytes = new Uint8Array(xhr.response);
+            }
+        } catch (error) {
+            status = 0;
+            statusText = String(error);
+        }
+
+        var statusTextLen = lengthBytesUTF8(statusText);
+        var headersLen = lengthBytesUTF8(responseHeaders);
+        var bodyOutLen = responseBytes.byteLength;
+        var statusTextOffset = 16;
+        var headersOffset = statusTextOffset + statusTextLen + 1;
+        var bodyOffset = headersOffset + headersLen + 1;
+        var result = _malloc(bodyOffset + bodyOutLen);
+
+        HEAPU32[result >> 2] = status;
+        HEAPU32[(result >> 2) + 1] = statusTextLen;
+        HEAPU32[(result >> 2) + 2] = headersLen;
+        HEAPU32[(result >> 2) + 3] = bodyOutLen;
+        stringToUTF8(statusText, result + statusTextOffset, statusTextLen + 1);
+        stringToUTF8(responseHeaders, result + headersOffset, headersLen + 1);
+        HEAPU8.set(responseBytes, result + bodyOffset);
+        return result;
+    }, method.c_str(), url.c_str(), headerMap.size(), headerPairs.data(), inputBuffer,
+        inputBufferLen));
+    // clang-format on
+
+    if (rawResponse == nullptr) {
+        throw IOException(std::format("Browser HTTP {} to '{}' failed", method, url));
+    }
+
+    auto* bytes = static_cast<uint8_t*>(rawResponse);
+    auto* fields = reinterpret_cast<uint32_t*>(rawResponse);
+    auto code = static_cast<int>(fields[0]);
+    auto statusTextLen = fields[1];
+    auto headersLen = fields[2];
+    auto bodyLen = fields[3];
+    auto statusTextOffset = 16;
+    auto headersOffset = statusTextOffset + statusTextLen + 1;
+    auto bodyOffset = headersOffset + headersLen + 1;
+
+    std::string statusText(reinterpret_cast<char*>(bytes + statusTextOffset), statusTextLen);
+    std::string rawHeaders(reinterpret_cast<char*>(bytes + headersOffset), headersLen);
+    std::string body(reinterpret_cast<char*>(bytes + bodyOffset), bodyLen);
+    free(rawResponse);
+
+    return std::make_unique<HTTPResponse>(code, std::move(statusText),
+        parseResponseHeaders(rawHeaders), url, std::move(body));
+}
+
+std::unique_ptr<HTTPResponse> runBrowserRequestWithRetry(const std::string& method,
+    const std::string& url, HeaderMap headerMap, const uint8_t* inputBuffer = nullptr,
+    uint64_t inputBufferLen = 0) {
+    uint64_t tries = 0;
+    while (true) {
+        auto response = runBrowserRequest(method, url, headerMap, inputBuffer, inputBufferLen);
+        switch (response->code) {
+        case 408:
+        case 418:
+        case 429:
+        case 503:
+        case 504:
+            break;
+        default:
+            return response;
+        }
+        tries++;
+        if (tries > HTTPParams::DEFAULT_RETRIES) {
+            return response;
+        }
+        if (tries > 1) {
+            auto sleepTime = (uint64_t)((float)HTTPParams::DEFAULT_RETRY_WAIT_MS *
+                                        pow(HTTPParams::DEFAULT_RETRY_BACKOFF, tries - 2));
+            std::this_thread::sleep_for(std::chrono::milliseconds(sleepTime));
+        }
+    }
+}
+
+} // namespace
+#endif
 
 HTTPFileInfo::HTTPFileInfo(std::string path, FileSystem* fileSystem, int flags,
     main::ClientContext* context)
@@ -120,8 +295,10 @@ void HTTPFileInfo::initialize(main::ClientContext* context) {
 }
 
 void HTTPFileInfo::initializeClient() {
+#ifndef __WASM__
     auto [host, hostPath] = HTTPFileSystem::parseUrl(path);
     httpClient = HTTPFileSystem::getClient(host.c_str());
+#endif
 }
 
 std::unique_ptr<common::FileInfo> HTTPFileSystem::openFile(const std::string& path,
@@ -270,7 +447,9 @@ std::unique_ptr<httplib::Client> HTTPFileSystem::getClient(const std::string& ho
     client->set_keep_alive(HTTPParams::DEFAULT_KEEP_ALIVE);
     // TODO(Chang): Windows CI is missing some certificates, which causes tests to fail. Enable the
     // certificate verification after fixing the certificate issue.
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     client->enable_server_certificate_verification(false);
+#endif
     client->set_write_timeout(HTTPParams::DEFAULT_TIMEOUT);
     client->set_read_timeout(HTTPParams::DEFAULT_TIMEOUT);
     client->set_connection_timeout(HTTPParams::DEFAULT_TIMEOUT);
@@ -371,6 +550,10 @@ std::unique_ptr<HTTPResponse> HTTPFileSystem::runRequestWithRetry(
 
 std::unique_ptr<HTTPResponse> HTTPFileSystem::headRequest(FileInfo* fileInfo,
     const std::string& url, HeaderMap headerMap) const {
+#ifdef __WASM__
+    static_cast<void>(fileInfo);
+    return runBrowserRequestWithRetry("HEAD", url, std::move(headerMap));
+#else
     auto httpFileInfo = dynamic_cast_checked<HTTPFileInfo*>(fileInfo);
     auto parsedURL = parseUrl(url);
     auto host = parsedURL.first;
@@ -383,11 +566,31 @@ std::unique_ptr<HTTPResponse> HTTPFileSystem::headRequest(FileInfo* fileInfo,
     std::function<void(void)> retry([&]() { httpFileInfo->httpClient = getClient(host); });
 
     return runRequestWithRetry(request, url, "HEAD", retry);
+#endif
 }
 
 std::unique_ptr<HTTPResponse> HTTPFileSystem::getRangeRequest(FileInfo* fileInfo,
     const std::string& url, HeaderMap headerMap, uint64_t fileOffset, char* buffer,
     uint64_t bufferLen) const {
+#ifdef __WASM__
+    static_cast<void>(fileInfo);
+    headerMap["Range"] = std::format("bytes={}-{}", fileOffset, fileOffset + bufferLen - 1);
+    auto response = runBrowserRequestWithRetry("GET", url, std::move(headerMap));
+    if (response->code == 0 || response->code >= 400) {
+        auto error = std::format("HTTP GET error on '{}' (HTTP {})", url, response->code);
+        if (response->code == 416) {
+            error += "Try confirm the server supports range requests.";
+        }
+        throw IOException(error);
+    }
+    if (response->code < 300 && buffer != nullptr) {
+        if (response->body.size() > bufferLen) {
+            throw IOException("Server sent back more data than expected.");
+        }
+        memcpy(buffer, response->body.data(), response->body.size());
+    }
+    return response;
+#else
     auto httpFileInfo = dynamic_cast_checked<HTTPFileInfo*>(fileInfo);
     auto parsedURL = parseUrl(url);
     auto host = parsedURL.first;
@@ -446,12 +649,28 @@ std::unique_ptr<HTTPResponse> HTTPFileSystem::getRangeRequest(FileInfo* fileInfo
     });
     std::function<void(void)> retryFunc([&]() { httpFileInfo->httpClient = getClient(host); });
     return runRequestWithRetry(request, url, "GET Range", retryFunc);
+#endif
 }
 
 std::unique_ptr<HTTPResponse> HTTPFileSystem::postRequest(common::FileInfo* fileInfo,
     const std::string& url, HeaderMap headerMap, std::unique_ptr<uint8_t[]>& outputBuffer,
     uint64_t& outputBufferLen, const uint8_t* inputBuffer, uint64_t inputBufferLen,
     std::string /*params*/) const {
+#ifdef __WASM__
+    static_cast<void>(fileInfo);
+    headerMap["Content-Type"] = "application/octet-stream";
+    auto response =
+        runBrowserRequestWithRetry("POST", url, std::move(headerMap), inputBuffer, inputBufferLen);
+    if (response->body.size() > outputBufferLen) {
+        auto newBuffer = std::make_unique<uint8_t[]>(response->body.size());
+        outputBuffer = std::move(newBuffer);
+        outputBufferLen = response->body.size();
+    }
+    if (!response->body.empty()) {
+        memcpy(outputBuffer.get(), response->body.data(), response->body.size());
+    }
+    return response;
+#else
     auto httpFileInfo = dynamic_cast_checked<HTTPFileInfo*>(fileInfo);
     auto hostPath = parseUrl(url).second;
     auto headers = getHTTPHeaders(headerMap);
@@ -482,11 +701,18 @@ std::unique_ptr<HTTPResponse> HTTPFileSystem::postRequest(common::FileInfo* file
         return client->send(req);
     });
     return runRequestWithRetry(request, url, "POST");
+#endif
 }
 
 std::unique_ptr<HTTPResponse> HTTPFileSystem::putRequest(common::FileInfo* fileInfo,
     const std::string& url, HeaderMap headerMap, const uint8_t* inputBuffer,
     uint64_t inputBufferLen, std::string /*params*/) const {
+#ifdef __WASM__
+    static_cast<void>(fileInfo);
+    headerMap["Content-Type"] = "application/octet-stream";
+    return runBrowserRequestWithRetry("PUT", url, std::move(headerMap), inputBuffer,
+        inputBufferLen);
+#else
     auto httpFileInfo = dynamic_cast_checked<HTTPFileInfo*>(fileInfo);
     auto hostPath = parseUrl(url).second;
     auto headers = getHTTPHeaders(headerMap);
@@ -497,6 +723,7 @@ std::unique_ptr<HTTPResponse> HTTPFileSystem::putRequest(common::FileInfo* fileI
     });
 
     return runRequestWithRetry(request, url, "PUT");
+#endif
 }
 
 void HTTPFileSystem::initCachedFileManager(main::ClientContext* context) {
