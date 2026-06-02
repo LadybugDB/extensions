@@ -87,10 +87,11 @@ void SearchTypeParam::validate(const std::string& value) {
     if (lowerCaseValue != "auto" && lowerCaseValue != "navix" && lowerCaseValue != "adaptive_l" &&
         lowerCaseValue != "adaptive_g" && lowerCaseValue != "blind" &&
         lowerCaseValue != "directed" && lowerCaseValue != "one_hop" && lowerCaseValue != "onehop" &&
-        lowerCaseValue != "naive") {
+        lowerCaseValue != "naive" && lowerCaseValue != "random") {
         throw common::BinderException{
             std::format("Unsupported vector search_type '{}'. Ladybug currently supports AUTO, "
-                        "NAVIX, ADAPTIVE_L, ADAPTIVE_G, BLIND, DIRECTED, ONE_HOP, and NAIVE.",
+                        "NAVIX, ADAPTIVE_L, ADAPTIVE_G, BLIND, DIRECTED, ONE_HOP, NAIVE, and "
+                        "RANDOM.",
                 value)};
     }
 }

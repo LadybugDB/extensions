@@ -251,6 +251,7 @@ enum class SearchType : uint8_t {
     ONE_HOP_FILTERED = 2,
     UNFILTERED = 3,
     NAVIX_FILTERED = 4,
+    RANDOM_FILTERED = 5,
 };
 
 struct HNSWSearchState {
@@ -377,6 +378,9 @@ private:
     void navixFilteredSearch(const EmbeddingHandle& queryVector, graph::Graph::EdgeIterator& nbrItr,
         HNSWSearchState& searchState, min_node_priority_queue_t& candidates,
         max_node_priority_queue_t& results) const;
+    void randomFilteredSearch(const EmbeddingHandle& queryVector,
+        graph::Graph::EdgeIterator& nbrItr, HNSWSearchState& searchState,
+        min_node_priority_queue_t& candidates, max_node_priority_queue_t& results) const;
 
     min_node_priority_queue_t collectFirstHopNbrsDirected(const EmbeddingHandle& queryVector,
         graph::Graph::EdgeIterator& nbrItr, HNSWSearchState& searchState,
