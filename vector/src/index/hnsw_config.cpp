@@ -46,8 +46,7 @@ void Metric::validate(const std::string& metric) {
     if (lowerCaseMetric != "cosine" && lowerCaseMetric != "l2" && lowerCaseMetric != "l2sq" &&
         lowerCaseMetric != "dotproduct" && lowerCaseMetric != "dot_product" &&
         lowerCaseMetric != "ip" && lowerCaseMetric != "inner_product") {
-        throw common::BinderException{
-            "Metric must be one of COSINE, L2, L2SQ, DOTPRODUCT or IP."};
+        throw common::BinderException{"Metric must be one of COSINE, L2, L2SQ, DOTPRODUCT or IP."};
     }
 }
 
@@ -85,11 +84,12 @@ void DirectedSearchUpSelThreshold::validate(double value) {
 
 void SearchTypeParam::validate(const std::string& value) {
     const auto lowerCaseValue = common::StringUtils::getLower(value);
-    if (lowerCaseValue != "auto" && lowerCaseValue != "navix") {
+    if (lowerCaseValue != "auto" && lowerCaseValue != "navix" && lowerCaseValue != "adaptive_l" &&
+        lowerCaseValue != "adaptive_g" && lowerCaseValue != "blind" &&
+        lowerCaseValue != "directed" && lowerCaseValue != "one_hop" && lowerCaseValue != "onehop") {
         throw common::BinderException{
-            std::format("Unsupported vector search_type '{}'. Ladybug currently supports AUTO/"
-                        "NAVIX compatibility, and maps both to QUERY_VECTOR_INDEX filtered HNSW "
-                        "search.",
+            std::format("Unsupported vector search_type '{}'. Ladybug currently supports AUTO, "
+                        "NAVIX, ADAPTIVE_L, ADAPTIVE_G, BLIND, DIRECTED, and ONE_HOP.",
                 value)};
     }
 }

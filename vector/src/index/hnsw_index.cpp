@@ -780,8 +780,18 @@ SearchType OnDiskHNSWIndex::getFilteredSearchType(Transaction* transaction,
     if (!searchState.hasMask()) {
         return SearchType::UNFILTERED;
     }
-    if (common::StringUtils::getLower(searchState.config.searchType) == "navix") {
+    const auto searchType = common::StringUtils::getLower(searchState.config.searchType);
+    if (searchType == "navix" || searchType == "adaptive_l") {
         return SearchType::NAVIX_FILTERED;
+    }
+    if (searchType == "blind") {
+        return SearchType::BLIND_TWO_HOP;
+    }
+    if (searchType == "directed") {
+        return SearchType::DIRECTED_TWO_HOP;
+    }
+    if (searchType == "one_hop" || searchType == "onehop") {
+        return SearchType::ONE_HOP_FILTERED;
     }
     const auto selectivity = 1.0 * searchState.semiMask->getNumMaskedNodes() /
                              searchState.lowerGraph->getNumNodes(transaction);
