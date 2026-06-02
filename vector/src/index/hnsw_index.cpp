@@ -136,6 +136,10 @@ static void processNbrNodeInKNNSearch(const EmbeddingHandle& queryVector,
     }
 }
 
+static bool isBruteForceSearch(const QueryHNSWConfig& config) {
+    return config.useKnn || common::StringUtils::getLower(config.searchType) == "naive";
+}
+
 std::vector<NodeWithDistance> InMemHNSWLayer::searchKNN(const EmbeddingHandle& queryVector,
     common::offset_t entryNode, common::length_t k, uint64_t configuredEf, VisitedState& visited,
     GetEmbeddingsScanState& scanState) const {
@@ -484,9 +488,39 @@ std::unique_ptr<Index> OnDiskHNSWIndex::load(main::ClientContext* context, Stora
 
 std::vector<NodeWithDistance> OnDiskHNSWIndex::search(Transaction* transaction,
     const EmbeddingHandle& queryVector, HNSWSearchState& searchState) const {
+    if (isBruteForceSearch(searchState.config)) {
+        auto result = searchBruteForce(transaction, queryVector, searchState);
+        result.resize(std::min<uint64_t>(result.size(), searchState.k));
+        return result;
+    }
     auto result = searchFromCheckpointed(transaction, queryVector, searchState);
     searchFromUnCheckpointed(transaction, queryVector, searchState, result);
     result.resize(searchState.k);
+    return result;
+}
+
+std::vector<NodeWithDistance> OnDiskHNSWIndex::searchBruteForce(Transaction* transaction,
+    const EmbeddingHandle& queryVector, HNSWSearchState& searchState) const {
+    const auto numTotalRows = nodeTable.getNumTotalRows(transaction);
+    std::vector<NodeWithDistance> result;
+    result.reserve(
+        searchState.hasMask() ? searchState.semiMask->getNumMaskedNodes() : numTotalRows);
+    for (auto offset = 0u; offset < numTotalRows; offset++) {
+        if (!searchState.isMasked(offset)) {
+            continue;
+        }
+        const auto vector =
+            searchState.embeddings->getEmbedding(offset, searchState.embeddingScanState);
+        if (vector.isNull()) {
+            continue;
+        }
+        const auto dist = metricFunc(queryVector.getPtr(), vector.getPtr(),
+            searchState.embeddings->getDimension());
+        result.emplace_back(offset, dist);
+    }
+    std::ranges::sort(result, [](const NodeWithDistance& l, const NodeWithDistance& r) {
+        return l.distance < r.distance;
+    });
     return result;
 }
 

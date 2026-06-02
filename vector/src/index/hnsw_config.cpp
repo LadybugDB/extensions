@@ -86,20 +86,17 @@ void SearchTypeParam::validate(const std::string& value) {
     const auto lowerCaseValue = common::StringUtils::getLower(value);
     if (lowerCaseValue != "auto" && lowerCaseValue != "navix" && lowerCaseValue != "adaptive_l" &&
         lowerCaseValue != "adaptive_g" && lowerCaseValue != "blind" &&
-        lowerCaseValue != "directed" && lowerCaseValue != "one_hop" && lowerCaseValue != "onehop") {
+        lowerCaseValue != "directed" && lowerCaseValue != "one_hop" && lowerCaseValue != "onehop" &&
+        lowerCaseValue != "naive") {
         throw common::BinderException{
             std::format("Unsupported vector search_type '{}'. Ladybug currently supports AUTO, "
-                        "NAVIX, ADAPTIVE_L, ADAPTIVE_G, BLIND, DIRECTED, and ONE_HOP.",
+                        "NAVIX, ADAPTIVE_L, ADAPTIVE_G, BLIND, DIRECTED, ONE_HOP, and NAIVE.",
                 value)};
     }
 }
 
 void UseKnn::validate(bool value) {
-    if (value) {
-        throw common::BinderException{
-            "use_knn := true is not supported by the VECTOR extension. Use QUERY_VECTOR_INDEX "
-            "without the brute-force KNN compatibility flag."};
-    }
+    (void)value;
 }
 
 HNSWIndexConfig::HNSWIndexConfig(const function::optional_params_t& optionalParams) {

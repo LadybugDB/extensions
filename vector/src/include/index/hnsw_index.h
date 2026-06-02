@@ -334,6 +334,8 @@ private:
     std::vector<NodeWithDistance> searchKNNInLayer(transaction::Transaction* transaction,
         const EmbeddingHandle& queryVector, common::offset_t entryNode,
         HNSWSearchState& searchState, bool isUpperLayer) const;
+    std::vector<NodeWithDistance> searchBruteForce(transaction::Transaction* transaction,
+        const EmbeddingHandle& queryVector, HNSWSearchState& searchState) const;
     std::vector<NodeWithDistance> searchFromCheckpointed(transaction::Transaction* transaction,
         const EmbeddingHandle& queryVector, HNSWSearchState& searchState) const;
     void searchFromUnCheckpointed(transaction::Transaction* transaction,
