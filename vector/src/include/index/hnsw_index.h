@@ -8,6 +8,7 @@
 #include "index/hnsw_graph.h"
 #include "index/hnsw_index_utils.h"
 #include "storage/index/index.h"
+#include <span>
 
 namespace lbug {
 namespace catalog {
@@ -249,6 +250,7 @@ enum class SearchType : uint8_t {
     DIRECTED_TWO_HOP = 1,
     ONE_HOP_FILTERED = 2,
     UNFILTERED = 3,
+    NAVIX_FILTERED = 4,
 };
 
 struct HNSWSearchState {
@@ -368,12 +370,26 @@ private:
         min_node_priority_queue_t& candidates, max_node_priority_queue_t& results,
         min_node_priority_queue_t& candidatesQueue) const;
 
+    common::offset_vec_t collectFirstHopNbrs(graph::Graph::EdgeIterator& nbrItr,
+        const HNSWSearchState& searchState) const;
+    void navixFilteredSearch(const EmbeddingHandle& queryVector, graph::Graph::EdgeIterator& nbrItr,
+        HNSWSearchState& searchState, min_node_priority_queue_t& candidates,
+        max_node_priority_queue_t& results) const;
+
     min_node_priority_queue_t collectFirstHopNbrsDirected(const EmbeddingHandle& queryVector,
         graph::Graph::EdgeIterator& nbrItr, HNSWSearchState& searchState,
         min_node_priority_queue_t& candidates, max_node_priority_queue_t& results,
         int64_t& numVisitedNbrs) const;
+    min_node_priority_queue_t collectFirstHopNbrsDirected(const EmbeddingHandle& queryVector,
+        std::span<const common::offset_t> firstHopNbrs, HNSWSearchState& searchState,
+        min_node_priority_queue_t& candidates, max_node_priority_queue_t& results,
+        int64_t& numVisitedNbrs) const;
     common::offset_vec_t collectFirstHopNbrsBlind(const EmbeddingHandle& queryVector,
         graph::Graph::EdgeIterator& nbrItr, HNSWSearchState& searchState,
+        min_node_priority_queue_t& candidates, max_node_priority_queue_t& results,
+        int64_t& numVisitedNbrs) const;
+    common::offset_vec_t collectFirstHopNbrsBlind(const EmbeddingHandle& queryVector,
+        std::span<const common::offset_t> firstHopNbrs, HNSWSearchState& searchState,
         min_node_priority_queue_t& candidates, max_node_priority_queue_t& results,
         int64_t& numVisitedNbrs) const;
     // Return false if we've hit Ml limit.
