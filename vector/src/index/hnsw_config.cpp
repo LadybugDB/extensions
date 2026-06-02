@@ -44,8 +44,10 @@ void Pu::validate(double value) {
 void Metric::validate(const std::string& metric) {
     const auto lowerCaseMetric = common::StringUtils::getLower(metric);
     if (lowerCaseMetric != "cosine" && lowerCaseMetric != "l2" && lowerCaseMetric != "l2sq" &&
-        lowerCaseMetric != "dotproduct" && lowerCaseMetric != "dot_product") {
-        throw common::BinderException{"Metric must be one of COSINE, L2, L2SQ or DOTPRODUCT."};
+        lowerCaseMetric != "dotproduct" && lowerCaseMetric != "dot_product" &&
+        lowerCaseMetric != "ip" && lowerCaseMetric != "inner_product") {
+        throw common::BinderException{
+            "Metric must be one of COSINE, L2, L2SQ, DOTPRODUCT or IP."};
     }
 }
 
@@ -78,6 +80,25 @@ void DirectedSearchUpSelThreshold::validate(double value) {
     if (value < 0 || value > 1) {
         throw common::BinderException{
             "Directed search upper selectivity threshold must be a double between 0 and 1."};
+    }
+}
+
+void SearchTypeParam::validate(const std::string& value) {
+    const auto lowerCaseValue = common::StringUtils::getLower(value);
+    if (lowerCaseValue != "auto" && lowerCaseValue != "navix") {
+        throw common::BinderException{
+            std::format("Unsupported vector search_type '{}'. Ladybug currently supports AUTO/"
+                        "NAVIX compatibility, and maps both to QUERY_VECTOR_INDEX filtered HNSW "
+                        "search.",
+                value)};
+    }
+}
+
+void UseKnn::validate(bool value) {
+    if (value) {
+        throw common::BinderException{
+            "use_knn := true is not supported by the VECTOR extension. Use QUERY_VECTOR_INDEX "
+            "without the brute-force KNN compatibility flag."};
     }
 }
 
@@ -187,7 +208,8 @@ MetricType HNSWIndexConfig::getMetricType(const std::string& metricName) {
     if (lowerMetricName == "l2sq") {
         return MetricType::L2_SQUARE;
     }
-    if (lowerMetricName == "dot_product" || lowerMetricName == "dotproduct") {
+    if (lowerMetricName == "dot_product" || lowerMetricName == "dotproduct" ||
+        lowerMetricName == "ip" || lowerMetricName == "inner_product") {
         return MetricType::DotProduct;
     }
     UNREACHABLE_CODE;
@@ -223,6 +245,15 @@ QueryHNSWConfig::QueryHNSWConfig(const function::optional_params_t& optionalPara
             value.validateType(DirectedSearchUpSelThreshold::TYPE);
             directedSearchUpSelThreshold = value.getValue<double>();
             DirectedSearchUpSelThreshold::validate(directedSearchUpSelThreshold);
+        } else if (SearchTypeParam::NAME == lowerCaseName ||
+                   SearchTypeParam::LEGACY_NAME == lowerCaseName) {
+            value.validateType(SearchTypeParam::TYPE);
+            searchType = value.getValue<std::string>();
+            SearchTypeParam::validate(searchType);
+        } else if (UseKnn::NAME == lowerCaseName || UseKnn::LEGACY_NAME == lowerCaseName) {
+            value.validateType(UseKnn::TYPE);
+            useKnn = value.getValue<bool>();
+            UseKnn::validate(useKnn);
         } else {
             throw common::BinderException{std::format("Unrecognized optional parameter {} in {}.",
                 name, QueryVectorIndexFunction::name)};

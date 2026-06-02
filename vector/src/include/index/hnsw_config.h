@@ -110,6 +110,24 @@ struct DirectedSearchUpSelThreshold {
     static void validate(double value);
 };
 
+struct SearchTypeParam {
+    static constexpr const char* NAME = "search_type";
+    static constexpr const char* LEGACY_NAME = "searchtype";
+    static constexpr common::LogicalTypeID TYPE = common::LogicalTypeID::STRING;
+    static constexpr const char* DEFAULT_VALUE = "auto";
+
+    static void validate(const std::string& value);
+};
+
+struct UseKnn {
+    static constexpr const char* NAME = "use_knn";
+    static constexpr const char* LEGACY_NAME = "useknn";
+    static constexpr common::LogicalTypeID TYPE = common::LogicalTypeID::BOOL;
+    static constexpr bool DEFAULT_VALUE = false;
+
+    static void validate(bool value);
+};
+
 struct HNSWIndexConfig {
     int64_t mu = Mu::DEFAULT_VALUE;
     int64_t ml = Ml::DEFAULT_VALUE;
@@ -153,6 +171,8 @@ struct QueryHNSWConfig {
     int64_t efs = Efs::DEFAULT_VALUE;
     double blindSearchUpSelThreshold = BlindSearchUpSelThreshold::DEFAULT_VALUE;
     double directedSearchUpSelThreshold = DirectedSearchUpSelThreshold::DEFAULT_VALUE;
+    std::string searchType = SearchTypeParam::DEFAULT_VALUE;
+    bool useKnn = UseKnn::DEFAULT_VALUE;
 
     QueryHNSWConfig() = default;
 

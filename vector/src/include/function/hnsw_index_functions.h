@@ -143,5 +143,11 @@ struct QueryVectorIndexFunction final {
     static function::function_set getFunctionSet();
 };
 
+struct AnnSearchFunction final {
+    static constexpr const char* name = "ANN_SEARCH";
+
+    static function::function_set getFunctionSet();
+};
+
 } // namespace vector_extension
 } // namespace lbug

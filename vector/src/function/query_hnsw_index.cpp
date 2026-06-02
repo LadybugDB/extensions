@@ -377,7 +377,7 @@ static std::unique_ptr<PhysicalOperator> getPhysicalPlan(PlanMapper* planMapper,
     return op;
 }
 
-function_set QueryVectorIndexFunction::getFunctionSet() {
+static function_set getQueryVectorIndexFunctionSet(const char* name) {
     function_set functionSet;
     std::vector inputTypes{LogicalTypeID::STRING, LogicalTypeID::STRING, LogicalTypeID::ARRAY,
         LogicalTypeID::INT64};
@@ -392,6 +392,14 @@ function_set QueryVectorIndexFunction::getFunctionSet() {
     tableFunction->inferInputTypes = inferInputTypes;
     functionSet.push_back(std::move(tableFunction));
     return functionSet;
+}
+
+function_set QueryVectorIndexFunction::getFunctionSet() {
+    return getQueryVectorIndexFunctionSet(QueryVectorIndexFunction::name);
+}
+
+function_set AnnSearchFunction::getFunctionSet() {
+    return getQueryVectorIndexFunctionSet(AnnSearchFunction::name);
 }
 
 } // namespace vector_extension
