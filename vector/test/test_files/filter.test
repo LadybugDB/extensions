@@ -584,6 +584,13 @@ Binder exception: In vector filtered search, projected graph G9 must contain exa
 3|2.236068
 4|3.162278
 5|4.123106
+-RELOADDB
+-LOAD_DYNAMIC_EXTENSION vector
+-STATEMENT call query_vector_index("tab", "tbl_hnsw_index", [0.0, 1.0], 3) return node.id, distance order by distance asc, node.id asc
+---- 3
+1|1.000000
+2|1.414214
+3|2.236068
 
 -CASE Example
 -LOAD_DYNAMIC_EXTENSION vector
