@@ -81,6 +81,21 @@ Binder exception: Unrecognized optional parameter unknown_param in DROP_VECTOR_I
 -STATEMENT CALL DROP_VECTOR_INDEX('embeddings', 'e_hnsw_index');
 ---- ok
 
+-CASE NativeNavixSyntaxCompatibility
+-LOAD_DYNAMIC_EXTENSION vector
+-STATEMENT CREATE NODE TABLE embeddings (id int64, vec FLOAT[8], PRIMARY KEY (id));
+---- ok
+-STATEMENT CREATE VECTOR INDEX ON embeddings(vec);
+---- error
+Parser exception: Invalid input < ON>: expected rule iC_CreateIndex (line: 1, offset: 20)
+"CREATE VECTOR INDEX ON embeddings(vec);"
+                     ^^
+-STATEMENT UPDATE VECTOR INDEX ON embeddings;
+---- error
+Parser exception: Invalid input < INDEX>: expected rule iC_Statements (line: 1, offset: 14)
+"UPDATE VECTOR INDEX ON embeddings;"
+               ^^^^^
+
 -CASE CastingError
 -LOAD_DYNAMIC_EXTENSION vector
 -STATEMENT CREATE NODE TABLE embeddings (id int64, vec FLOAT[8], PRIMARY KEY (id));
