@@ -637,8 +637,23 @@ void OnDiskHNSWIndex::commitInsert(Transaction* transaction,
         EmbeddingHandle handle{dataVectors[0]->getValue<common::list_entry_t>(valuePos).offset,
             commitInsertScanState.get()};
         insertInternal(transaction, offset, handle, hnswInsertState);
-        storageInfo->cast<HNSWStorageInfo>().numCheckpointedNodes = offset + 1;
+        auto& hnswStorageInfo = storageInfo->cast<HNSWStorageInfo>();
+        hnswStorageInfo.numCheckpointedNodes =
+            std::max<common::offset_t>(hnswStorageInfo.numCheckpointedNodes, offset + 1);
     }
+}
+
+std::unique_ptr<Index::UpdateState> OnDiskHNSWIndex::initUpdateState(
+    main::ClientContext* context, common::column_id_t columnID, storage::visible_func isVisible) {
+    DASSERT(columnID == indexInfo.columnIDs[0]);
+    (void)columnID;
+    return std::make_unique<HNSWUpdateState>(initInsertState(context, std::move(isVisible)));
+}
+
+void OnDiskHNSWIndex::update(Transaction* transaction, const common::ValueVector& nodeIDVector,
+    common::ValueVector& propertyVector, UpdateState& updateState) {
+    auto& hnswUpdateState = updateState.cast<HNSWUpdateState>();
+    commitInsert(transaction, nodeIDVector, {&propertyVector}, *hnswUpdateState.insertState);
 }
 
 void OnDiskHNSWIndex::finalize(main::ClientContext* context) {

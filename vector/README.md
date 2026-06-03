@@ -54,6 +54,20 @@ search through the extension HNSW implementation. `random` exposes Navix random-
 Ladybug graph scans; the old Navix random-fast storage scan is intentionally not ported without
 benchmark evidence.
 
+## HNSW Updates And Maintenance
+
+Updates to an indexed vector property are maintained as delete plus insert semantics: the table MVCC
+state makes the old vector version invisible, and the new vector is inserted into the existing HNSW
+graph. Searches skip invisible and deleted table rows, but graph edges that point at old or deleted
+versions can accumulate after many updates or deletes.
+
+For write-heavy workloads, periodically rebuild the vector index to compact away dead HNSW edges:
+
+```cypher
+CALL DROP_VECTOR_INDEX('embeddings', 'idx');
+CALL CREATE_VECTOR_INDEX('embeddings', 'idx', 'vec', metric := 'cosine');
+```
+
 ## Deferred Navix Features
 
 The following Navix features are benchmark or research slices, not required for functional parity:
@@ -65,4 +79,3 @@ The following Navix features are benchmark or research slices, not required for 
 - Fast neighbor/random-scan storage APIs.
 - FVec/FBin benchmark dataset readers.
 - Vector-search profiling counters.
-

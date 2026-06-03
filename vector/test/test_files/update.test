@@ -3,6 +3,113 @@
 
 --
 
+-CASE UpdateMakesNewVectorNearest
+-LOAD_DYNAMIC_EXTENSION vector
+-STATEMENT CREATE NODE TABLE embeddings (id int64, vec FLOAT[2], PRIMARY KEY (id));
+---- ok
+-STATEMENT CALL threads=1;
+---- ok
+-STATEMENT CREATE (:embeddings {id: 1, vec: [0.0, 0.0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 2, vec: [0.2, 0.0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 3, vec: [5.0, 5.0]});
+---- ok
+-STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'e_hnsw_index', 'vec', metric := 'l2');
+---- ok
+-STATEMENT MATCH (t:embeddings) WHERE t.id = 1 SET t.vec = [10.0, 10.0];
+---- ok
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'e_hnsw_index', CAST([10.0, 10.0], 'FLOAT[2]'), 1, efs := 20) RETURN node.id ORDER BY distance;
+---- 1
+1
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'e_hnsw_index', CAST([0.0, 0.0], 'FLOAT[2]'), 1, efs := 20) RETURN node.id ORDER BY distance;
+---- 1
+2
+
+-CASE UpdateSurvivesCheckpointReopen
+-SKIP_IN_MEM
+-LOAD_DYNAMIC_EXTENSION vector
+-STATEMENT CREATE NODE TABLE embeddings (id int64, vec FLOAT[2], PRIMARY KEY (id));
+---- ok
+-STATEMENT CALL threads=1;
+---- ok
+-STATEMENT CREATE (:embeddings {id: 1, vec: [0.0, 0.0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 2, vec: [0.2, 0.0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 3, vec: [5.0, 5.0]});
+---- ok
+-STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'e_hnsw_index', 'vec', metric := 'l2');
+---- ok
+-STATEMENT MATCH (t:embeddings) WHERE t.id = 1 SET t.vec = [10.0, 10.0];
+---- ok
+-STATEMENT CHECKPOINT;
+---- ok
+-RELOADDB
+-LOAD_DYNAMIC_EXTENSION vector
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'e_hnsw_index', CAST([10.0, 10.0], 'FLOAT[2]'), 1, efs := 20) RETURN node.id ORDER BY distance;
+---- 1
+1
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'e_hnsw_index', CAST([0.0, 0.0], 'FLOAT[2]'), 1, efs := 20) RETURN node.id ORDER BY distance;
+---- 1
+2
+
+-CASE UpdateFilteredNavixAdaptiveL
+-LOAD_DYNAMIC_EXTENSION vector
+-STATEMENT CREATE NODE TABLE embeddings (id int64, vec FLOAT[2], PRIMARY KEY (id));
+---- ok
+-STATEMENT CALL threads=1;
+---- ok
+-STATEMENT CREATE (:embeddings {id: 1, vec: [0.0, 0.0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 2, vec: [0.2, 0.0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 3, vec: [5.0, 5.0]});
+---- ok
+-STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'e_hnsw_index', 'vec', metric := 'l2');
+---- ok
+-STATEMENT CALL project_graph('G', {'embeddings': 'n.id = 1 OR n.id = 2'}, []);
+---- ok
+-STATEMENT MATCH (t:embeddings) WHERE t.id = 1 SET t.vec = [10.0, 10.0];
+---- ok
+-STATEMENT CALL QUERY_VECTOR_INDEX('G', 'e_hnsw_index', CAST([10.0, 10.0], 'FLOAT[2]'), 1, efs := 20, search_type := 'navix') RETURN node.id ORDER BY distance;
+---- 1
+1
+-STATEMENT CALL QUERY_VECTOR_INDEX('G', 'e_hnsw_index', CAST([10.0, 10.0], 'FLOAT[2]'), 1, efs := 20, search_type := 'adaptive_l') RETURN node.id ORDER BY distance;
+---- 1
+1
+
+-CASE RepeatedUpdatesDoNotReturnStaleRows
+-LOAD_DYNAMIC_EXTENSION vector
+-STATEMENT CREATE NODE TABLE embeddings (id int64, vec FLOAT[2], PRIMARY KEY (id));
+---- ok
+-STATEMENT CALL threads=1;
+---- ok
+-STATEMENT CREATE (:embeddings {id: 1, vec: [0.0, 0.0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 2, vec: [0.2, 0.0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 3, vec: [5.0, 5.0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 4, vec: [-0.4, 0.0]});
+---- ok
+-STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'e_hnsw_index', 'vec', metric := 'l2');
+---- ok
+-STATEMENT MATCH (t:embeddings) WHERE t.id = 1 SET t.vec = [10.0, 10.0];
+---- ok
+-STATEMENT MATCH (t:embeddings) WHERE t.id = 1 SET t.vec = [-10.0, -10.0];
+---- ok
+-STATEMENT MATCH (t:embeddings) WHERE t.id = 1 SET t.vec = [20.0, 20.0];
+---- ok
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'e_hnsw_index', CAST([20.0, 20.0], 'FLOAT[2]'), 1, efs := 50) RETURN node.id ORDER BY distance;
+---- 1
+1
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'e_hnsw_index', CAST([0.0, 0.0], 'FLOAT[2]'), 2, efs := 50) RETURN node.id ORDER BY distance;
+-CHECK_ORDER
+---- 2
+2
+4
+
 -CASE UpdateVectorProperty
 -LOAD_DYNAMIC_EXTENSION vector
 -STATEMENT CREATE NODE TABLE embeddings (id int64, vec FLOAT[8], PRIMARY KEY (id));
@@ -16,8 +123,7 @@
 -STATEMENT CREATE (t:embeddings {id: 1000, vec: [0.1521,0.3021,0.5366,0.2774,0.5593,0.5589,0.1365,0.8557]});
 ---- ok
 -STATEMENT MATCH (t:embeddings) WHERE t.id = 1000 SET t.vec = [0.1521,0.3021,0.5366,0.2774,0.5593,0.5589,0.1365,0.0];
----- error
-Runtime exception: Cannot set property vec in table embeddings because it is used in one or more indexes. Try delete and then insert.
+---- ok
 
 -CASE UpdatePrimaryKey
 -LOAD_DYNAMIC_EXTENSION vector

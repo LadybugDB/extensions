@@ -304,6 +304,13 @@ public:
             common::column_id_t columnID, uint64_t degree);
     };
 
+    struct HNSWUpdateState final : UpdateState {
+        explicit HNSWUpdateState(std::unique_ptr<InsertState> insertState)
+            : insertState{std::move(insertState)} {}
+
+        std::unique_ptr<InsertState> insertState;
+    };
+
     OnDiskHNSWIndex(const main::ClientContext* context, storage::IndexInfo indexInfo,
         std::unique_ptr<storage::IndexStorageInfo> storageInfo, HNSWIndexConfig config);
 
@@ -318,6 +325,10 @@ public:
     bool needCommitInsert() const override { return true; }
     void commitInsert(transaction::Transaction*, const common::ValueVector&,
         const std::vector<common::ValueVector*>&, InsertState&) override;
+    std::unique_ptr<UpdateState> initUpdateState(main::ClientContext* context,
+        common::column_id_t columnID, storage::visible_func isVisible) override;
+    void update(transaction::Transaction* transaction, const common::ValueVector& nodeIDVector,
+        common::ValueVector& propertyVector, UpdateState& updateState) override;
 
     static storage::IndexType getIndexType() {
         static const storage::IndexType HNSW_INDEX_TYPE{"HNSW",
