@@ -189,13 +189,16 @@ std::vector<EmbeddingHandle> OnDiskEmbeddings::getEmbeddings(
             // Return a null embedding for deleted nodes
             embeddings.emplace_back(EmbeddingHandle::createNullHandle());
         }
-        if (scanState.outputVectors[0]->isNull(i)) {
+        if (scanState.outputVectors[0]->isNull(pos)) {
             embeddings.emplace_back(EmbeddingHandle::createNullHandle());
         } else {
             const auto value = scanState.outputVectors[0]->getValue<common::list_entry_t>(pos);
             DASSERT(value.size == info.typeInfo.getNumElements());
             embeddings.emplace_back(value.offset, &embeddingScanState);
         }
+    }
+    while (embeddings.size() < offsets.size()) {
+        embeddings.emplace_back(EmbeddingHandle::createNullHandle());
     }
     return embeddings;
 }
