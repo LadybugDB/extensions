@@ -219,7 +219,9 @@ void InMemHNSWLayer::shrinkForNode(const InMemHNSWLayerInfo& info, InMemHNSWGrap
             return l.getDist() < r.getDist();
         });
     std::vector<common::idx_t> keptNbrs;
-    keptNbrs.reserve(info.maxDegree);
+    DASSERT(info.maxDegree >= 0);
+    const auto maxDegree = static_cast<decltype(keptNbrs)::size_type>(info.maxDegree);
+    keptNbrs.reserve(maxDegree);
     for (auto i = 0u; i < nbrs.size(); i++) {
         bool keepNbr = true;
         for (const auto j : keptNbrs) {
@@ -237,7 +239,7 @@ void InMemHNSWLayer::shrinkForNode(const InMemHNSWLayerInfo& info, InMemHNSWGrap
             graph->setDstNode(startCSROffset + keptNbrs.size(), nbrs[i].getNodeOffset());
             keptNbrs.push_back(i);
         }
-        if (keptNbrs.size() == info.maxDegree) {
+        if (keptNbrs.size() == maxDegree) {
             break;
         }
     }
