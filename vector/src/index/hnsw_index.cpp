@@ -501,7 +501,10 @@ std::vector<NodeWithDistance> OnDiskHNSWIndex::search(Transaction* transaction,
     }
     auto result = searchFromCheckpointed(transaction, queryVector, searchState);
     searchFromUnCheckpointed(transaction, queryVector, searchState, result);
-    result.resize(searchState.k);
+    if (result.size() < searchState.k) {
+        result = searchBruteForce(transaction, queryVector, searchState);
+    }
+    result.resize(std::min<uint64_t>(result.size(), searchState.k));
     return result;
 }
 
