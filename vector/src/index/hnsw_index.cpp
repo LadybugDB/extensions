@@ -73,7 +73,7 @@ common::offset_t InMemHNSWLayer::searchNN(const EmbeddingHandle& queryVector,
     if (entryNode == common::INVALID_OFFSET) {
         return common::INVALID_OFFSET;
     }
-    double lastMinDist = std::numeric_limits<float>::max();
+    double lastMinDist = std::numeric_limits<double>::max();
 
     const auto currNodeVector = info.getEmbedding(currentNodeOffset, scanState);
     auto minDist =
@@ -218,10 +218,11 @@ void InMemHNSWLayer::shrinkForNode(const InMemHNSWLayerInfo& info, InMemHNSWGrap
         [](const NodeWithDistanceAndEmbedding& l, const NodeWithDistanceAndEmbedding& r) {
             return l.getDist() < r.getDist();
         });
-    uint16_t newSize = 0;
-    for (auto i = 1u; i < nbrs.size(); i++) {
+    std::vector<common::idx_t> keptNbrs;
+    keptNbrs.reserve(info.maxDegree);
+    for (auto i = 0u; i < nbrs.size(); i++) {
         bool keepNbr = true;
-        for (auto j = i + 1; j < nbrs.size(); j++) {
+        for (const auto j : keptNbrs) {
             DASSERT(checkEmbeddingValidity(nbrs, i, info, scanState));
             DASSERT(checkEmbeddingValidity(nbrs, j, info, scanState));
             const auto dist = info.metricFunc(nbrs[i].embedding.getPtr(),
@@ -233,13 +234,14 @@ void InMemHNSWLayer::shrinkForNode(const InMemHNSWLayerInfo& info, InMemHNSWGrap
         }
         if (keepNbr) {
             const auto startCSROffset = nodeOffset * info.degreeThresholdToShrink;
-            graph->setDstNode(startCSROffset + newSize++, nbrs[i].getNodeOffset());
+            graph->setDstNode(startCSROffset + keptNbrs.size(), nbrs[i].getNodeOffset());
+            keptNbrs.push_back(i);
         }
-        if (newSize == info.maxDegree) {
+        if (keptNbrs.size() == info.maxDegree) {
             break;
         }
     }
-    graph->setCSRLength(nodeOffset, newSize);
+    graph->setCSRLength(nodeOffset, keptNbrs.size());
 }
 
 void InMemHNSWLayer::finalizeNodeGroup(common::node_group_idx_t nodeGroupIdx,
@@ -716,7 +718,7 @@ common::offset_t OnDiskHNSWIndex::searchNNInUpperLayer(const EmbeddingHandle& qu
     if (currentNodeOffset == common::INVALID_OFFSET) {
         return common::INVALID_OFFSET;
     }
-    double lastMinDist = std::numeric_limits<float>::max();
+    double lastMinDist = std::numeric_limits<double>::max();
     const auto& embeddings = searchState.embeddings;
     const auto currNodeVector =
         embeddings->getEmbedding(currentNodeOffset, searchState.embeddingScanState);
@@ -1259,10 +1261,11 @@ void OnDiskHNSWIndex::shrinkForNode(Transaction* transaction, common::offset_t o
     insertState.relDeleteState->detachDeleteDirection = common::RelDataDirection::FWD;
     relTable.detachDelete(transaction, insertState.relDeleteState.get());
     // Perform the actual shrinking and insertion of shrinked rels.
-    uint16_t newSize = 0;
-    for (auto i = 1u; i < nbrs.size(); i++) {
+    std::vector<common::idx_t> keptNbrs;
+    keptNbrs.reserve(maxDegree);
+    for (auto i = 0u; i < nbrs.size(); i++) {
         bool keepNbr = true;
-        for (auto j = i + 1; j < nbrs.size(); j++) {
+        for (const auto j : keptNbrs) {
             DASSERT(checkEmbeddingValidity(nbrs, i, embeddings, embeddingScanState));
             DASSERT(checkEmbeddingValidity(nbrs, j, embeddings, embeddingScanState));
             const auto dist = metricFunc(nbrs[i].embedding.getPtr(), nbrs[j].embedding.getPtr(),
@@ -1278,10 +1281,10 @@ void OnDiskHNSWIndex::shrinkForNode(Transaction* transaction, common::offset_t o
             insertState.relInsertState->dstNodeIDVector.setValue(0,
                 common::nodeID_t{nbrs[i].getNodeOffset(), indexInfo.tableID});
             relTable.insert(transaction, *insertState.relInsertState);
-            newSize++;
-            if (newSize == maxDegree) {
-                break;
-            }
+            keptNbrs.push_back(i);
+        }
+        if (keptNbrs.size() == maxDegree) {
+            break;
         }
     }
 }
