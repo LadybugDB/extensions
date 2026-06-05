@@ -18,6 +18,10 @@ using namespace lbug::transaction;
 namespace lbug {
 namespace vector_extension {
 
+static constexpr double NAVIX_ONE_HOP_LOCAL_SELECTIVITY_THRESHOLD = 0.4;
+static constexpr double NAVIX_TWO_HOP_SELECTED_NEIGHBOR_ESTIMATE_RATIO = 0.4;
+static constexpr int64_t NAVIX_DIRECTED_FIRST_HOP_DISTANCE_COST_FACTOR = 2;
+
 InMemHNSWLayer::InMemHNSWLayer(MemoryManager* mm, InMemHNSWLayerInfo info)
     : entryPoint{common::INVALID_OFFSET}, info{info} {
     graph = std::make_unique<InMemHNSWGraph>(mm, info.numNodes, info.degreeThresholdToShrink);
@@ -650,8 +654,8 @@ void OnDiskHNSWIndex::commitInsert(Transaction* transaction,
     }
 }
 
-std::unique_ptr<Index::UpdateState> OnDiskHNSWIndex::initUpdateState(
-    main::ClientContext* context, common::column_id_t columnID, storage::visible_func isVisible) {
+std::unique_ptr<Index::UpdateState> OnDiskHNSWIndex::initUpdateState(main::ClientContext* context,
+    common::column_id_t columnID, storage::visible_func isVisible) {
     DASSERT(columnID == indexInfo.columnIDs[0]);
     (void)columnID;
     return std::make_unique<HNSWUpdateState>(initInsertState(context, std::move(isVisible)));
@@ -843,7 +847,7 @@ SearchType OnDiskHNSWIndex::getFilteredSearchType(Transaction* transaction,
         return SearchType::UNFILTERED;
     }
     const auto searchType = common::StringUtils::getLower(searchState.config.searchType);
-    if (searchType == "navix" || searchType == "adaptive_l") {
+    if (searchType == "auto" || searchType == "navix" || searchType == "adaptive_l") {
         return SearchType::NAVIX_FILTERED;
     }
     if (searchType == "blind") {
@@ -858,6 +862,7 @@ SearchType OnDiskHNSWIndex::getFilteredSearchType(Transaction* transaction,
     if (searchType == "random") {
         return SearchType::RANDOM_FILTERED;
     }
+    // adaptive_g uses the global selectivity thresholds below.
     const auto selectivity = 1.0 * searchState.semiMask->getNumMaskedNodes() /
                              searchState.lowerGraph->getNumNodes(transaction);
     if (selectivity < searchState.config.blindSearchUpSelThreshold) {
@@ -945,7 +950,7 @@ void OnDiskHNSWIndex::navixFilteredSearch(const EmbeddingHandle& queryVector,
         filteredNbrs += searchState.isMasked(nbr) ? 1 : 0;
     }
     const auto localSelectivity = 1.0 * filteredNbrs / firstHopNbrs.size();
-    if (localSelectivity >= 0.4) {
+    if (localSelectivity >= NAVIX_ONE_HOP_LOCAL_SELECTIVITY_THRESHOLD) {
         for (const auto nbr : firstHopNbrs) {
             if (!searchState.visited.contains(nbr) && searchState.isMasked(nbr)) {
                 const auto nbrVector =
@@ -959,8 +964,10 @@ void OnDiskHNSWIndex::navixFilteredSearch(const EmbeddingHandle& queryVector,
     }
     int64_t numVisitedNbrs = 0;
     const auto estimatedFullTwoHopDistanceComp =
-        (firstHopNbrs.size() * filteredNbrs + filteredNbrs) * 0.4;
-    const auto estimatedDirectedDistanceComp = firstHopNbrs.size() * 2 - filteredNbrs;
+        (firstHopNbrs.size() * filteredNbrs + filteredNbrs) *
+        NAVIX_TWO_HOP_SELECTED_NEIGHBOR_ESTIMATE_RATIO;
+    const auto estimatedDirectedDistanceComp =
+        firstHopNbrs.size() * NAVIX_DIRECTED_FIRST_HOP_DISTANCE_COST_FACTOR - filteredNbrs;
     if (estimatedFullTwoHopDistanceComp > estimatedDirectedDistanceComp) {
         auto candidatesForSecHop = collectFirstHopNbrsDirected(queryVector, firstHopNbrs,
             searchState, candidates, results, numVisitedNbrs);

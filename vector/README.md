@@ -49,10 +49,13 @@ extension functions instead of moving vector-index execution into core.
 auto, navix, adaptive_l, adaptive_g, blind, directed, one_hop, naive, random
 ```
 
-`naive` and `use_knn := true` run exact brute-force search. The other named modes route filtered
-search through the extension HNSW implementation. `random` exposes Navix random-mode behavior using
-Ladybug graph scans; the old Navix random-fast storage scan is intentionally not ported without
-benchmark evidence.
+`auto` is the default. Unfiltered queries use regular HNSW search; filtered queries automatically
+use the NaviX adaptive-local heuristic. `navix` and `adaptive_l` explicitly select the same mode,
+while `adaptive_g` uses global selectivity thresholds to choose between blind, directed, and one-hop
+filtered search. `naive` and `use_knn := true` run exact brute-force search. The other named modes
+route filtered search through the extension HNSW implementation. `random` exposes Navix random-mode
+behavior using Ladybug graph scans; the old Navix random-fast storage scan is intentionally not
+ported without benchmark evidence.
 
 ## HNSW Updates And Maintenance
 
