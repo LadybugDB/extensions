@@ -66,6 +66,10 @@ std::vector<std::string> FTSUtils::stemTerms(std::vector<std::string> terms,
     }
     StemFunction::validateStemmer(config.stemmer);
     auto sbStemmer = sb_stemmer_new(reinterpret_cast<const char*>(config.stemmer.c_str()), "UTF_8");
+    if (!sbStemmer) {
+        // If stemmer creation fails, fall back to returning original terms to avoid crashes.
+        return terms;
+    }
     std::vector<std::string> result;
     StopWordsChecker checker{mm, stopwordsTable, tx,
         config.stopWordsSource == StopWords::DEFAULT_VALUE};
@@ -79,7 +83,12 @@ std::vector<std::string> FTSUtils::stemTerms(std::vector<std::string> terms,
         }
         auto stemData = sb_stemmer_stem(sbStemmer, reinterpret_cast<const sb_symbol*>(term.c_str()),
             term.length());
-        result.push_back(std::string(reinterpret_cast<const char*>(stemData)));
+        if (stemData) {
+            result.push_back(std::string(reinterpret_cast<const char*>(stemData)));
+        } else {
+            // If stemming fails for a term, keep the original term.
+            result.push_back(term);
+        }
     }
     sb_stemmer_delete(sbStemmer);
     return result;
