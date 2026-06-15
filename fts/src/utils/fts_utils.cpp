@@ -86,7 +86,6 @@ std::vector<std::string> FTSUtils::stemTerms(std::vector<std::string> terms,
 }
 
 std::vector<std::string> FTSUtils::tokenizeString(std::string& str, const FTSConfig& config) {
-    FTSUtils::normalizeQuery(str, config.tokenizer);
     std::vector<std::string> terms;
     if (config.tokenizer == "jieba") {
         cppjieba::Jieba jieba(config.jiebaDictDir + "/jieba.dict.utf8",

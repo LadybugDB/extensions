@@ -76,3 +76,20 @@ The Quantum World|0.634506
 ---- ok
 -STATEMENT MATCH (d:doc) DELETE d
 ---- ok
+
+-CASE FTSDeleteTokenContainingTokenizerName
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE A(id INT64, name STRING, PRIMARY KEY(id));
+---- ok
+-STATEMENT CREATE (a:A {id: 1, name: 'simplex'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('A', 'a_idx', ['name'], stemmer := 'none');
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('A', 'a_idx', 'simplex') RETURN node.id;
+---- 1
+1
+-STATEMENT MATCH (a:A) WHERE a.id = 1 DELETE a;
+---- ok
+-STATEMENT MATCH (a:A) RETURN count(a);
+---- 1
+0

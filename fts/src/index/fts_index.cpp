@@ -2,9 +2,11 @@
 
 #include "catalog/catalog.h"
 #include "catalog/fts_index_catalog_entry.h"
+#include "common/exception/runtime.h"
 #include "index/fts_update_state.h"
 #include "re2.h"
 #include "utils/fts_utils.h"
+#include <format>
 
 namespace lbug {
 namespace fts_extension {
@@ -300,8 +302,13 @@ nodeID_t FTSIndex::deleteFromDocTable(Transaction* transaction, FTSDeleteState& 
     auto& pkVector = deleteState.updateVectors.int64PKVector;
     pkVector.setValue(0, deletedNodeID.offset);
     nodeID_t docNodeID{INVALID_OFFSET, internalTableInfo.docTable->getTableID()};
-    internalTableInfo.docTable->lookupPK(transaction, &pkVector, 0 /* vectorPos */,
-        docNodeID.offset);
+    if (!internalTableInfo.docTable->lookupPK(transaction, &pkVector, 0 /* vectorPos */,
+            docNodeID.offset)) {
+        throw common::RuntimeException{std::format(
+            "FTS index '{}' is inconsistent: document for node offset {} is missing during delete. "
+            "Drop and recreate the FTS index.",
+            indexInfo.name, deletedNodeID.offset)};
+    }
     deleteState.updateVectors.idVector.setValue(0, docNodeID);
     internalTableInfo.docTable->initScanState(transaction, deleteState.docTableScanState,
         docNodeID.tableID, docNodeID.offset);
@@ -314,14 +321,20 @@ nodeID_t FTSIndex::deleteFromDocTable(Transaction* transaction, FTSDeleteState& 
 void FTSIndex::deleteFromTermsTable(Transaction* transaction,
     std::unordered_map<std::string, TermInfo>& tfCollection, FTSDeleteState& ftsInsertState) const {
     auto termsTable = internalTableInfo.termsTable;
-    internalID_t termNodeID{INVALID_OFFSET, termsTable->getTableID()};
     for (auto& [term, termInfo] : tfCollection) {
+        internalID_t termNodeID{INVALID_OFFSET, termsTable->getTableID()};
         auto& termPKVector = ftsInsertState.updateVectors.stringPKVector;
         termPKVector.setValue(0, term);
         // If the df of the term is > 1, we decrement the df by 1. Otherwise, we delete the entry.
         auto& termIDVector = ftsInsertState.updateVectors.idVector;
         auto& dfVector = ftsInsertState.updateVectors.uint64PropVector;
-        termsTable->lookupPK(transaction, &termPKVector, 0 /* vectorPos */, termNodeID.offset);
+        if (!termsTable->lookupPK(transaction, &termPKVector, 0 /* vectorPos */,
+                termNodeID.offset)) {
+            throw common::RuntimeException{
+                std::format("FTS index '{}' is inconsistent: term '{}' is missing during delete. "
+                            "Drop and recreate the FTS index.",
+                    indexInfo.name, term)};
+        }
         termIDVector.setValue(0, termNodeID);
         termsTable->initScanState(transaction, ftsInsertState.termsTableState.termsTableScanState,
             termNodeID.tableID, termNodeID.offset);
