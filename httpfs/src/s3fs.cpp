@@ -398,7 +398,8 @@ ParsedS3URL S3FileSystem::parseS3URL(std::string url, S3AuthParams& params) cons
         host = params.endpoint;
     }
 
-    return {"https://", prefix, host, bucket, path, queryParameters, trimmedS3URL};
+    return {params.disableSSL ? "http://" : "https://", prefix, host, bucket, path,
+        queryParameters, trimmedS3URL};
 }
 
 std::string S3FileSystem::initializeMultiPartUpload(S3FileInfo* fileInfo) const {

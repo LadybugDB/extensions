@@ -23,6 +23,7 @@ struct S3AuthParams {
     std::string endpoint;
     std::string urlStyle;
     std::string region;
+    bool disableSSL = false;
 };
 
 struct S3AuthOption {
@@ -40,6 +41,7 @@ struct S3FileSystemConfig {
     S3AuthOption endpointOption;
     S3AuthOption urlStyleOption;
     S3AuthOption regionOption;
+    S3AuthOption disableSSLOption;
 
     void registerExtensionOptions(main::Database* db) const;
     void setEnvValue(main::ClientContext* context) const;

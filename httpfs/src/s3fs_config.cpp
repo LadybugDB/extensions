@@ -13,6 +13,12 @@ using namespace common;
 static constexpr std::array AUTH_OPTION_NAMES = {"ACCESS_KEY_ID", "SECRET_ACCESS_KEY",
     "SESSION_TOKEN", "ENDPOINT", "URL_STYLE", "REGION"};
 
+static constexpr const char* DISABLE_SSL_OPTION_NAME = "DISABLE_SSL";
+
+static bool parseBoolEnvValue(const std::string& value) {
+    return value == "true" || value == "True" || value == "TRUE" || value == "1";
+}
+
 static constexpr std::array<std::string_view, 1> s3PrefixArray = {"s3://"};
 S3FileSystemConfig getS3Config() {
     return S3FileSystemConfig{.prefixes = s3PrefixArray,
@@ -22,7 +28,8 @@ S3FileSystemConfig getS3Config() {
         .sessionTokenOption = {common::Value{""}, true},
         .endpointOption = {common::Value{"s3.amazonaws.com"}},
         .urlStyleOption = {{common::Value{"vhost"}}},
-        .regionOption = {common::Value{"us-east-1"}}};
+        .regionOption = {common::Value{"us-east-1"}},
+        .disableSSLOption = {common::Value{false}}};
 }
 
 // The S3 filesystem communicates with GCS using interoperability mode
@@ -36,7 +43,8 @@ S3FileSystemConfig getGCSConfig() {
         .sessionTokenOption = {common::Value{""}, true},
         .endpointOption = {common::Value{"storage.googleapis.com"}, false, false},
         .urlStyleOption = {{common::Value{"path"}}, false, false},
-        .regionOption = {common::Value{"us-east-1"}, false, false}};
+        .regionOption = {common::Value{"us-east-1"}, false, false},
+        .disableSSLOption = {common::Value{false}}};
 }
 
 std::span<const S3FileSystemConfig> S3FileSystemConfig::getAvailableConfigs() {
@@ -71,6 +79,9 @@ S3AuthParams S3FileSystemConfig::getAuthParams(main::ClientContext* context) con
     authParams.endpoint = getAuthParam(*this, endpointOption, context, AUTH_OPTION_NAMES[3]);
     authParams.urlStyle = getAuthParam(*this, urlStyleOption, context, AUTH_OPTION_NAMES[4]);
     authParams.region = getAuthParam(*this, regionOption, context, AUTH_OPTION_NAMES[5]);
+    authParams.disableSSL =
+        context->getCurrentSetting(getFSOptionName(*this, DISABLE_SSL_OPTION_NAME))
+            .getValue<bool>();
     return authParams;
 }
 
@@ -83,6 +94,11 @@ void S3FileSystemConfig::registerExtensionOptions(main::Database* db) const {
                 authOptions[i]->defaultValue, authOptions[i]->isConfidential);
         }
     }
+    if (disableSSLOption.isConfigurable) {
+        db->addExtensionOption(getFSOptionName(*this, DISABLE_SSL_OPTION_NAME),
+            common::LogicalTypeID::BOOL, disableSSLOption.defaultValue,
+            disableSSLOption.isConfidential);
+    }
 }
 
 void S3FileSystemConfig::setEnvValue(main::ClientContext* context) const {
@@ -94,6 +110,14 @@ void S3FileSystemConfig::setEnvValue(main::ClientContext* context) const {
             if (!optionValueFromEnv.empty()) {
                 context->setExtensionOption(fsOptionName, Value::createValue(optionValueFromEnv));
             }
+        }
+    }
+    if (disableSSLOption.isConfigurable) {
+        const auto disableSSLOptionName = getFSOptionName(*this, DISABLE_SSL_OPTION_NAME);
+        auto disableSSLEnvValue = main::ClientContext::getEnvVariable(disableSSLOptionName);
+        if (!disableSSLEnvValue.empty()) {
+            context->setExtensionOption(disableSSLOptionName,
+                Value::createValue(parseBoolEnvValue(disableSSLEnvValue)));
         }
     }
 }
