@@ -699,7 +699,7 @@ void OnDiskHNSWIndex::finalize(main::ClientContext* context) {
 }
 
 void OnDiskHNSWIndex::checkpoint(main::ClientContext* context,
-    storage::PageAllocator& pageAllocator) {
+    storage::PageAllocator& pageAllocator, storage::ShadowFile& /*shadowFile*/) {
     auto [nodeTableEntry, upperRelTableEntry, lowerRelTableEntry] = getIndexTableCatalogEntries(
         catalog::Catalog::Get(*context), &DUMMY_CHECKPOINT_TRANSACTION, indexInfo);
     upperRelTable->checkpoint(context, upperRelTableEntry, pageAllocator);
