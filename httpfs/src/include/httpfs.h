@@ -5,6 +5,7 @@
 #include "http_config.h"
 #include "httplib.h"
 #include "main/client_context.h"
+#include <list>
 
 #if defined(_WIN32)
 #define O_ACCMODE 0x0003
@@ -50,15 +51,27 @@ struct HTTPFileInfo : public common::FileInfo {
 
     int flags;
     uint64_t length;
-    uint64_t availableBuffer;
-    uint64_t bufferIdx;
     uint64_t fileOffset;
-    uint64_t bufferStartPos;
-    uint64_t bufferEndPos;
-    std::unique_ptr<uint8_t[]> readBuffer;
-    constexpr static uint64_t READ_BUFFER_LEN = 1000000;
     HTTPConfig httpConfig;
     std::unique_ptr<common::FileInfo> cachedFileInfo;
+
+    // A small LRU cache of fetched byte ranges, keyed by their starting file
+    // offset. Replaces the previous single sliding-window read buffer so that
+    // revisited regions are served from memory instead of re-fetched.
+    struct CachedBlock {
+        uint64_t offset;
+        uint64_t length;
+        std::unique_ptr<uint8_t[]> data;
+    };
+    std::list<CachedBlock> readCache;
+
+    // Returns a pointer to the cached block covering `pos` (i.e. offset <= pos <
+    // offset+length), or nullptr. On a hit the block is promoted to the MRU
+    // position.
+    CachedBlock* lookupCachedBlock(uint64_t pos);
+    // Inserts a freshly fetched block (taking ownership of `data`) at the MRU
+    // position, evicting the LRU block when the cache is over capacity.
+    void cacheBlock(uint64_t offset, uint64_t length, std::unique_ptr<uint8_t[]> data);
 };
 
 class HTTPFileSystem : public common::FileSystem {

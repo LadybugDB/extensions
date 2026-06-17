@@ -195,9 +195,8 @@ std::unique_ptr<HTTPResponse> runBrowserRequestWithRetry(const std::string& meth
 
 HTTPFileInfo::HTTPFileInfo(std::string path, FileSystem* fileSystem, int flags,
     main::ClientContext* context)
-    : FileInfo{std::move(path), fileSystem}, flags{flags}, length{0}, availableBuffer{0},
-      bufferIdx{0}, fileOffset{0}, bufferStartPos{0}, bufferEndPos{0}, httpConfig{context},
-      cachedFileInfo{nullptr} {}
+    : FileInfo{std::move(path), fileSystem}, flags{flags}, length{0}, fileOffset{0},
+      httpConfig{context}, cachedFileInfo{nullptr} {}
 
 void HTTPFileInfo::initMetadata() {
     auto hfs = fileSystem->ptrCast<HTTPFileSystem>();
@@ -252,11 +251,8 @@ void HTTPFileInfo::initMetadata() {
         }
     }
 
-    // Initialize the read buffer now that we know the file exists
-    if (flags & FileFlags::READ_ONLY) {
-        readBuffer = std::make_unique<uint8_t[]>(READ_BUFFER_LEN);
-    }
-
+    // The read buffer is now allocated lazily per fetched block inside the LRU
+    // cache, so there is nothing to pre-allocate here.
     if (res->headers.find("Content-Length") == res->headers.end() ||
         res->headers["Content-Length"].empty()) {
         // LCOV_EXCL_START
@@ -345,6 +341,28 @@ void HTTPFileSystem::cleanUP(main::ClientContext* context) {
     }
 }
 
+HTTPFileInfo::CachedBlock* HTTPFileInfo::lookupCachedBlock(uint64_t pos) {
+    for (auto it = readCache.begin(); it != readCache.end(); ++it) {
+        if (pos >= it->offset && pos < it->offset + it->length) {
+            // Promote to MRU.
+            if (it != readCache.begin()) {
+                readCache.splice(readCache.begin(), readCache, it);
+            }
+            return &*readCache.begin();
+        }
+    }
+    return nullptr;
+}
+
+void HTTPFileInfo::cacheBlock(uint64_t offset, uint64_t length,
+    std::unique_ptr<uint8_t[]> data) {
+    CachedBlock block{offset, length, std::move(data)};
+    readCache.push_front(std::move(block));
+    while (readCache.size() > httpConfig.readCacheBlocks) {
+        readCache.pop_back();
+    }
+}
+
 void HTTPFileSystem::readFromFile(common::FileInfo& fileInfo, void* buffer, uint64_t numBytes,
     uint64_t position) const {
     auto& httpFileInfo = fileInfo.cast<HTTPFileInfo>();
@@ -355,53 +373,52 @@ void HTTPFileSystem::readFromFile(common::FileInfo& fileInfo, void* buffer, uint
         httpFileInfo.fileOffset = position + numBytes;
         return;
     }
-    if (position >= httpFileInfo.bufferStartPos && position < httpFileInfo.bufferEndPos) {
-        httpFileInfo.fileOffset = position;
-        httpFileInfo.bufferIdx = position - httpFileInfo.bufferStartPos;
-        httpFileInfo.availableBuffer =
-            (httpFileInfo.bufferEndPos - httpFileInfo.bufferStartPos) - httpFileInfo.bufferIdx;
-    } else {
-        httpFileInfo.availableBuffer = 0;
-        httpFileInfo.bufferIdx = 0;
-        httpFileInfo.fileOffset = position;
-    }
+    httpFileInfo.fileOffset = position;
     while (numBytesToRead > 0) {
-        auto buffer_read_len = std::min<uint64_t>(httpFileInfo.availableBuffer, numBytesToRead);
-        if (buffer_read_len > 0) {
-            DASSERT(httpFileInfo.bufferStartPos + httpFileInfo.bufferIdx + buffer_read_len <=
-                    httpFileInfo.bufferEndPos);
-            memcpy((char*)buffer + bufferOffset,
-                httpFileInfo.readBuffer.get() + httpFileInfo.bufferIdx, buffer_read_len);
+        auto currentPos = position + bufferOffset;
 
+        // Try to serve from the LRU cache first.
+        if (auto* block = httpFileInfo.lookupCachedBlock(currentPos)) {
+            auto blockOffset = currentPos - block->offset;
+            auto buffer_read_len =
+                std::min<uint64_t>(block->length - blockOffset, numBytesToRead);
+            memcpy((char*)buffer + bufferOffset, block->data.get() + blockOffset,
+                buffer_read_len);
             bufferOffset += buffer_read_len;
             numBytesToRead -= buffer_read_len;
-
-            httpFileInfo.bufferIdx += buffer_read_len;
-            httpFileInfo.availableBuffer -= buffer_read_len;
             httpFileInfo.fileOffset += buffer_read_len;
+            continue;
         }
 
-        if (numBytesToRead > 0 && httpFileInfo.availableBuffer == 0) {
-            auto newBufferAvailableSize = std::min<uint64_t>(httpFileInfo.READ_BUFFER_LEN,
-                httpFileInfo.length - httpFileInfo.fileOffset);
+        // Cache miss: choose a block size. Small reads are treated as
+        // metadata-like and use a smaller block size to avoid over-fetching.
+        uint64_t blockSize = (numBytesToRead <= httpFileInfo.httpConfig.metadataReadBufferSize)
+            ? httpFileInfo.httpConfig.metadataReadBufferSize
+            : httpFileInfo.httpConfig.readBufferSize;
 
-            // Bypass buffer if we read more than buffer size.
-            if (numBytesToRead > newBufferAvailableSize) {
-                getRangeRequest(&httpFileInfo, httpFileInfo.path, {}, position + bufferOffset,
-                    (char*)buffer + bufferOffset, numBytesToRead);
-                httpFileInfo.availableBuffer = 0;
-                httpFileInfo.bufferIdx = 0;
-                httpFileInfo.fileOffset += numBytesToRead;
-                break;
-            } else {
-                getRangeRequest(&httpFileInfo, httpFileInfo.path, {}, httpFileInfo.fileOffset,
-                    (char*)httpFileInfo.readBuffer.get(), newBufferAvailableSize);
-                httpFileInfo.availableBuffer = newBufferAvailableSize;
-                httpFileInfo.bufferIdx = 0;
-                httpFileInfo.bufferStartPos = httpFileInfo.fileOffset;
-                httpFileInfo.bufferEndPos = httpFileInfo.bufferStartPos + newBufferAvailableSize;
-            }
+        // Bypass the cache for reads at least as large as the block size: the
+        // caller wants the data directly and caching it would just evict useful
+        // blocks.
+        if (numBytesToRead >= blockSize) {
+            getRangeRequest(&httpFileInfo, httpFileInfo.path, {}, currentPos,
+                (char*)buffer + bufferOffset, numBytesToRead);
+            httpFileInfo.fileOffset += numBytesToRead;
+            bufferOffset += numBytesToRead;
+            numBytesToRead = 0;
+            break;
         }
+
+        // Fetch an aligned block into the cache.
+        auto fetchStart = (currentPos / blockSize) * blockSize;
+        auto fetchLen = std::min<uint64_t>(blockSize, httpFileInfo.length - fetchStart);
+        if (fetchLen == 0) {
+            break;
+        }
+        auto blockData = std::make_unique<uint8_t[]>(fetchLen);
+        getRangeRequest(&httpFileInfo, httpFileInfo.path, {}, fetchStart,
+            (char*)blockData.get(), fetchLen);
+        httpFileInfo.cacheBlock(fetchStart, fetchLen, std::move(blockData));
+        // Loop again: the next iteration will serve the request from the cache.
     }
 }
 

@@ -23,6 +23,16 @@ static void registerExtensionOptions(main::Database* db) {
         common::Value{static_cast<int64_t>(50)});
     db->addExtensionOption(HTTPCacheFileConfig::HTTP_CACHE_FILE_OPTION, common::LogicalTypeID::BOOL,
         common::Value{HTTPCacheFileConfig::DEFAULT_CACHE_FILE});
+    db->addExtensionOption(HTTPReadBufferSizeConfig::HTTP_READ_BUFFER_SIZE_OPTION,
+        common::LogicalTypeID::INT64,
+        common::Value{static_cast<int64_t>(HTTPReadBufferSizeConfig::DEFAULT_READ_BUFFER_SIZE)});
+    db->addExtensionOption(HTTPMetadataReadBufferSizeConfig::HTTP_METADATA_READ_BUFFER_SIZE_OPTION,
+        common::LogicalTypeID::INT64,
+        common::Value{static_cast<int64_t>(
+            HTTPMetadataReadBufferSizeConfig::DEFAULT_METADATA_READ_BUFFER_SIZE)});
+    db->addExtensionOption(HTTPReadCacheBlocksConfig::HTTP_READ_CACHE_BLOCKS_OPTION,
+        common::LogicalTypeID::INT64,
+        common::Value{static_cast<int64_t>(HTTPReadCacheBlocksConfig::DEFAULT_READ_CACHE_BLOCKS)});
 }
 
 static void registerFileSystem(main::Database* db) {
