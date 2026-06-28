@@ -47,7 +47,8 @@ Binder exception: CREATE_FTS_INDEX is only supported in auto transaction mode.
 ---- ok
 -RELOADDB
 -STATEMENT CALL show_indexes() RETURN *
----- 0
+---- 1
+Book|_PK|HASH|[ID]|True|
 
 -CASE InsertRecover
 -SKIP_IN_MEM

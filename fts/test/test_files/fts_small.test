@@ -309,29 +309,54 @@ Binder exception: Table: 0_docIdx4_appears_in already exists. Please drop or ren
 -STATEMENT CALL CREATE_FTS_INDEX('doc', 'docIdx1', ['content'])
 ---- ok
 -STATEMENT CALL SHOW_INDEXES() RETURN *
----- 2
+---- 7
+INVALID_STOPWORDS_COL_TYPE|_PK|HASH|[ID1]|True|
+INVALID_STOPWORDS|_PK|HASH|[ID1]|True|
+city_stopwords|_PK|HASH|[word]|True|
+doc|_PK|HASH|[ID]|True|
 doc|docIdx1|FTS|[content]|True|CALL CREATE_FTS_INDEX('doc', 'docIdx1', ['content'], stemmer := 'english', stopWords := 'default');
 doc|docIdx|FTS|[content,author,name]|True|CALL CREATE_FTS_INDEX('doc', 'docIdx', ['content', 'author', 'name'], stemmer := 'english', stopWords := 'default');
+name_stopwords|_PK|HASH|[word]|True|
 -STATEMENT CALL SHOW_INDEXES() RETURN *
----- 2
+---- 7
+INVALID_STOPWORDS_COL_TYPE|_PK|HASH|[ID1]|True|
+INVALID_STOPWORDS|_PK|HASH|[ID1]|True|
+city_stopwords|_PK|HASH|[word]|True|
+doc|_PK|HASH|[ID]|True|
 doc|docIdx1|FTS|[content]|True|CALL CREATE_FTS_INDEX('doc', 'docIdx1', ['content'], stemmer := 'english', stopWords := 'default');
 doc|docIdx|FTS|[content,author,name]|True|CALL CREATE_FTS_INDEX('doc', 'docIdx', ['content', 'author', 'name'], stemmer := 'english', stopWords := 'default');
+name_stopwords|_PK|HASH|[word]|True|
 -RELOADDB
 -STATEMENT CALL SHOW_INDEXES() RETURN *
----- 2
+---- 7
+INVALID_STOPWORDS_COL_TYPE|_PK|HASH|[ID1]|True|
+INVALID_STOPWORDS|_PK|HASH|[ID1]|True|
+city_stopwords|_PK|HASH|[word]|True|
+doc|_PK|HASH|[ID]|True|
 doc|docIdx1|FTS|[content]|False|
 doc|docIdx|FTS|[content,author,name]|False|
+name_stopwords|_PK|HASH|[word]|True|
 -LOAD_DYNAMIC_EXTENSION fts
 -STATEMENT CALL SHOW_INDEXES() RETURN *
----- 2
+---- 7
+INVALID_STOPWORDS_COL_TYPE|_PK|HASH|[ID1]|True|
+INVALID_STOPWORDS|_PK|HASH|[ID1]|True|
+city_stopwords|_PK|HASH|[word]|True|
+doc|_PK|HASH|[ID]|True|
 doc|docIdx1|FTS|[content]|True|CALL CREATE_FTS_INDEX('doc', 'docIdx1', ['content'], stemmer := 'english', stopWords := 'default');
 doc|docIdx|FTS|[content,author,name]|True|CALL CREATE_FTS_INDEX('doc', 'docIdx', ['content', 'author', 'name'], stemmer := 'english', stopWords := 'default');
+name_stopwords|_PK|HASH|[word]|True|
 -STATEMENT ALTER TABLE doc RENAME content to detail
 ---- ok
 -STATEMENT CALL SHOW_INDEXES() RETURN *
----- 2
+---- 7
+INVALID_STOPWORDS_COL_TYPE|_PK|HASH|[ID1]|True|
+INVALID_STOPWORDS|_PK|HASH|[ID1]|True|
+city_stopwords|_PK|HASH|[word]|True|
+doc|_PK|HASH|[ID]|True|
 doc|docIdx1|FTS|[detail]|True|CALL CREATE_FTS_INDEX('doc', 'docIdx1', ['detail'], stemmer := 'english', stopWords := 'default');
 doc|docIdx|FTS|[detail,author,name]|True|CALL CREATE_FTS_INDEX('doc', 'docIdx', ['detail', 'author', 'name'], stemmer := 'english', stopWords := 'default');
+name_stopwords|_PK|HASH|[word]|True|
 -STATEMENT CALL QUERY_FTS_INDEX('doc', 'docIdx', 'Alice') RETURN node.ID, score
 ---- 2
 0|0.271133
@@ -341,17 +366,20 @@ doc|docIdx|FTS|[detail,author,name]|True|CALL CREATE_FTS_INDEX('doc', 'docIdx', 
 -STATEMENT CALL CREATE_FTS_INDEX('student', 'studentIdx', ['name'])
 ---- ok
 -STATEMENT CALL SHOW_INDEXES() WHERE table_name = 'student' RETURN *
----- 1
+---- 2
+student|_PK|HASH|[ID]|True|
 student|studentIdx|FTS|[name]|True|CALL CREATE_FTS_INDEX('student', 'studentIdx', ['name'], stemmer := 'english', stopWords := 'default');
 -STATEMENT ALTER TABLE student drop age
 ---- ok
 -STATEMENT CALL SHOW_INDEXES() WHERE table_name = 'student' RETURN *
----- 1
+---- 2
+student|_PK|HASH|[ID]|True|
 student|studentIdx|FTS|[name]|True|CALL CREATE_FTS_INDEX('student', 'studentIdx', ['name'], stemmer := 'english', stopWords := 'default');
 -STATEMENT ALTER TABLE student rename name to firstName
 ---- ok
 -STATEMENT CALL SHOW_INDEXES() WHERE table_name = 'student' RETURN *
----- 1
+---- 2
+student|_PK|HASH|[ID]|True|
 student|studentIdx|FTS|[firstName]|True|CALL CREATE_FTS_INDEX('student', 'studentIdx', ['firstName'], stemmer := 'english', stopWords := 'default');
 
 -CASE FTSWithPortDBUnloadedExtension

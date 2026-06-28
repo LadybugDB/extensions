@@ -26,7 +26,11 @@ alice|0.457137
 
 -DEFINE_STATEMENT_BLOCK VALIDATE_SHOW_INDEXES [
 -STATEMENT CALL SHOW_INDEXES() RETURN *;
----- 2
+---- 6
+INVALID_STOPWORDS_COL_TYPE|_PK|HASH|[ID1]|True|
+INVALID_STOPWORDS|_PK|HASH|[ID1]|True|
+city_stopwords1|_PK|HASH|[word]|True|
+doc|_PK|HASH|[ID]|True|
 doc|docIdx1|FTS|[content,author,name]|True|CALL CREATE_FTS_INDEX('doc', 'docIdx1', ['content', 'author', 'name'], stemmer := 'porter', stopWords := 'name_stopwords');
 doc|docIdx|FTS|[content,author,name]|True|CALL CREATE_FTS_INDEX('doc', 'docIdx', ['content', 'author', 'name'], stemmer := 'porter', stopWords := 'city_stopwords');
 ]

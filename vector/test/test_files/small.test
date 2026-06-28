@@ -260,16 +260,19 @@
 -STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'e_hnsw_index','vec', metric := 'l2');
 ---- ok
 -STATEMENT CALL show_indexes() return *;
----- 1
+---- 2
+embeddings|_PK|HASH|[id]|True|
 embeddings|e_hnsw_index|HNSW|[vec]|True|CALL CREATE_VECTOR_INDEX('embeddings', 'e_hnsw_index', 'vec', mu := 30, ml := 60, pu := 0.05, metric := 'l2', alpha := 1.1, efc := 200);
 -STATEMENT CALL DROP_VECTOR_INDEX('embeddings', 'e_hnsw_index');
 ---- ok
 -STATEMENT CALL show_indexes() RETURN *
----- 0
+---- 1
+embeddings|_PK|HASH|[id]|True|
 -STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'e_hnsw_index','vec', metric := 'l2');
 ---- ok
 -STATEMENT CALL show_indexes() RETURN *
----- 1
+---- 2
+embeddings|_PK|HASH|[id]|True|
 embeddings|e_hnsw_index|HNSW|[vec]|True|CALL CREATE_VECTOR_INDEX('embeddings', 'e_hnsw_index', 'vec', mu := 30, ml := 60, pu := 0.05, metric := 'l2', alpha := 1.1, efc := 200);
 
 -CASE EmptyTbl
@@ -423,7 +426,8 @@ Binder exception: _0_e_hnsw_index_LOWER already exists in catalog.
 90
 93
 -STATEMENT CALL SHOW_INDEXES() RETURN *
----- 1
+---- 2
+embeddings|_PK|HASH|[id]|True|
 embeddings|e_hnsw_index|HNSW|[vec]|True|CALL CREATE_VECTOR_INDEX('embeddings', 'e_hnsw_index', 'vec', mu := 30, ml := 60, pu := 0.05, metric := 'dotproduct', alpha := 1.1, efc := 200);
 
 -CASE ShowIndexes
@@ -435,15 +439,18 @@ embeddings|e_hnsw_index|HNSW|[vec]|True|CALL CREATE_VECTOR_INDEX('embeddings', '
 -STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'e_hnsw_index', 'vec', metric := 'l2');
 ---- ok
 -STATEMENT CALL SHOW_INDEXES() RETURN *
----- 1
+---- 2
+embeddings|_PK|HASH|[id]|True|
 embeddings|e_hnsw_index|HNSW|[vec]|True|CALL CREATE_VECTOR_INDEX('embeddings', 'e_hnsw_index', 'vec', mu := 30, ml := 60, pu := 0.05, metric := 'l2', alpha := 1.1, efc := 200);
 -RELOADDB
 -STATEMENT CALL SHOW_INDEXES() RETURN *
----- 1
+---- 2
+embeddings|_PK|HASH|[id]|True|
 embeddings|e_hnsw_index|HNSW|[vec]|False|
 -LOAD_DYNAMIC_EXTENSION vector
 -STATEMENT CALL SHOW_INDEXES() RETURN *
----- 1
+---- 2
+embeddings|_PK|HASH|[id]|True|
 embeddings|e_hnsw_index|HNSW|[vec]|True|CALL CREATE_VECTOR_INDEX('embeddings', 'e_hnsw_index', 'vec', mu := 30, ml := 60, pu := 0.05, metric := 'l2', alpha := 1.1, efc := 200);
 
 -CASE InstallOfficialExtension
@@ -496,8 +503,10 @@ embeddings|e_hnsw_index|HNSW|[vec]|True|CALL CREATE_VECTOR_INDEX('embeddings', '
 -STATEMENT CALL CREATE_VECTOR_INDEX('embeddings2', 'e_hnsw_index', 'vec', metric := 'cosine', efc:=500);
 ---- ok
 -STATEMENT CALL SHOW_INDEXES() RETURN *;
----- 2
+---- 4
+embeddings2|_PK|HASH|[id]|True|
 embeddings2|e_hnsw_index|HNSW|[vec]|True|CALL CREATE_VECTOR_INDEX('embeddings2', 'e_hnsw_index', 'vec', mu := 30, ml := 60, pu := 0.05, metric := 'cosine', alpha := 1.1, efc := 500);
+embeddings|_PK|HASH|[id]|True|
 embeddings|e_hnsw_index|HNSW|[vec]|True|CALL CREATE_VECTOR_INDEX('embeddings', 'e_hnsw_index', 'vec', mu := 30, ml := 60, pu := 0.05, metric := 'cosine', alpha := 1.1, efc := 500);
 
 -CASE DeleteThenReinsert

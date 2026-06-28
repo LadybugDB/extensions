@@ -66,7 +66,8 @@ Binder exception: CREATE_VECTOR_INDEX is only supported in auto transaction mode
 -STATEMENT COMMIT;
 ---- ok
 -STATEMENT CALL show_indexes() RETURN *;
----- 0
+---- 1
+embeddings|_PK|HASH|[id]|True|
 
 -CASE CreateHNSWComitRecovery
 -LOAD_DYNAMIC_EXTENSION vector
@@ -117,13 +118,15 @@ Binder exception: CREATE_VECTOR_INDEX is only supported in auto transaction mode
 -STATEMENT COMMIT;
 ---- ok
 -STATEMENT CALL show_indexes() RETURN *;
----- 0
+---- 1
+embeddings|_PK|HASH|[id]|True|
 -RELOADDB
 -STATEMENT CALL show_tables() RETURN *;
 ---- 1
 0|embeddings|NODE|main(graph)|
 -STATEMENT CALL show_indexes() RETURN *;
----- 0
+---- 1
+embeddings|_PK|HASH|[id]|True|
 
 -CASE CreateHNSWRollback
 -LOAD_DYNAMIC_EXTENSION vector
@@ -162,7 +165,8 @@ Binder exception: CREATE_VECTOR_INDEX is only supported in auto transaction mode
 -STATEMENT ROLLBACK;
 ---- ok
 -STATEMENT CALL show_indexes() RETURN *;
----- 1
+---- 2
+embeddings|_PK|HASH|[id]|True|
 embeddings|e_hnsw_index|HNSW|[vec]|True|CALL CREATE_VECTOR_INDEX('embeddings', 'e_hnsw_index', 'vec', mu := 30, ml := 60, pu := 0.05, metric := 'l2', alpha := 1.1, efc := 200);
 
 # TODO(Guodong): Uncomment this when we support CREATE_VECTOR_INDEX in the manual transaction mode.
@@ -215,11 +219,13 @@ embeddings|e_hnsw_index|HNSW|[vec]|True|CALL CREATE_VECTOR_INDEX('embeddings', '
 -STATEMENT ROLLBACK;
 ---- ok
 -STATEMENT CALL show_indexes() RETURN table_name, index_name, index_type, property_names;
----- 1
+---- 2
+embeddings|_PK|HASH|[id]
 embeddings|e_hnsw_index|HNSW|[vec]
 -RELOADDB
 -STATEMENT CALL show_indexes() RETURN table_name, index_name, index_type, property_names;
----- 1
+---- 2
+embeddings|_PK|HASH|[id]
 embeddings|e_hnsw_index|HNSW|[vec]
 
 -CASE InsertRecovery
@@ -401,12 +407,14 @@ embeddings|e_hnsw_index|HNSW|[vec]
 -STATEMENT CALL CREATE_VECTOR_INDEX('Person', 'person_embeddings_idx', 'embeddings', metric := 'cosine');
 ---- ok
 -STATEMENT CALL SHOW_INDEXES() RETURN table_name, index_name;
----- 1
+---- 2
+Person|_PK
 Person|person_embeddings_idx
 -STATEMENT CALL DROP_VECTOR_INDEX('Person', 'person_embeddings_idx');
 ---- ok
 -STATEMENT CALL SHOW_INDEXES() RETURN *;
----- 0
+---- 1
+Person|_PK|HASH|[id]|True|
 -STATEMENT MATCH (p:Person {id: "person-1"}) SET p.embeddings = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9] RETURN p.id;
 ---- 1
 person-1
