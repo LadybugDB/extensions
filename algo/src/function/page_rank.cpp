@@ -1,7 +1,9 @@
 #include "binder/binder.h"
+#include "binder/expression/expression_util.h"
 #include "common/exception/binder.h"
 #include "common/string_utils.h"
 #include "common/task_system/progress_bar.h"
+#include "common/types/value/nested.h"
 #include "function/algo_function.h"
 #include "function/config/max_iterations_config.h"
 #include "function/config/page_rank_config.h"
@@ -11,6 +13,7 @@
 #include "function/table/bind_input.h"
 #include "processor/execution_context.h"
 #include "transaction/transaction.h"
+#include <optional>
 
 using namespace lbug::processor;
 using namespace lbug::common;
@@ -22,30 +25,83 @@ using namespace lbug::function;
 namespace lbug {
 namespace algo_extension {
 
+struct TeleportationWeightsParam {
+    std::shared_ptr<Expression> param = nullptr;
+    std::optional<Value> paramVal;
+
+    TeleportationWeightsParam() = default;
+
+    explicit TeleportationWeightsParam(std::shared_ptr<Expression> param)
+        : param{std::move(param)} {}
+
+    static void validate(const Value& mapVal) {
+        if (mapVal.getDataType().getLogicalTypeID() != LogicalTypeID::MAP) {
+            throw BinderException{"Teleportation weights must be a MAP(INTERNAL_ID, DOUBLE)."};
+        }
+        auto weightSum = 0.0;
+        for (auto i = 0u; i < mapVal.getChildrenSize(); ++i) {
+            auto* entry = NestedVal::getChildVal(&mapVal, i);
+            auto* keyVal = NestedVal::getChildVal(entry, 0);
+            auto* weightVal = NestedVal::getChildVal(entry, 1);
+            if (keyVal->getDataType().getLogicalTypeID() != LogicalTypeID::INTERNAL_ID) {
+                throw BinderException{"Teleportation weight keys must be INTERNAL_ID."};
+            }
+            if (weightVal->getDataType().getLogicalTypeID() != LogicalTypeID::DOUBLE) {
+                throw BinderException{"Teleportation weight values must be DOUBLE."};
+            }
+            auto weight = weightVal->getValue<double>();
+            if (weight < 0) {
+                throw BinderException{"Teleportation weights must be non-negative."};
+            }
+            weightSum += weight;
+        }
+        if (weightSum <= 0) {
+            throw BinderException{"Sum of teleportation weights must be positive."};
+        }
+    }
+
+    void evaluateParam(main::ClientContext* /*context*/) {
+        if (!param) {
+            paramVal.reset();
+            return;
+        }
+        auto value = ExpressionUtil::evaluateAsLiteralValue(*param);
+        validate(value);
+        paramVal = std::move(value);
+    }
+
+    bool isSet() const { return param != nullptr; }
+
+    const Value& getParamVal() const { return paramVal.value(); }
+};
+
 struct PageRankOptionalParams final : public MaxIterationOptionalParams {
     OptionalParam<DampingFactor> dampingFactor;
     OptionalParam<Tolerance> tolerance;
     OptionalParam<NormalizeInitial> normalize;
+    TeleportationWeightsParam teleportationWeights;
 
     explicit PageRankOptionalParams(const expression_vector& optionalParams);
 
     // For copy only
     PageRankOptionalParams(OptionalParam<MaxIterations> maxIterations,
         OptionalParam<DampingFactor> dampingFactor, OptionalParam<Tolerance> tolerance,
-        OptionalParam<NormalizeInitial> normalize)
+        OptionalParam<NormalizeInitial> normalize, TeleportationWeightsParam teleportationWeights)
         : MaxIterationOptionalParams{maxIterations}, dampingFactor{std::move(dampingFactor)},
-          tolerance{std::move(tolerance)}, normalize{std::move(normalize)} {}
+          tolerance{std::move(tolerance)}, normalize{std::move(normalize)},
+          teleportationWeights{std::move(teleportationWeights)} {}
 
     void evaluateParams(main::ClientContext* context) override {
         MaxIterationOptionalParams::evaluateParams(context);
         dampingFactor.evaluateParam(context);
         tolerance.evaluateParam(context);
         normalize.evaluateParam(context);
+        teleportationWeights.evaluateParam(context);
     }
 
     std::unique_ptr<function::OptionalParams> copy() override {
         return std::make_unique<PageRankOptionalParams>(maxIterations, dampingFactor, tolerance,
-            normalize);
+            normalize, teleportationWeights);
     }
 };
 
@@ -61,6 +117,8 @@ PageRankOptionalParams::PageRankOptionalParams(const expression_vector& optional
             tolerance = function::OptionalParam<Tolerance>(optionalParam);
         } else if (paramName == NormalizeInitial::NAME) {
             normalize = function::OptionalParam<NormalizeInitial>(optionalParam);
+        } else if (paramName == TeleportationWeights::NAME) {
+            teleportationWeights = TeleportationWeightsParam{optionalParam};
         } else {
             throw BinderException{"Unknown optional parameter: " + optionalParam->getAlias()};
         }
@@ -165,32 +223,41 @@ private:
     PValues& pNext;
 };
 
-// Evaluate rank = above result * dampingFactor + {(1 - dampingFactor) / |V|} (constant)
+// Evaluate rank = above result * dampingFactor + teleport (uniform or per-node)
 class PNextUpdateVertexCompute : public GDSVertexCompute {
 public:
-    PNextUpdateVertexCompute(double dampingFactor, double constant, PValues& pNext,
-        NodeOffsetMaskMap* nodeMask)
-        : GDSVertexCompute{nodeMask}, dampingFactor{dampingFactor}, constant{constant},
-          pNext{pNext} {}
+    PNextUpdateVertexCompute(double dampingFactor, double uniformTeleport, PValues* perNodeTeleport,
+        PValues& pNext, NodeOffsetMaskMap* nodeMask)
+        : GDSVertexCompute{nodeMask}, dampingFactor{dampingFactor},
+          uniformTeleport{uniformTeleport}, perNodeTeleport{perNodeTeleport}, pNext{pNext} {}
 
-    void beginOnTableInternal(table_id_t tableID) override { pNext.pinTable(tableID); }
+    void beginOnTableInternal(table_id_t tableID) override {
+        pNext.pinTable(tableID);
+        if (perNodeTeleport != nullptr) {
+            perNodeTeleport->pinTable(tableID);
+        }
+    }
 
     void vertexCompute(offset_t startOffset, offset_t endOffset, table_id_t) override {
         for (auto i = startOffset; i < endOffset; ++i) {
             if (skip(i)) {
                 continue;
             }
-            pNext.setValue(i, pNext.getValue(i) * dampingFactor + constant);
+            auto teleport =
+                perNodeTeleport != nullptr ? perNodeTeleport->getValue(i) : uniformTeleport;
+            pNext.setValue(i, pNext.getValue(i) * dampingFactor + teleport);
         }
     }
 
     std::unique_ptr<VertexCompute> copy() override {
-        return std::make_unique<PNextUpdateVertexCompute>(dampingFactor, constant, pNext, nodeMask);
+        return std::make_unique<PNextUpdateVertexCompute>(dampingFactor, uniformTeleport,
+            perNodeTeleport, pNext, nodeMask);
     }
 
 private:
     double dampingFactor;
-    double constant;
+    double uniformTeleport;
+    PValues* perNodeTeleport;
     PValues& pNext;
 };
 
@@ -264,6 +331,31 @@ private:
     std::unique_ptr<ValueVector> rankVector;
 };
 
+static PValues buildTeleportConstants(const table_id_map_t<offset_t>& maxOffsetMap,
+    MemoryManager* mm, const Value& mapVal, double teleportScale) {
+    PValues rawWeights(maxOffsetMap, mm, 0);
+    auto weightSum = 0.0;
+    for (auto i = 0u; i < mapVal.getChildrenSize(); ++i) {
+        auto* entry = NestedVal::getChildVal(&mapVal, i);
+        auto nodeID = NestedVal::getChildVal(entry, 0)->getValue<internalID_t>();
+        auto weight = NestedVal::getChildVal(entry, 1)->getValue<double>();
+        rawWeights.pinTable(nodeID.tableID);
+        rawWeights.setValue(nodeID.offset, weight);
+        weightSum += weight;
+    }
+
+    PValues teleportConstants(maxOffsetMap, mm, 0);
+    for (const auto& [tableID, maxOffset] : maxOffsetMap) {
+        teleportConstants.pinTable(tableID);
+        rawWeights.pinTable(tableID);
+        for (auto offset = 0u; offset < maxOffset; ++offset) {
+            teleportConstants.setValue(offset,
+                teleportScale * rawWeights.getValue(offset) / weightSum);
+        }
+    }
+    return teleportConstants;
+}
+
 static offset_t tableFunc(const TableFuncInput& input, TableFuncOutput&) {
     auto clientContext = input.context->clientContext;
     auto transaction = transaction::Transaction::Get(*clientContext);
@@ -290,7 +382,18 @@ static offset_t tableFunc(const TableFuncInput& input, TableFuncOutput&) {
     auto frontierPair =
         std::make_unique<DenseFrontierPair>(std::move(currentFrontier), std::move(nextFrontier));
     auto computeState = GDSComputeState(std::move(frontierPair), nullptr, nullptr);
-    auto pNextUpdateConstant = (1 - config.dampingFactor.getParamVal()) * initialValue;
+    auto dampingFactor = config.dampingFactor.getParamVal();
+    double uniformTeleport = 0;
+    PValues teleportConstants(maxOffsetMap, mm, 0);
+    PValues* perNodeTeleport = nullptr;
+    if (!config.teleportationWeights.isSet()) {
+        uniformTeleport = (1 - dampingFactor) * initialValue;
+    } else {
+        auto teleportScale = (1 - dampingFactor) * initialValue * numNodes;
+        teleportConstants = buildTeleportConstants(maxOffsetMap, mm,
+            config.teleportationWeights.getParamVal(), teleportScale);
+        perNodeTeleport = &teleportConstants;
+    }
     while (currentIter < config.maxIterations.getParamVal()) {
         computeState.frontierPair->resetCurrentIter();
         computeState.frontierPair->setActiveNodesForNextIter();
@@ -300,8 +403,8 @@ static offset_t tableFunc(const TableFuncInput& input, TableFuncOutput&) {
             std::make_unique<PageRankAuxiliaryState>(degrees, *pCurrent, *pNext);
         GDSUtils::runAlgorithmEdgeCompute(input.context, computeState, graph, ExtendDirection::BWD,
             1);
-        auto pNextUpdateVC = PNextUpdateVertexCompute(config.dampingFactor.getParamVal(),
-            pNextUpdateConstant, *pNext, sharedState->getGraphNodeMaskMap());
+        auto pNextUpdateVC = PNextUpdateVertexCompute(dampingFactor, uniformTeleport, perNodeTeleport,
+            *pNext, sharedState->getGraphNodeMaskMap());
         GDSUtils::runVertexCompute(input.context, GDSDensityState::DENSE, graph, pNextUpdateVC);
         std::atomic<double> diff;
         diff.store(0);

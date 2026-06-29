@@ -36,5 +36,9 @@ struct NormalizeInitial {
     static constexpr bool DEFAULT_VALUE = true;
 };
 
+struct TeleportationWeights {
+    static constexpr const char* NAME = "teleportationweights";
+};
+
 } // namespace function
 } // namespace lbug
