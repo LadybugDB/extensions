@@ -1,6 +1,8 @@
 #include "binder/binder.h"
 #include "binder/expression/expression_util.h"
+#include "catalog/catalog_entry/table_catalog_entry.h"
 #include "common/exception/binder.h"
+#include "common/exception/runtime.h"
 #include "common/string_utils.h"
 #include "common/task_system/progress_bar.h"
 #include "common/types/value/nested.h"
@@ -11,6 +13,7 @@
 #include "function/gds/gds_utils.h"
 #include "function/gds/gds_vertex_compute.h"
 #include "function/table/bind_input.h"
+#include "graph/graph.h"
 #include "processor/execution_context.h"
 #include "transaction/transaction.h"
 #include <optional>
@@ -21,9 +24,147 @@ using namespace lbug::binder;
 using namespace lbug::storage;
 using namespace lbug::graph;
 using namespace lbug::function;
+using namespace lbug::catalog;
 
 namespace lbug {
 namespace algo_extension {
+
+namespace {
+
+static constexpr char KEY_PROPERTY_FIELD[] = "keyproperty";
+static constexpr char WEIGHTS_FIELD[] = "weights";
+
+struct TableTeleportSpec {
+    std::string tableName;
+    std::string keyProperty;
+    Value weights;
+};
+
+static const Value* getStructFieldVal(const Value& structVal, const std::string& fieldName) {
+    if (structVal.getDataType().getLogicalTypeID() != LogicalTypeID::STRUCT) {
+        return nullptr;
+    }
+    auto lowerFieldName = StringUtils::getLower(fieldName);
+    for (auto i = 0u; i < StructType::getNumFields(structVal.getDataType()); ++i) {
+        auto& field = StructType::getField(structVal.getDataType(), i);
+        if (StringUtils::getLower(field.getName()) == lowerFieldName) {
+            return NestedVal::getChildVal(&structVal, i);
+        }
+    }
+    return nullptr;
+}
+
+static void validateWeightsMap(const Value& weightsVal) {
+    if (weightsVal.getDataType().getLogicalTypeID() != LogicalTypeID::MAP) {
+        throw BinderException{"Teleportation weights must be a MAP."};
+    }
+    auto weightSum = 0.0;
+    for (auto i = 0u; i < weightsVal.getChildrenSize(); ++i) {
+        auto* entry = NestedVal::getChildVal(&weightsVal, i);
+        auto* weightVal = NestedVal::getChildVal(entry, 1);
+        if (weightVal->getDataType().getLogicalTypeID() != LogicalTypeID::DOUBLE) {
+            throw BinderException{"Teleportation weight values must be DOUBLE."};
+        }
+        auto weight = weightVal->getValue<double>();
+        if (weight < 0) {
+            throw BinderException{"Teleportation weights must be non-negative."};
+        }
+        weightSum += weight;
+    }
+    if (weightSum <= 0) {
+        throw BinderException{"Sum of teleportation weights must be positive."};
+    }
+}
+
+static TableTeleportSpec parseTableTeleportSpec(const std::string& tableName, const Value& tableVal) {
+    if (tableVal.getDataType().getLogicalTypeID() != LogicalTypeID::STRUCT) {
+        throw BinderException{std::format(
+            "Teleportation weights for table {} must be a STRUCT with keyProperty and weights.",
+            tableName)};
+    }
+    auto* keyPropertyVal = getStructFieldVal(tableVal, KEY_PROPERTY_FIELD);
+    auto* weightsVal = getStructFieldVal(tableVal, WEIGHTS_FIELD);
+    if (keyPropertyVal == nullptr || weightsVal == nullptr) {
+        throw BinderException{std::format(
+            "Teleportation weights for table {} must contain keyProperty and weights.", tableName)};
+    }
+    if (keyPropertyVal->getDataType().getLogicalTypeID() != LogicalTypeID::STRING) {
+        throw BinderException{"Teleportation keyProperty must be a STRING."};
+    }
+    validateWeightsMap(*weightsVal);
+    return TableTeleportSpec{tableName, keyPropertyVal->getValue<std::string>(), *weightsVal};
+}
+
+static std::vector<TableTeleportSpec> parseTeleportationWeights(const Value& configVal) {
+    if (configVal.getDataType().getLogicalTypeID() != LogicalTypeID::STRUCT) {
+        throw BinderException{
+            "Teleportation weights must be a STRUCT mapping node table names to weight specs."};
+    }
+    std::vector<TableTeleportSpec> specs;
+    for (auto i = 0u; i < StructType::getNumFields(configVal.getDataType()); ++i) {
+        auto& field = StructType::getField(configVal.getDataType(), i);
+        auto* tableVal = NestedVal::getChildVal(&configVal, i);
+        specs.push_back(parseTableTeleportSpec(field.getName(), *tableVal));
+    }
+    if (specs.empty()) {
+        throw BinderException{"Teleportation weights must specify at least one node table."};
+    }
+    return specs;
+}
+
+static const NativeGraphEntryTableInfo* findNodeTableInfo(const NativeGraphEntry& graphEntry,
+    const std::string& tableName) {
+    for (auto& nodeInfo : graphEntry.nodeInfos) {
+        if (StringUtils::getLower(nodeInfo.entry->getName()) == StringUtils::getLower(tableName)) {
+            return &nodeInfo;
+        }
+    }
+    return nullptr;
+}
+
+static void validateTeleportationWeightsAgainstGraph(const Value& configVal,
+    const NativeGraphEntry& graphEntry) {
+    for (auto& spec : parseTeleportationWeights(configVal)) {
+        auto* nodeInfo = findNodeTableInfo(graphEntry, spec.tableName);
+        if (nodeInfo == nullptr) {
+            throw BinderException{std::format("Unknown node table in teleportation weights: {}.",
+                spec.tableName)};
+        }
+        if (!nodeInfo->entry->containsProperty(spec.keyProperty)) {
+            throw BinderException{std::format("Unknown property {} on node table {}.",
+                spec.keyProperty, spec.tableName)};
+        }
+        auto propertyTypeID = nodeInfo->entry->getProperty(spec.keyProperty).getType().getLogicalTypeID();
+        auto mapKeyTypeID = MapType::getKeyType(spec.weights.getDataType()).getLogicalTypeID();
+        if (propertyTypeID != mapKeyTypeID) {
+            throw BinderException{std::format(
+                "Teleportation weight keys for table {} must have type {} to match property {}.",
+                spec.tableName, nodeInfo->entry->getProperty(spec.keyProperty).getType().toString(),
+                spec.keyProperty)};
+        }
+    }
+}
+
+static std::optional<double> lookupWeight(const Value& weightsMap, const Value& key) {
+    for (auto i = 0u; i < weightsMap.getChildrenSize(); ++i) {
+        auto* entry = NestedVal::getChildVal(&weightsMap, i);
+        auto* keyVal = NestedVal::getChildVal(entry, 0);
+        if (*keyVal == key) {
+            return NestedVal::getChildVal(entry, 1)->getValue<double>();
+        }
+    }
+    return std::nullopt;
+}
+
+static bool isNodeActive(NodeOffsetMaskMap* nodeMask, table_id_t tableID, offset_t offset) {
+    if (nodeMask == nullptr) {
+        return true;
+    }
+    nodeMask->pin(tableID);
+    return nodeMask->valid(offset);
+}
+
+} // namespace
 
 struct TeleportationWeightsParam {
     std::shared_ptr<Expression> param = nullptr;
@@ -34,30 +175,11 @@ struct TeleportationWeightsParam {
     explicit TeleportationWeightsParam(std::shared_ptr<Expression> param)
         : param{std::move(param)} {}
 
-    static void validate(const Value& mapVal) {
-        if (mapVal.getDataType().getLogicalTypeID() != LogicalTypeID::MAP) {
-            throw BinderException{"Teleportation weights must be a MAP(INTERNAL_ID, DOUBLE)."};
-        }
-        auto weightSum = 0.0;
-        for (auto i = 0u; i < mapVal.getChildrenSize(); ++i) {
-            auto* entry = NestedVal::getChildVal(&mapVal, i);
-            auto* keyVal = NestedVal::getChildVal(entry, 0);
-            auto* weightVal = NestedVal::getChildVal(entry, 1);
-            if (keyVal->getDataType().getLogicalTypeID() != LogicalTypeID::INTERNAL_ID) {
-                throw BinderException{"Teleportation weight keys must be INTERNAL_ID."};
-            }
-            if (weightVal->getDataType().getLogicalTypeID() != LogicalTypeID::DOUBLE) {
-                throw BinderException{"Teleportation weight values must be DOUBLE."};
-            }
-            auto weight = weightVal->getValue<double>();
-            if (weight < 0) {
-                throw BinderException{"Teleportation weights must be non-negative."};
-            }
-            weightSum += weight;
-        }
-        if (weightSum <= 0) {
-            throw BinderException{"Sum of teleportation weights must be positive."};
-        }
+    static void validate(const Value& configVal) { parseTeleportationWeights(configVal); }
+
+    static void validate(const Value& configVal, const NativeGraphEntry& graphEntry) {
+        validate(configVal);
+        validateTeleportationWeightsAgainstGraph(configVal, graphEntry);
     }
 
     void evaluateParam(main::ClientContext* /*context*/) {
@@ -331,17 +453,68 @@ private:
     std::unique_ptr<ValueVector> rankVector;
 };
 
-static PValues buildTeleportConstants(const table_id_map_t<offset_t>& maxOffsetMap,
-    MemoryManager* mm, const Value& mapVal, double teleportScale) {
+static Value readChunkProperty(const graph::VertexScanState::Chunk& chunk, sel_t pos,
+    LogicalTypeID typeID) {
+    switch (typeID) {
+    case LogicalTypeID::STRING:
+        return Value(LogicalType::STRING(), chunk.getProperties<string_t>(0)[pos].getAsString());
+    case LogicalTypeID::INT64:
+        return Value(chunk.getProperties<int64_t>(0)[pos]);
+    case LogicalTypeID::INT32:
+        return Value(chunk.getProperties<int32_t>(0)[pos]);
+    case LogicalTypeID::INT16:
+        return Value(chunk.getProperties<int16_t>(0)[pos]);
+    case LogicalTypeID::INT8:
+        return Value(chunk.getProperties<int8_t>(0)[pos]);
+    case LogicalTypeID::UINT64:
+        return Value(chunk.getProperties<uint64_t>(0)[pos]);
+    case LogicalTypeID::UINT32:
+        return Value(chunk.getProperties<uint32_t>(0)[pos]);
+    case LogicalTypeID::UINT16:
+        return Value(chunk.getProperties<uint16_t>(0)[pos]);
+    case LogicalTypeID::UINT8:
+        return Value(chunk.getProperties<uint8_t>(0)[pos]);
+    default:
+        throw RuntimeException{std::format(
+            "Unsupported teleportation key property type: {}.", LogicalTypeUtils::toString(typeID))};
+    }
+}
+
+static PValues buildTeleportConstants(Graph* graph, const NativeGraphEntry& graphEntry,
+    const table_id_map_t<offset_t>& maxOffsetMap, MemoryManager* mm, const Value& configVal,
+    double teleportScale, NodeOffsetMaskMap* nodeMask) {
     PValues rawWeights(maxOffsetMap, mm, 0);
     auto weightSum = 0.0;
-    for (auto i = 0u; i < mapVal.getChildrenSize(); ++i) {
-        auto* entry = NestedVal::getChildVal(&mapVal, i);
-        auto nodeID = NestedVal::getChildVal(entry, 0)->getValue<internalID_t>();
-        auto weight = NestedVal::getChildVal(entry, 1)->getValue<double>();
-        rawWeights.pinTable(nodeID.tableID);
-        rawWeights.setValue(nodeID.offset, weight);
-        weightSum += weight;
+    for (auto& spec : parseTeleportationWeights(configVal)) {
+        auto* nodeInfo = findNodeTableInfo(graphEntry, spec.tableName);
+        if (nodeInfo == nullptr) {
+            continue;
+        }
+        auto tableID = nodeInfo->entry->getTableID();
+        auto maxOffset = maxOffsetMap.at(tableID);
+        auto keyTypeID = MapType::getKeyType(spec.weights.getDataType()).getLogicalTypeID();
+        auto scanState = graph->prepareVertexScan(nodeInfo->entry, {spec.keyProperty});
+        rawWeights.pinTable(tableID);
+        for (auto chunk : graph->scanVertices(0, maxOffset, *scanState)) {
+            auto nodeIDs = chunk.getNodeIDs();
+            for (auto i = 0u; i < chunk.size(); ++i) {
+                auto offset = nodeIDs[i].offset;
+                if (!isNodeActive(nodeMask, tableID, offset)) {
+                    continue;
+                }
+                auto propertyValue = readChunkProperty(chunk, i, keyTypeID);
+                auto weight = lookupWeight(spec.weights, propertyValue);
+                if (!weight.has_value()) {
+                    continue;
+                }
+                rawWeights.setValue(offset, weight.value());
+                weightSum += weight.value();
+            }
+        }
+    }
+    if (weightSum <= 0) {
+        throw RuntimeException{
+            "Teleportation weights did not match any node in the projected graph."};
     }
 
     PValues teleportConstants(maxOffsetMap, mm, 0);
@@ -390,8 +563,9 @@ static offset_t tableFunc(const TableFuncInput& input, TableFuncOutput&) {
         uniformTeleport = (1 - dampingFactor) * initialValue;
     } else {
         auto teleportScale = (1 - dampingFactor) * initialValue * numNodes;
-        teleportConstants = buildTeleportConstants(maxOffsetMap, mm,
-            config.teleportationWeights.getParamVal(), teleportScale);
+        teleportConstants = buildTeleportConstants(graph, pageRankBindData->graphEntry, maxOffsetMap,
+            mm, config.teleportationWeights.getParamVal(), teleportScale,
+            sharedState->getGraphNodeMaskMap());
         perNodeTeleport = &teleportConstants;
     }
     while (currentIter < config.maxIterations.getParamVal()) {
@@ -431,6 +605,12 @@ static std::unique_ptr<TableFuncBindData> bindFunc(main::ClientContext* context,
     const TableFuncBindInput* input) {
     auto graphName = input->getLiteralVal<std::string>(0);
     auto graphEntry = GDSFunction::bindGraphEntry(*context, graphName);
+    for (auto& optionalParam : input->optionalParamsLegacy) {
+        if (StringUtils::getLower(optionalParam->getAlias()) == TeleportationWeights::NAME) {
+            auto value = ExpressionUtil::evaluateAsLiteralValue(*optionalParam);
+            TeleportationWeightsParam::validate(value, graphEntry);
+        }
+    }
     auto nodeOutput = GDSFunction::bindNodeOutput(*input, graphEntry.getNodeEntries());
     expression_vector columns;
     columns.push_back(nodeOutput->constCast<NodeExpression>().getInternalID());

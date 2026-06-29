@@ -106,7 +106,9 @@ Greg||0.021375
 |DEsWork|0.015000
 
 -STATEMENT CALL page_rank('PK',
-    teleportationWeights := map([internal_id(0, 0), internal_id(0, 1)], [0.7, 0.3])
+    teleportationWeights := {
+        person: {keyProperty: 'fName', weights: map(['Alice', 'Bob'], [0.7, 0.3])}
+    }
 ) RETURN node.fName, rank;
 ---- 8
 Alice|0.296897
@@ -118,12 +120,23 @@ Farooq|0.000000
 Greg|0.000000
 Hubert Blaine Wolfeschlegelsteinhausenbergerdorff|0.000000
 -STATEMENT CALL page_rank('PK',
-    teleportationWeights := map([internal_id(0, 0), internal_id(0, 1)], [-0.7, 0.3])
+    teleportationWeights := {
+        person: {keyProperty: 'fName', weights: map(['Alice', 'Bob'], [-0.7, 0.3])}
+    }
 ) RETURN node.fName, rank;
 ---- error
 Binder exception: Teleportation weights must be non-negative.
 -STATEMENT CALL page_rank('PK',
-    teleportationWeights := map([internal_id(0, 0), internal_id(0, 1)], [0.0, 0.0])
+    teleportationWeights := {
+        person: {keyProperty: 'fName', weights: map(['Alice', 'Bob'], [0.0, 0.0])}
+    }
 ) RETURN node.fName, rank;
 ---- error
 Binder exception: Sum of teleportation weights must be positive.
+-STATEMENT CALL page_rank('PK',
+    teleportationWeights := {
+        unknown: {keyProperty: 'fName', weights: map(['Alice'], [1.0])}
+    }
+) RETURN node.fName, rank;
+---- error
+Binder exception: Unknown node table in teleportation weights: unknown.
