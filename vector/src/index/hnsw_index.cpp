@@ -669,11 +669,11 @@ void OnDiskHNSWIndex::update(Transaction* transaction, const common::ValueVector
 
 void OnDiskHNSWIndex::finalize(main::ClientContext* context) {
     auto& hnswStorageInfo = storageInfo->cast<HNSWStorageInfo>();
-    const auto numTotalRows = nodeTable.getNumTotalRows(&DUMMY_CHECKPOINT_TRANSACTION);
+    auto transaction = Transaction::Get(*context);
+    const auto numTotalRows = nodeTable.getNumTotalRows(transaction);
     if (numTotalRows == hnswStorageInfo.numCheckpointedNodes) {
         return;
     }
-    auto transaction = Transaction::Get(*context);
     auto [nodeTableEntry, upperRelTableEntry, lowerRelTableEntry] =
         getIndexTableCatalogEntries(catalog::Catalog::Get(*context), transaction, indexInfo);
     const auto embeddingDim = typeInfo.constPtrCast<common::ArrayTypeInfo>()->getNumElements();
