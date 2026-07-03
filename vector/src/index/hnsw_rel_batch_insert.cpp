@@ -125,6 +125,9 @@ void HNSWRelBatchInsert::writeToTable(processor::RelBatchInsertExecutionState& e
         common::idx_t neighbourIdx = 0;
         // write neighbour offset + unique rel ID for each rel
         for (const auto neighbourGraphOffset : neighbours) {
+            if (neighbourGraphOffset == common::INVALID_OFFSET) {
+                continue;
+            }
             const auto neighbourNodeOffset = selectionMap.graphToNodeOffset(neighbourGraphOffset);
             const auto relRowIdx = boundNodeCSROffset + neighbourIdx;
             const auto relID = startRelID + numRelsWritten;
