@@ -355,7 +355,7 @@ jobs:
         run: |
           source /opt/rh/gcc-toolset-13/enable
           cp lbug.prod build/release/tools/shell/lbug
-          python3 scripts/run_pgembed_fixture.py -- \
+          uv run --python 3.12 python3 scripts/run_pgembed_fixture.py -- \
             ctest --test-dir build/release/test/runner --output-on-failure -j 1 --exclude-regex "" && \
           ctest --test-dir build/release/extension --output-on-failure -j "$(nproc)" --exclude-regex ""
 
