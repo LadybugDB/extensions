@@ -5,6 +5,7 @@
 
 #include "binder/bound_attach_info.h"
 #include "common/arrow/arrow.h"
+#include "common/arrow/arrow_schema_metadata.h"
 #include "common/types/types.h"
 
 #if __has_include(<arrow-adbc/adbc.h>) && __has_include(<arrow-adbc/adbc_driver_manager.h>)
@@ -33,6 +34,7 @@ struct ADBCQueryResult {
     AdbcStatement statement{};
     ArrowArrayStream stream{};
     ArrowSchemaWrapper schema{};
+    std::vector<std::optional<common::ArrowLogicalTypeInfo>> logicalTypeInfos;
     std::vector<ArrowArrayWrapper> arrays;
     uint64_t nextArrayIdx = 0;
     bool connectionInitialized = false;
