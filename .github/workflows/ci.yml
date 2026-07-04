@@ -346,6 +346,8 @@ jobs:
           sleep 3
 
       # ── Run tests ─────────────────────────────────────────────────
+      # Runs both the e2e test runner (via pgembed Postgres fixture) and
+      # extension unit tests — matching what `make extension-test` does.
       - name: Run extension tests
         working-directory: ladybug
         env:
@@ -353,7 +355,9 @@ jobs:
         run: |
           source /opt/rh/gcc-toolset-13/enable
           cp lbug.prod build/release/tools/shell/lbug
-          ctest --test-dir build/release/extension --output-on-failure -j "$(nproc)"
+          python3 scripts/run_pgembed_fixture.py -- \
+            ctest --test-dir build/release/test/runner --output-on-failure -j 1 --exclude-regex "" && \
+          ctest --test-dir build/release/extension --output-on-failure -j "$(nproc)" --exclude-regex ""
 
       # ── Collect & upload artifacts ────────────────────────────────
       - name: Collect built artifacts
