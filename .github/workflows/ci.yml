@@ -1,0 +1,387 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  EXTENSION_LIST: adbc;azure;delta;duckdb;fts;httpfs;iceberg;json;llm;neo4j;postgres;sqlite;unity_catalog;vector;algo
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────
+  # Resolve the latest successful ladybug build-and-deploy run and
+  # download prebuilt liblbug + CLI artifacts.  Runs on the host
+  # runner (no container) so gh CLI is available natively.
+  # ─────────────────────────────────────────────────────────────────
+  resolve-run:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    outputs:
+      run-id: ${{ steps.resolve.outputs.run-id }}
+    steps:
+      - name: Resolve latest successful build-and-deploy run
+        id: resolve
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          RUN_ID="$(
+            curl -fsSL \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/LadybugDB/ladybug/actions/workflows/build-and-deploy.yml/runs?branch=main&status=success&per_page=1" \
+            | python3 -c 'import json,sys; data=json.load(sys.stdin); runs=data.get("workflow_runs") or []; print(runs[0]["id"] if runs else "")'
+          )"
+
+          if [ -z "$RUN_ID" ]; then
+            echo "Could not find a successful LadybugDB/ladybug build-and-deploy run." >&2
+            exit 1
+          fi
+
+          echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download prebuilt liblbug and CLI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p prebuilt
+
+          # 1) Shared library + headers
+          gh run download "${{ steps.resolve.outputs.run-id }}" \
+            --repo LadybugDB/ladybug \
+            --name "liblbug-linux-x86_64" \
+            --dir prebuilt
+
+          # 2) CLI binary
+          gh run download "${{ steps.resolve.outputs.run-id }}" \
+            --repo LadybugDB/ladybug \
+            --name "lbug_cli-linux-x86_64" \
+            --dir prebuilt
+
+          ls -la prebuilt/
+
+      - name: Upload prebuilt artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lbug-prebuilts
+          path: prebuilt/*
+          retention-days: 1
+
+  # ─────────────────────────────────────────────────────────────────
+  # Build all extensions inside the manylinux container (glibc compat)
+  # and run the extension integration tests.
+  # ─────────────────────────────────────────────────────────────────
+  build-and-test:
+    needs: resolve-run
+    strategy:
+      matrix:
+        include:
+          # ── Linux ────────────────────────────────────────────────
+          - os: ubuntu-latest
+            os_name: linux
+            arch: x86_64
+            container: quay.io/pypa/manylinux_2_28_x86_64
+          # - os: ubuntu-24.04-arm
+          #   os_name: linux
+          #   arch: aarch64
+          #   container: quay.io/pypa/manylinux_2_28_aarch64
+
+          # ── macOS ────────────────────────────────────────────────
+          # - os: macos-latest
+          #   os_name: osx
+          #   arch: arm64
+          # - os: macos-15-intel
+          #   os_name: osx
+          #   arch: x86_64
+
+          # ── Windows ──────────────────────────────────────────────
+          # - os: windows-2022
+          #   os_name: win
+          #   arch: x86_64
+
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+
+    steps:
+      # ── Source checkouts ──────────────────────────────────────────
+      - name: Checkout ladybug
+        uses: actions/checkout@v4
+        with:
+          repository: LadybugDB/ladybug
+          fetch-depth: 1
+          path: ladybug
+
+      # The following three checkouts place the sub-repos directly into
+      # the ladybug tree at the same paths the in-tree submodules would
+      # occupy — no symlinks, no path gymnastics.
+      - name: Checkout extension into ladybug/extension
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          path: ladybug/extension
+
+      - name: Checkout dataset into ladybug/dataset
+        uses: actions/checkout@v4
+        with:
+          repository: LadybugDB/dataset
+          fetch-depth: 1
+          path: ladybug/dataset
+
+      - name: Checkout benchmark into ladybug/benchmark
+        uses: actions/checkout@v4
+        with:
+          repository: LadybugDB/benchmarks
+          fetch-depth: 1
+          path: ladybug/benchmark
+
+      - name: Mark workspace safe for git (Linux container)
+        if: runner.os == 'Linux'
+        run: git config --global --add safe.directory '*'
+
+      # ── Compute platform variables ───────────────────────────
+      # Derive DuckDB download params and ladybug artifact arch from
+      # runner.os / runner.arch instead of cluttering the matrix.
+      - name: Compute platform variables
+        run: |
+          # --- DuckDB archive ---
+          case "${{ runner.os }}" in
+            Linux)
+              echo "DUCKDB_LIB=libduckdb.so" >> "$GITHUB_ENV"
+              case "${{ runner.arch }}" in
+                X64)   echo "DUCKDB_ARCH=linux-amd64"  >> "$GITHUB_ENV" ;;
+                ARM64) echo "DUCKDB_ARCH=linux-arm64"  >> "$GITHUB_ENV" ;;
+              esac
+              ;;
+            macOS)
+              echo "DUCKDB_LIB=libduckdb.dylib" >> "$GITHUB_ENV"
+              echo "DUCKDB_ARCH=osx-universal"  >> "$GITHUB_ENV"
+              ;;
+            Windows)
+              echo "DUCKDB_LIB=duckdb.dll" >> "$GITHUB_ENV"
+              case "${{ runner.arch }}" in
+                X64|AMD64) echo "DUCKDB_ARCH=windows-amd64" >> "$GITHUB_ENV" ;;
+                ARM64)     echo "DUCKDB_ARCH=windows-arm64" >> "$GITHUB_ENV" ;;
+              esac
+              ;;
+          esac
+
+          # --- Ladybug artifact arch (maps runner arch to release names) ---
+          case "${{ runner.arch }}" in
+            X64|AMD64) echo "LBUG_ARTIFACT_ARCH=x86_64"  >> "$GITHUB_ENV" ;;
+            ARM64)     echo "LBUG_ARTIFACT_ARCH=aarch64" >> "$GITHUB_ENV" ;;
+          esac
+
+          # --- Upstream run ID for prebuilt artifacts — echoed by resolve job ---
+          echo "LBUG_PRECOMPILED_RUN_ID=${{ needs.resolve-run.outputs.run-id }}" >> "$GITHUB_ENV"
+
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: extension-ci-${{ runner.os }}-${{ runner.arch }}-${{ github.ref }}
+          max-size: 2G
+          create-symlink: true
+          restore-keys: |
+            extension-ci-${{ runner.os }}-${{ runner.arch }}-refs/heads/main
+            extension-ci-${{ runner.os }}-${{ runner.arch }}-
+
+      # ── Build dependencies ────────────────────────────────────────
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          dnf install -y 'dnf-command(config-manager)'
+          dnf config-manager --set-enabled powertools
+          dnf install -y cmake ninja-build python3 python3-pip git wget unzip \
+            gcc-toolset-13 openssl3 openssl3-devel pkg-config
+
+      - name: Install uv
+        working-directory: ladybug
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          uv venv
+
+      - name: Install test Python dependencies
+        working-directory: ladybug
+        run: |
+          uv pip install duckdb rangehttpserver requests
+
+      # ── Setup pixi + ADBC runtime ───────────────────────────
+      # The ADBC extension requires libadbc-driver-manager and libarrow,
+      # which the ladybug repo's pixi.toml pins to conda-forge.  These
+      # are needed both to *build* the ADBC extension and to run its
+      # tests.
+      - name: Setup pixi
+        if: runner.os != 'Windows'
+        uses: prefix-dev/setup-pixi@v0.9.4
+        with:
+          pixi-version: v0.68.1
+          working-directory: ladybug
+          cache: false
+          activate-environment: true
+
+      - name: Configure ADBC runtime
+        if: runner.os != 'Windows'
+        run: |
+          curl -LsSf https://dbc.columnar.tech/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          "$HOME/.local/bin/dbc" install --level user duckdb || true
+
+      # ── Install DuckDB ────────────────────────────────────────────
+      - name: Install DuckDB (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          wget "https://github.com/duckdb/duckdb/releases/latest/download/libduckdb-${{ env.DUCKDB_ARCH }}.zip"
+          unzip "libduckdb-${{ env.DUCKDB_ARCH }}.zip" -d duckdb
+          cp duckdb/duckdb.h /usr/local/include/
+          cp duckdb/duckdb.hpp /usr/local/include/
+          cp duckdb/${{ env.DUCKDB_LIB }} /usr/local/lib/
+          ldconfig
+          # CMake config so find_package(DuckDB) works
+          mkdir -p /usr/local/lib/cmake/DuckDB
+          tee /usr/local/lib/cmake/DuckDB/DuckDBConfig.cmake > /dev/null << 'CMEOF'
+          if(NOT TARGET DuckDB::duckdb)
+            add_library(DuckDB::duckdb SHARED IMPORTED)
+            set_target_properties(DuckDB::duckdb PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "/usr/local/include"
+              IMPORTED_LOCATION "/usr/local/lib/${{ env.DUCKDB_LIB }}"
+            )
+          endif()
+          set(DuckDB_LIBRARIES DuckDB::duckdb)
+          set(DuckDB_INCLUDE_DIRS "/usr/local/include")
+          set(DuckDB_FOUND TRUE)
+          CMEOF
+
+      # ── Download prebuilt liblbug + CLI from the resolve-run job ──
+      # The resolve-run job (runs on host runner, has gh CLI) downloaded
+      # and archived these; we extract them into the ladybug tree.
+      - name: Download prebuilt artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: lbug-prebuilts
+          path: prebuilt-tmp
+
+      - name: Extract prebuilt liblbug and CLI
+        run: |
+          cd prebuilt-tmp
+          mkdir -p "${{ github.workspace }}/ladybug/src/include"
+          mkdir -p "${{ github.workspace }}/ladybug/tools/shell"
+
+          # Shared library + headers
+          tar xzf "liblbug-linux-${{ env.LBUG_ARTIFACT_ARCH }}.tar.gz" -C "${{ github.workspace }}/ladybug/src/include/"
+          # CLI binary
+          tar xzf "lbug_cli-linux-${{ env.LBUG_ARTIFACT_ARCH }}.tar.gz" -C "${{ github.workspace }}/ladybug/tools/shell/"
+          chmod +x "${{ github.workspace }}/ladybug/tools/shell/lbug"
+
+      # ── Test fixtures (before the build, like minimal-linux-extension-test) ──
+      - name: Create ADBC DuckDB fixture
+        working-directory: ladybug
+        run: |
+          mkdir -p extension/adbc/test
+          uv run python - <<'PY'
+          import duckdb
+          con = duckdb.connect("extension/adbc/test/adbc.duckdb")
+          con.execute("CREATE OR REPLACE TABLE games(id BIGINT, title VARCHAR, score BIGINT)")
+          con.execute("""
+              INSERT INTO games VALUES
+              (1, 'Portal', 95),
+              (2, 'Celeste', 94),
+              (3, 'Hades', 93)
+          """)
+          con.close()
+          PY
+
+      # ── Build extensions (release) ────────────────────────────────
+      - name: Build extensions
+        working-directory: ladybug
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          source /opt/rh/gcc-toolset-13/enable
+          export CC=gcc
+          export CXX=g++
+          export EXTRA_CMAKE_FLAGS="\
+            -DOPENSSL_ROOT_DIR=/usr/lib64/openssl3 \
+            -DOPENSSL_INCLUDE_DIR=/usr/include/openssl3 \
+            -DOPENSSL_CRYPTO_LIBRARY=/usr/lib64/openssl3/libcrypto.so \
+            -DOPENSSL_SSL_LIBRARY=/usr/lib64/openssl3/libssl.so"
+          make extension-release
+
+      # ── Build test infrastructure ─────────────────────────────────
+      - name: Build full test infrastructure (relwithdebinfo)
+        working-directory: ladybug
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          source /opt/rh/gcc-toolset-13/enable
+          export CC=gcc
+          export CXX=g++
+          export EXTRA_CMAKE_FLAGS="\
+            -DOPENSSL_ROOT_DIR=/usr/lib64/openssl3 \
+            -DOPENSSL_INCLUDE_DIR=/usr/include/openssl3 \
+            -DOPENSSL_CRYPTO_LIBRARY=/usr/lib64/openssl3/libcrypto.so \
+            -DOPENSSL_SSL_LIBRARY=/usr/lib64/openssl3/libssl.so"
+          make relwithdebinfo
+          cp build/relwithdebinfo/tools/shell/lbug lbug.prod
+
+      - name: Build extension tests
+        working-directory: ladybug
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          source /opt/rh/gcc-toolset-13/enable
+          export CC=gcc
+          export CXX=g++
+          export EXTRA_CMAKE_FLAGS="\
+            -DOPENSSL_ROOT_DIR=/usr/lib64/openssl3 \
+            -DOPENSSL_INCLUDE_DIR=/usr/include/openssl3 \
+            -DOPENSSL_CRYPTO_LIBRARY=/usr/lib64/openssl3/libcrypto.so \
+            -DOPENSSL_SSL_LIBRARY=/usr/lib64/openssl3/libssl.so"
+          make extension-test-build
+          cp lbug.prod build/relwithdebinfo/tools/shell/lbug
+
+      # ── Test fixtures ─────────────────────────────────────────────
+      - name: Generate test dataset
+        working-directory: ladybug
+        run: uv run python3 scripts/generate-tinysnb.py
+
+      - name: Start extension repo server (for remote-load tests)
+        working-directory: ladybug
+        run: |
+          uv run python3 scripts/setup-extension-repo.py &
+          sleep 3
+
+      # ── Run tests ─────────────────────────────────────────────────
+      - name: Run extension tests
+        working-directory: ladybug
+        env:
+          E2E_TEST_FILES_DIRECTORY: extension
+        run: |
+          source /opt/rh/gcc-toolset-13/enable
+          ctest --test-dir build/relwithdebinfo/extension --output-on-failure -j "$(nproc)"
+
+      # ── Collect & upload artifacts ────────────────────────────────
+      - name: Collect built artifacts
+        working-directory: ladybug
+        run: python3 scripts/collect-extensions.py
+
+      - name: Upload built artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lbug-extensions-${{ matrix.os_name }}-${{ matrix.arch }}
+          path: ladybug/extension-artifacts
