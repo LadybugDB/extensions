@@ -102,8 +102,11 @@ common::offset_t ADBCScanFunction::tableFunc(const function::TableFuncInput& inp
         auto srcOffset = localState->array.children[i]->offset + localState->offset;
         common::ArrowNullMaskTree mask(schema.children[i], localState->array.children[i], srcOffset,
             count);
+        const auto* logicalTypeInfo = i < sharedState->queryResult->logicalTypeInfos.size() ?
+                                          &sharedState->queryResult->logicalTypeInfos[i] :
+                                          nullptr;
         common::ArrowConverter::fromArrowArray(schema.children[i], localState->array.children[i],
-            output.dataChunk.getValueVectorMutable(i), &mask, srcOffset, 0, count);
+            output.dataChunk.getValueVectorMutable(i), &mask, srcOffset, 0, count, logicalTypeInfo);
     }
     localState->offset += count;
     return count;

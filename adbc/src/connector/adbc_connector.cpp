@@ -27,6 +27,21 @@ static std::vector<std::string> splitCommaSeparated(const std::string& input) {
     return result;
 }
 
+static std::vector<std::optional<common::ArrowLogicalTypeInfo>> resolveColumnLogicalTypeInfos(
+    const ArrowSchemaWrapper& schema) {
+    std::vector<std::optional<common::ArrowLogicalTypeInfo>> result;
+    if (schema.n_children <= 0 || schema.children == nullptr) {
+        return result;
+    }
+    result.reserve(static_cast<size_t>(schema.n_children));
+    for (int64_t i = 0; i < schema.n_children; ++i) {
+        result.push_back(schema.children[i] == nullptr ?
+                             std::nullopt :
+                             common::tryGetArrowLogicalTypeInfo(schema.children[i]));
+    }
+    return result;
+}
+
 ADBCQueryResult::~ADBCQueryResult() {
     if (stream.release) {
         stream.release(&stream);
@@ -200,6 +215,7 @@ std::unique_ptr<ADBCQueryResult> ADBCConnector::executeQuery(const std::string& 
         throw common::RuntimeException{
             std::format("ArrowArrayStream.get_schema failed: {}", streamError)};
     }
+    result->logicalTypeInfos = resolveColumnLogicalTypeInfos(result->schema);
     // Fully consume the ADBC stream before returning control to the execution engine. Some drivers
     // keep query state pending while the stream is open, and later catalog calls can close it.
     while (true) {
