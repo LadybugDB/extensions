@@ -306,8 +306,11 @@ jobs:
           con.close()
           PY
 
-      # ── Build extensions (release) ────────────────────────────────
-      - name: Build extensions
+      # ── Build extensions, test infrastructure, and extension tests ──
+      # Single release build with ccache — replaces what was previously 3
+      # separate cmake invocations (extension-release + relwithdebinfo +
+      # extension-test-build).
+      - name: Build extensions and tests
         working-directory: ladybug
         env:
           GH_TOKEN: ${{ github.token }}
@@ -320,45 +323,21 @@ jobs:
             -DOPENSSL_INCLUDE_DIR=/usr/include/openssl3 \
             -DOPENSSL_CRYPTO_LIBRARY=/usr/lib64/openssl3/libcrypto.so \
             -DOPENSSL_SSL_LIBRARY=/usr/lib64/openssl3/libssl.so"
-          make extension-release
-
-      # ── Build test infrastructure ─────────────────────────────────
-      - name: Build full test infrastructure (relwithdebinfo)
-        working-directory: ladybug
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          source /opt/rh/gcc-toolset-13/enable
-          export CC=gcc
-          export CXX=g++
-          export EXTRA_CMAKE_FLAGS="\
-            -DOPENSSL_ROOT_DIR=/usr/lib64/openssl3 \
-            -DOPENSSL_INCLUDE_DIR=/usr/include/openssl3 \
-            -DOPENSSL_CRYPTO_LIBRARY=/usr/lib64/openssl3/libcrypto.so \
-            -DOPENSSL_SSL_LIBRARY=/usr/lib64/openssl3/libssl.so"
-          make relwithdebinfo
-          cp build/relwithdebinfo/tools/shell/lbug lbug.prod
-
-      - name: Build extension tests
-        working-directory: ladybug
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          source /opt/rh/gcc-toolset-13/enable
-          export CC=gcc
-          export CXX=g++
-          export EXTRA_CMAKE_FLAGS="\
-            -DOPENSSL_ROOT_DIR=/usr/lib64/openssl3 \
-            -DOPENSSL_INCLUDE_DIR=/usr/include/openssl3 \
-            -DOPENSSL_CRYPTO_LIBRARY=/usr/lib64/openssl3/libcrypto.so \
-            -DOPENSSL_SSL_LIBRARY=/usr/lib64/openssl3/libssl.so"
-          make extension-test-build
-          cp lbug.prod build/relwithdebinfo/tools/shell/lbug
+          cmake -B build/release \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_EXTENSIONS="${EXTENSION_LIST}" \
+            -DBUILD_EXTENSION_TESTS=TRUE \
+            -DBUILD_TESTS=TRUE \
+            -DBUILD_SHELL=TRUE \
+            -DENABLE_BACKTRACES=TRUE \
+            ${EXTRA_CMAKE_FLAGS} .
+          cmake --build build/release -j "$(nproc)"
+          cp build/release/tools/shell/lbug lbug.prod
 
       # ── Test fixtures ─────────────────────────────────────────────
       - name: Generate test dataset
         working-directory: ladybug
-        run: uv run python3 scripts/generate-tinysnb.py
+        run: uv run python3 scripts/generate-tinysnb.py release
 
       - name: Start extension repo server (for remote-load tests)
         working-directory: ladybug
@@ -373,7 +352,8 @@ jobs:
           E2E_TEST_FILES_DIRECTORY: extension
         run: |
           source /opt/rh/gcc-toolset-13/enable
-          ctest --test-dir build/relwithdebinfo/extension --output-on-failure -j "$(nproc)"
+          cp lbug.prod build/release/tools/shell/lbug
+          ctest --test-dir build/release/extension --output-on-failure -j "$(nproc)"
 
       # ── Collect & upload artifacts ────────────────────────────────
       - name: Collect built artifacts
