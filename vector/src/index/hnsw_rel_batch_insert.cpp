@@ -67,6 +67,23 @@ std::unique_ptr<processor::RelBatchInsertExecutionState> HNSWRelBatchInsert::ini
         storage::StorageUtils::getStartOffsetOfNodeGroup(nodeGroupIdx));
 }
 
+// Counts the neighbours of a node that are still valid. The graph's CSR length
+// includes slots that were subsequently marked INVALID_OFFSET (e.g. during a
+// shrink), so we filter them out to keep the CSR metadata consistent with the
+// rel rows that are actually written.
+static common::length_t getNumValidNeighbors(const InMemHNSWGraph& graph,
+    common::offset_t nodeOffset) {
+    const auto neighbours = graph.getNeighbors(nodeOffset);
+    common::length_t numValid = 0;
+    for (const auto neighbourGraphOffset : neighbours) {
+        if (neighbourGraphOffset == common::INVALID_OFFSET) {
+            continue;
+        }
+        ++numValid;
+    }
+    return numValid;
+}
+
 void HNSWRelBatchInsert::populateCSRLengths(processor::RelBatchInsertExecutionState& executionState,
     storage::InMemChunkedCSRHeader& csrHeader, common::offset_t numNodes,
     const processor::RelBatchInsertInfo&) {
@@ -82,7 +99,10 @@ void HNSWRelBatchInsert::populateCSRLengths(processor::RelBatchInsertExecutionSt
          ++graphOffset) {
         const auto nodeOffsetInGroup = hnswExecutionState.getBoundNodeOffsetInGroup(graphOffset);
         DASSERT(nodeOffsetInGroup < numNodes);
-        lengthData[nodeOffsetInGroup] = graph.getCSRLength(graphOffset);
+        // getCSRLength counts all occupied slots, including ones later marked
+        // INVALID_OFFSET. Filter invalidated neighbors so the CSR length matches
+        // the number of rel rows actually written in writeToTable.
+        lengthData[nodeOffsetInGroup] = getNumValidNeighbors(graph, graphOffset);
     }
 }
 
@@ -90,7 +110,7 @@ static common::offset_t getNumRelsInGraph(const InMemHNSWGraph& graph,
     common::offset_t startNodeInGraph, common::offset_t endNodeInGraph) {
     auto numRels = 0u;
     for (auto offsetInGraph = startNodeInGraph; offsetInGraph < endNodeInGraph; offsetInGraph++) {
-        numRels += graph.getCSRLength(offsetInGraph);
+        numRels += getNumValidNeighbors(graph, offsetInGraph);
     }
     return numRels;
 }
