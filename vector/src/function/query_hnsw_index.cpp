@@ -1,3 +1,6 @@
+#include <cmath>
+#include <cstring>
+
 #include "binder/binder.h"
 #include "binder/expression/expression_util.h"
 #include "binder/expression/literal_expression.h"
@@ -207,8 +210,8 @@ static const LogicalType& getIndexColumnType(const NodeTableCatalogEntry& nodeEn
 // This struct wraps a vector of embedding data
 // It exists so that we can match the interface for on-disk HNSW search
 template<typename T>
-struct HNSWQueryVector : GetEmbeddingsScanState {
-    HNSWQueryVector(main::ClientContext* context, std::shared_ptr<Expression> queryExpression,
+struct HNSWRawQueryVector : GetEmbeddingsScanState {
+    HNSWRawQueryVector(main::ClientContext* context, std::shared_ptr<Expression> queryExpression,
         const LogicalType& indexType, uint64_t dimension)
         : data(getQueryVector<T>(context, std::move(queryExpression), indexType, dimension)) {}
 
@@ -222,6 +225,81 @@ struct HNSWQueryVector : GetEmbeddingsScanState {
     void reclaimEmbedding(const EmbeddingHandle&) override {};
 
     std::vector<T> data;
+};
+
+template<VectorElementType T>
+static void quantizeQueryVector(const std::vector<T>& src, QuantizationType quantization,
+    MetricType metric, uint8_t* payloadDst, float& scaleDst, float& normSqDst) {
+    constexpr float zeroScale = 0.0f;
+    constexpr float zeroNormSq = 0.0f;
+    double maxAbs = 0.0;
+    for (const auto value : src) {
+        maxAbs = std::max(maxAbs, std::abs(static_cast<double>(value)));
+    }
+    if (maxAbs == 0.0) {
+        scaleDst = zeroScale;
+        normSqDst = zeroNormSq;
+        std::memset(payloadDst, 0,
+            HNSWIndexUtils::getQuantizedCachedEmbeddingPayloadBytes(src.size(), quantization));
+        return;
+    }
+    const auto maxQuantizedValue = quantization == QuantizationType::SQ8 ? 127.0 : 32767.0;
+    const auto scale = static_cast<float>(maxAbs / maxQuantizedValue);
+    float normSq = 0.0f;
+    if (quantization == QuantizationType::SQ8) {
+        for (auto i = 0u; i < src.size(); ++i) {
+            const auto quantized =
+                static_cast<int64_t>(std::llround(static_cast<double>(src[i]) / scale));
+            const auto clamped = static_cast<int8_t>(std::clamp<int64_t>(quantized, -127, 127));
+            payloadDst[i] = static_cast<uint8_t>(clamped);
+            normSq += static_cast<float>(clamped) * static_cast<float>(clamped);
+        }
+        normSqDst = normSq;
+        scaleDst = metric == MetricType::Cosine && normSq > 0.0f ? 1.0f / std::sqrt(normSq) :
+                                                                    scale;
+        return;
+    }
+    auto* payloadValues = reinterpret_cast<int16_t*>(payloadDst);
+    for (auto i = 0u; i < src.size(); ++i) {
+        const auto quantized =
+            static_cast<int64_t>(std::llround(static_cast<double>(src[i]) / scale));
+        const auto clamped = static_cast<int16_t>(std::clamp<int64_t>(quantized, -32767, 32767));
+        normSq += static_cast<float>(clamped) * static_cast<float>(clamped);
+        payloadValues[i] = clamped;
+    }
+    normSqDst = normSq;
+    scaleDst = metric == MetricType::Cosine && normSq > 0.0f ? 1.0f / std::sqrt(normSq) : scale;
+}
+
+template<typename T>
+struct HNSWQuantizedQueryVector : GetEmbeddingsScanState {
+    HNSWQuantizedQueryVector(main::ClientContext* context,
+        std::shared_ptr<Expression> queryExpression, const LogicalType& indexType,
+        uint64_t dimension, QuantizationType quantization, MetricType metric)
+        : data(HNSWIndexUtils::getQuantizedCachedEmbeddingStride(dimension, quantization) + 31),
+          view{nullptr, 0.0f, 0.0f} {
+        const auto rawVector =
+            getQueryVector<T>(context, std::move(queryExpression), indexType, dimension);
+        alignedData = reinterpret_cast<uint8_t*>(
+            common::ceilDiv<uintptr_t>(reinterpret_cast<uintptr_t>(data.data()),
+                static_cast<uintptr_t>(32)) *
+            32);
+        quantizeQueryVector(rawVector, quantization, metric, alignedData, view.scale, view.normSq);
+        view.payload = alignedData;
+    }
+
+    void* getEmbeddingPtr([[maybe_unused]] const EmbeddingHandle& handle) override {
+        DASSERT(!handle.isNull());
+        DASSERT(handle.offsetInData == 0);
+        return &view;
+    }
+
+    void addEmbedding(const EmbeddingHandle&) override {};
+    void reclaimEmbedding(const EmbeddingHandle&) override {};
+
+    std::vector<uint8_t> data;
+    uint8_t* alignedData;
+    QuantizedEmbeddingView view;
 };
 
 static offset_t tableFunc(const TableFuncInput& input, TableFuncOutput& output) {
@@ -242,12 +320,22 @@ static offset_t tableFunc(const TableFuncInput& input, TableFuncOutput& output) 
         TypeUtils::visit(
             indexType,
             [&]<VectorElementType T>(T) {
-                auto queryVector = HNSWQueryVector<T>(input.context->clientContext,
+                auto exactQueryVector = HNSWRawQueryVector<T>(input.context->clientContext,
                     bindData->queryExpression, index.getElementType(), dimension);
+                auto exactQueryVectorHandle = EmbeddingHandle{0, &exactQueryVector};
+                if (index.getQuantization() == QuantizationType::NONE) {
+                    localState->result = index.search(
+                        transaction::Transaction::Get(*input.context->clientContext),
+                        exactQueryVectorHandle, exactQueryVectorHandle, localState->searchState);
+                    return;
+                }
+                auto queryVector = HNSWQuantizedQueryVector<T>(input.context->clientContext,
+                    bindData->queryExpression, index.getElementType(), dimension,
+                    index.getQuantization(), index.getMetric());
                 auto queryVectorHandle = EmbeddingHandle{0, &queryVector};
                 localState->result =
                     index.search(transaction::Transaction::Get(*input.context->clientContext),
-                        queryVectorHandle, localState->searchState);
+                        queryVectorHandle, exactQueryVectorHandle, localState->searchState);
             },
             [&](auto) { UNREACHABLE_CODE; });
     }
@@ -301,9 +389,17 @@ std::unique_ptr<TableFuncLocalState> initQueryHNSWLocalState(
         catalog
             ->getTableCatalogEntry(transaction::Transaction::Get(*context), lowerRelTableName, true)
             ->ptrCast<RelGroupCatalogEntry>();
+    const auto& indexConfig =
+        hnswBindData->indexEntry->getAuxInfo().cast<HNSWIndexAuxInfo>().config;
+    auto indexOpt = hnswSharedState->nodeTable->getIndex(hnswBindData->indexEntry->getIndexName());
+    DASSERT(indexOpt.has_value());
+    auto& index = indexOpt.value()->cast<OnDiskHNSWIndex>();
+    auto quantizedEmbeddings =
+        index.getOrCreateQuantizedEmbeddings(context, hnswSharedState->numNodes);
     HNSWSearchState searchState{context, hnswBindData->nodeTableEntry, upperRelTableEntry,
         lowerRelTableEntry, *hnswSharedState->nodeTable, hnswBindData->indexColumnID,
-        hnswSharedState->numNodes, static_cast<uint64_t>(k), hnswBindData->config};
+        hnswSharedState->numNodes, static_cast<uint64_t>(k), hnswBindData->config, indexConfig,
+        true, std::move(quantizedEmbeddings)};
     const auto tableID = hnswBindData->nodeTableEntry->getTableID();
     auto& semiMasks = hnswSharedState->semiMasks;
     if (semiMasks.containsTableID(tableID)) {

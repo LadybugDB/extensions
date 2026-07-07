@@ -18,6 +18,12 @@ template<typename T>
 concept VectorElementType = std::is_floating_point_v<T>;
 using metric_func_t = std::function<double(const void*, const void*, uint32_t)>;
 
+struct QuantizedEmbeddingView {
+    const uint8_t* payload;
+    float scale;
+    float normSq;
+};
+
 struct HNSWIndexUtils {
     enum class IndexOperation { CREATE, QUERY, DROP };
 
@@ -36,7 +42,19 @@ struct HNSWIndexUtils {
     static void validateAutoTransaction(const main::ClientContext& context,
         const std::string& funcName);
 
-    static metric_func_t getMetricsFunction(MetricType metric, const common::LogicalType& type);
+    static metric_func_t getMetricsFunction(MetricType metric, const common::LogicalType& type,
+        QuantizationType quantization = QuantizationType::NONE);
+    static metric_func_t getQuantizedCachedMetricsFunction(MetricType metric,
+        QuantizationType quantization);
+    static uint64_t getQuantizedEmbeddingPayloadOffset(QuantizationType quantization);
+    static uint64_t getQuantizedEmbeddingStride(uint64_t dimension,
+        QuantizationType quantization);
+    static uint64_t getQuantizedCachedEmbeddingStride(uint64_t dimension,
+        QuantizationType quantization);
+    static uint64_t getQuantizedEmbeddingPayloadBytes(uint64_t dimension,
+        QuantizationType quantization);
+    static uint64_t getQuantizedCachedEmbeddingPayloadBytes(uint64_t dimension,
+        QuantizationType quantization);
 
     static void validateColumnType(const catalog::TableCatalogEntry& tableEntry,
         const std::string& columnName);
@@ -48,6 +66,10 @@ struct HNSWIndexUtils {
     static std::string getLowerGraphTableName(common::table_id_t tableID,
         const std::string& indexName) {
         return "_" + std::to_string(tableID) + "_" + indexName + "_LOWER";
+    }
+    static std::string getQuantizedEmbeddingsTableName(common::table_id_t tableID,
+        const std::string& indexName) {
+        return "_" + std::to_string(tableID) + "_" + indexName + "_QEMB";
     }
 
     template<typename T>

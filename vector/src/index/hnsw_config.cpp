@@ -100,6 +100,17 @@ void UseKnn::validate(bool value) {
     (void)value;
 }
 
+void Quantization::validate(const std::string& value) {
+    const auto lowerCaseValue = common::StringUtils::getLower(value);
+    if (lowerCaseValue != "none" && lowerCaseValue != "sq8" && lowerCaseValue != "sq16") {
+        throw common::BinderException{"Quantization must be one of NONE, SQ8 or SQ16."};
+    }
+}
+
+void UseFullPrecisionRerank::validate(bool value) {
+    (void)value;
+}
+
 HNSWIndexConfig::HNSWIndexConfig(const function::optional_params_t& optionalParams) {
     for (auto& [name, value] : optionalParams) {
         auto lowerCaseName = common::StringUtils::getLower(name);
@@ -131,6 +142,15 @@ HNSWIndexConfig::HNSWIndexConfig(const function::optional_params_t& optionalPara
         } else if (CacheEmbeddings::NAME == lowerCaseName) {
             value.validateType(CacheEmbeddings::TYPE);
             cacheEmbeddingsColumn = value.getValue<bool>();
+        } else if (Quantization::NAME == lowerCaseName) {
+            value.validateType(Quantization::TYPE);
+            auto quantizationName = value.getValue<std::string>();
+            Quantization::validate(quantizationName);
+            quantization = getQuantizationType(quantizationName);
+        } else if (UseFullPrecisionRerank::NAME == lowerCaseName) {
+            value.validateType(UseFullPrecisionRerank::TYPE);
+            storeFullPrecisionEmbeddings = value.getValue<bool>();
+            UseFullPrecisionRerank::validate(storeFullPrecisionEmbeddings);
         } else if (SkipIfExists::NAME == lowerCaseName) {
             value.validateType(SkipIfExists::TYPE);
             conflictAction = value.getValue<bool>() ?
@@ -140,6 +160,28 @@ HNSWIndexConfig::HNSWIndexConfig(const function::optional_params_t& optionalPara
             throw common::BinderException{std::format("Unrecognized optional parameter {} in {}.",
                 name, CreateVectorIndexFunction::name)};
         }
+    }
+    if (quantization != QuantizationType::NONE && metric == MetricType::DotProduct) {
+        throw common::BinderException{
+            "Quantization currently supports COSINE, L2 and L2SQ metrics only."};
+    }
+}
+
+std::string HNSWIndexConfig::quantizationToString(QuantizationType quantization) {
+    switch (quantization) {
+    case QuantizationType::NONE: {
+        return "none";
+    }
+    case QuantizationType::SQ8: {
+        return "sq8";
+    }
+    case QuantizationType::SQ16: {
+        return "sq16";
+    }
+    default: {
+        throw common::RuntimeException(std::format("Unknown quantization type {}.",
+            static_cast<int64_t>(quantization)));
+    }
     }
 }
 
@@ -175,6 +217,12 @@ void HNSWIndexConfig::serialize(common::Serializer& ser) const {
     ser.serializeValue(alpha);
     ser.writeDebuggingInfo("efc");
     ser.serializeValue(efc);
+    ser.writeDebuggingInfo("cacheEmbeddingsColumn");
+    ser.serializeValue(cacheEmbeddingsColumn);
+    ser.writeDebuggingInfo("quantization");
+    ser.serializeValue<uint8_t>(static_cast<uint8_t>(quantization));
+    ser.writeDebuggingInfo("useFullPrecisionRerank");
+    ser.serializeValue(storeFullPrecisionEmbeddings);
 }
 
 HNSWIndexConfig HNSWIndexConfig::deserialize(common::Deserializer& deSer) {
@@ -192,6 +240,23 @@ HNSWIndexConfig HNSWIndexConfig::deserialize(common::Deserializer& deSer) {
     deSer.deserializeValue(config.alpha);
     deSer.validateDebuggingInfo(debuggingInfo, "efc");
     deSer.deserializeValue(config.efc);
+    if (deSer.finished()) {
+        return config;
+    }
+    deSer.validateDebuggingInfo(debuggingInfo, "cacheEmbeddingsColumn");
+    deSer.deserializeValue(config.cacheEmbeddingsColumn);
+    if (deSer.finished()) {
+        return config;
+    }
+    deSer.validateDebuggingInfo(debuggingInfo, "quantization");
+    uint8_t quantization = 0;
+    deSer.deserializeValue(quantization);
+    config.quantization = static_cast<QuantizationType>(quantization);
+    if (deSer.finished()) {
+        return config;
+    }
+    deSer.validateDebuggingInfo(debuggingInfo, "useFullPrecisionRerank");
+    deSer.deserializeValue(config.storeFullPrecisionEmbeddings);
     return config;
 }
 
@@ -209,6 +274,20 @@ MetricType HNSWIndexConfig::getMetricType(const std::string& metricName) {
     if (lowerMetricName == "dot_product" || lowerMetricName == "dotproduct" ||
         lowerMetricName == "ip" || lowerMetricName == "inner_product") {
         return MetricType::DotProduct;
+    }
+    UNREACHABLE_CODE;
+}
+
+QuantizationType HNSWIndexConfig::getQuantizationType(const std::string& quantizationName) {
+    const auto lowerQuantizationName = common::StringUtils::getLower(quantizationName);
+    if (lowerQuantizationName == "none") {
+        return QuantizationType::NONE;
+    }
+    if (lowerQuantizationName == "sq8") {
+        return QuantizationType::SQ8;
+    }
+    if (lowerQuantizationName == "sq16") {
+        return QuantizationType::SQ16;
     }
     UNREACHABLE_CODE;
 }

@@ -34,7 +34,7 @@ CreateInMemHNSWSharedState::CreateInMemHNSWSharedState(const CreateHNSWIndexBind
                     ->getTable(bindData.tableEntry->getTableID())
                     ->cast<storage::NodeTable>()},
       numNodes{bindData.numRows}, bindData{&bindData} {
-    storage::IndexInfo dummyIndexInfo{"", "", bindData.tableEntry->getTableID(),
+    storage::IndexInfo dummyIndexInfo{bindData.indexName, "", bindData.tableEntry->getTableID(),
         {bindData.tableEntry->getColumnID(bindData.propertyID)}, {PhysicalTypeID::ARRAY}, false,
         false};
     hnswIndex = std::make_shared<InMemHNSWIndex>(bindData.context, dummyIndexInfo,
@@ -285,15 +285,39 @@ static void finalizeHNSWTableFinalizeFunc(const ExecutionContext* context,
         {columnID}, {PhysicalTypeID::ARRAY},
         hnswIndexType.constraintType == storage::IndexConstraintType::PRIMARY,
         hnswIndexType.definitionType == storage::IndexDefinitionType::BUILTIN};
+    auto storageManager = storage::StorageManager::Get(*clientContext);
     auto upperTableID = upperTableEntry.getSingleRelEntryInfo().oid;
     auto lowerTableID = lowerTableEntry.getSingleRelEntryInfo().oid;
+    auto quantizedEmbeddingsTableID = common::INVALID_TABLE_ID;
+    storage::NodeTable* quantizedEmbeddingsTable = nullptr;
+    if (bindData->config.quantization != QuantizationType::NONE) {
+        auto quantizedEmbeddingsTableName =
+            HNSWIndexUtils::getQuantizedEmbeddingsTableName(nodeTableID, bindData->indexName);
+        auto quantizedEmbeddingsTableEntry =
+            catalog->getTableCatalogEntry(transaction, quantizedEmbeddingsTableName, true)
+                ->ptrCast<catalog::NodeTableCatalogEntry>();
+        quantizedEmbeddingsTableID = quantizedEmbeddingsTableEntry->getTableID();
+        quantizedEmbeddingsTable =
+            storageManager->getTable(quantizedEmbeddingsTableID)->ptrCast<storage::NodeTable>();
+    }
     auto storageInfo = std::make_unique<HNSWStorageInfo>(upperTableID, lowerTableID,
-        index->getUpperEntryPoint(), index->getLowerEntryPoint(), bindData->numRows);
+        quantizedEmbeddingsTableID, index->getUpperEntryPoint(), index->getLowerEntryPoint(),
+        bindData->numRows);
     auto onDiskIndex = std::make_unique<OnDiskHNSWIndex>(context->clientContext, indexInfo,
         std::move(storageInfo), bindData->config.copy());
-    auto storageManager = storage::StorageManager::Get(*clientContext);
     auto nodeTable = storageManager->getTable(nodeTableID)->ptrCast<storage::NodeTable>();
     nodeTable->addIndex(std::move(onDiskIndex));
+    if (bindData->config.quantization != QuantizationType::NONE) {
+        DASSERT(quantizedEmbeddingsTable != nullptr);
+        const auto& columnType = nodeTable->getColumn(columnID).getDataType();
+        const auto typeInfo =
+            columnType.getExtraTypeInfo()->constPtrCast<common::ArrayTypeInfo>();
+        auto quantizedEmbeddings = TableBackedQuantizedEmbeddings(context->clientContext,
+            common::ArrayTypeInfo{typeInfo->getChildType().copy(), typeInfo->getNumElements()},
+            *nodeTable, columnID, *quantizedEmbeddingsTable, bindData->config.quantization,
+            bindData->config.metric, bindData->numRows);
+        quantizedEmbeddings.rebuild(context->clientContext);
+    }
     index->moveToPartitionState(*hnswSharedState->partitionerSharedState);
     transaction->setForceCheckpoint();
 }
@@ -346,8 +370,21 @@ static std::string rewriteCreateHNSWQuery(main::ClientContext& context,
         HNSWIndexUtils::getUpperGraphTableName(tableID, indexName), tableName, tableName);
     query += std::format("CREATE REL TABLE {} (FROM {} TO {}) WITH (storage_direction='fwd');",
         HNSWIndexUtils::getLowerGraphTableName(tableID, indexName), tableName, tableName);
-    std::string params;
     auto& config = hnswBindData->config;
+    if (config.quantization != QuantizationType::NONE) {
+        const auto& columnType =
+            hnswBindData->tableEntry->getProperty(hnswBindData->propertyID).getType();
+        const auto typeInfo =
+            columnType.getExtraTypeInfo()->constPtrCast<common::ArrayTypeInfo>();
+        const auto payloadType =
+            config.quantization == QuantizationType::SQ8 ? "INT8" : "INT16";
+        query += std::format(
+            "CREATE NODE TABLE {} (id INT64, valid UINT8, scale FLOAT, norm_sq FLOAT, payload "
+            "{}[{}], PRIMARY KEY (id));",
+            HNSWIndexUtils::getQuantizedEmbeddingsTableName(tableID, indexName), payloadType,
+            typeInfo->getNumElements());
+    }
+    std::string params;
     params += std::format("mu := {}, ", config.mu);
     params += std::format("ml := {}, ", config.ml);
     params += std::format("efc := {}, ", config.efc);
@@ -356,8 +393,15 @@ static std::string rewriteCreateHNSWQuery(main::ClientContext& context,
     params += std::format("pu := {}, ", config.pu);
     params +=
         std::format("cache_embeddings := {}", config.cacheEmbeddingsColumn ? "true" : "false");
+    if (config.quantization != QuantizationType::NONE) {
+        params += std::format(", quantization := '{}'",
+            HNSWIndexConfig::quantizationToString(config.quantization));
+    }
+    if (config.storeFullPrecisionEmbeddings) {
+        params += ", use_full_precision_rerank := true";
+    }
     auto columnName = hnswBindData->tableEntry->getProperty(hnswBindData->propertyID).getName();
-    if (config.cacheEmbeddingsColumn) {
+    if (config.cacheEmbeddingsColumn && config.quantization == QuantizationType::NONE) {
         query +=
             std::format("CALL _CACHE_ARRAY_COLUMN_LOCALLY('{}', '{}');", tableName, columnName);
     }

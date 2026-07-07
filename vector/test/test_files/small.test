@@ -114,6 +114,72 @@
 444
 133
 
+-CASE ScalarQuantization
+-LOAD_DYNAMIC_EXTENSION vector
+-STATEMENT CREATE NODE TABLE embeddings (id int64, vec FLOAT[4], PRIMARY KEY (id));
+---- ok
+-STATEMENT CREATE (:embeddings {id: 0, vec: [0.0, 1.0, 0.0, 0.0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 1, vec: [1.0, 0.0, 0.0, 0.0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 2, vec: [0.9, 0.1, 0.0, 0.0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 3, vec: [-1.0, 0.0, 0.0, 0.0]});
+---- ok
+-STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'sq8_index', 'vec', metric := 'l2', quantization := 'sq8');
+---- ok
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'sq8_index', [1.0, 0.0, 0.0, 0.0], 2, search_type := 'naive') RETURN node.id ORDER BY distance;
+-CHECK_ORDER
+---- 2
+1
+2
+-RELOADDB
+-LOAD_DYNAMIC_EXTENSION vector
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'sq8_index', [1.0, 0.0, 0.0, 0.0], 2, search_type := 'naive') RETURN node.id ORDER BY distance;
+-CHECK_ORDER
+---- 2
+1
+2
+-STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'sq8_full_index', 'vec', metric := 'l2', quantization := 'sq8', use_full_precision_rerank := true);
+---- ok
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'sq8_full_index', [1.0, 0.0, 0.0, 0.0], 2, search_type := 'naive') RETURN node.id ORDER BY distance;
+-CHECK_ORDER
+---- 2
+1
+2
+-STATEMENT CALL DROP_VECTOR_INDEX('embeddings', 'sq8_full_index');
+---- ok
+-STATEMENT CALL DROP_VECTOR_INDEX('embeddings', 'sq8_index');
+---- ok
+-STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'sq16_index', 'vec', metric := 'l2sq', quantization := 'sq16', cache_embeddings := false);
+---- ok
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'sq16_index', [1.0, 0.0, 0.0, 0.0], 2, search_type := 'naive') RETURN node.id ORDER BY distance;
+-CHECK_ORDER
+---- 2
+1
+2
+-RELOADDB
+-LOAD_DYNAMIC_EXTENSION vector
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'sq16_index', [1.0, 0.0, 0.0, 0.0], 2, search_type := 'naive') RETURN node.id ORDER BY distance;
+-CHECK_ORDER
+---- 2
+1
+2
+-STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'sq8_cos_index', 'vec', metric := 'cosine', quantization := 'sq8');
+---- ok
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'sq8_cos_index', [1.0, 0.0, 0.0, 0.0], 2, search_type := 'naive') RETURN node.id ORDER BY distance;
+-CHECK_ORDER
+---- 2
+1
+2
+-RELOADDB
+-LOAD_DYNAMIC_EXTENSION vector
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'sq8_cos_index', [1.0, 0.0, 0.0, 0.0], 2, search_type := 'naive') RETURN node.id ORDER BY distance;
+-CHECK_ORDER
+---- 2
+1
+2
+
 -CASE 8DimL2Sq
 -LOAD_DYNAMIC_EXTENSION vector
 -STATEMENT CREATE NODE TABLE embeddings (id int64, vec FLOAT[8], PRIMARY KEY (id));

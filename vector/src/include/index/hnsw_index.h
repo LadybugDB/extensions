@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <queue>
 
 #include "common/random_engine.h"
@@ -25,6 +26,7 @@ namespace vector_extension {
 
 struct HNSWIndexPartitionerSharedState;
 struct CreateInMemHNSWLocalState;
+struct QuantizedEmbeddingsCacheState;
 
 struct MinNodePriorityQueueComparator {
     bool operator()(const NodeWithDistance& l, const NodeWithDistance& r) const {
@@ -61,18 +63,21 @@ struct VisitedState {
 struct HNSWStorageInfo final : storage::IndexStorageInfo {
     common::table_id_t upperRelTableID;
     common::table_id_t lowerRelTableID;
+    common::table_id_t quantizedEmbeddingsTableID;
     common::offset_t upperEntryPoint;
     common::offset_t lowerEntryPoint;
     common::offset_t numCheckpointedNodes;
 
     HNSWStorageInfo()
         : upperRelTableID{common::INVALID_TABLE_ID}, lowerRelTableID{common::INVALID_TABLE_ID},
+          quantizedEmbeddingsTableID{common::INVALID_TABLE_ID},
           upperEntryPoint{common::INVALID_OFFSET}, lowerEntryPoint{common::INVALID_OFFSET},
           numCheckpointedNodes{0} {}
     HNSWStorageInfo(common::table_id_t upperRelTableID, common::table_id_t lowerRelTableID,
-        common::offset_t upperEntryPoint, common::offset_t lowerEntryPoint,
-        common::offset_t numCheckpointedNodes)
+        common::table_id_t quantizedEmbeddingsTableID, common::offset_t upperEntryPoint,
+        common::offset_t lowerEntryPoint, common::offset_t numCheckpointedNodes)
         : upperRelTableID{upperRelTableID}, lowerRelTableID{lowerRelTableID},
+          quantizedEmbeddingsTableID{quantizedEmbeddingsTableID},
           upperEntryPoint{upperEntryPoint}, lowerEntryPoint{lowerEntryPoint},
           numCheckpointedNodes{numCheckpointedNodes} {}
 
@@ -90,8 +95,9 @@ public:
         HNSWIndexConfig config, common::ArrayTypeInfo typeInfo)
         : Index{std::move(indexInfo), std::move(storageInfo)}, config{std::move(config)},
           typeInfo{std::move(typeInfo)} {
-        metricFunc =
+        exactMetricFunc =
             HNSWIndexUtils::getMetricsFunction(this->config.metric, this->typeInfo.getChildType());
+        metricFunc = exactMetricFunc;
     }
     ~HNSWIndex() override = default;
 
@@ -103,6 +109,8 @@ public:
     }
 
     common::LogicalType getElementType() const { return typeInfo.getChildType().copy(); }
+    QuantizationType getQuantization() const { return config.quantization; }
+    MetricType getMetric() const { return config.metric; }
 
     static std::vector<NodeWithDistance> popTopK(max_node_priority_queue_t& result,
         common::length_t k);
@@ -129,6 +137,7 @@ protected:
     HNSWIndexConfig config;
     common::ArrayTypeInfo typeInfo;
     metric_func_t metricFunc;
+    metric_func_t exactMetricFunc;
     common::RandomEngine randomEngine;
 };
 
@@ -256,8 +265,11 @@ enum class SearchType : uint8_t {
 
 struct HNSWSearchState {
     VisitedState visited;
-    std::unique_ptr<HNSWIndexEmbeddings> embeddings;
-    OnDiskEmbeddingScanState embeddingScanState;
+    std::shared_ptr<HNSWIndexEmbeddings> embeddings;
+    std::unique_ptr<GetEmbeddingsScanState> embeddingScanState;
+    metric_func_t metricFunc;
+    std::shared_ptr<HNSWIndexEmbeddings> exactEmbeddings;
+    std::unique_ptr<GetEmbeddingsScanState> exactEmbeddingScanState;
     uint64_t k;
     QueryHNSWConfig config;
     uint64_t ef;
@@ -274,8 +286,9 @@ struct HNSWSearchState {
     HNSWSearchState(main::ClientContext* context, catalog::TableCatalogEntry* nodeTableEntry,
         catalog::TableCatalogEntry* upperRelTableEntry,
         catalog::TableCatalogEntry* lowerRelTableEntry, storage::NodeTable& nodeTable,
-        common::column_id_t columnID, common::offset_t numNodes, uint64_t k,
-        QueryHNSWConfig config);
+        common::column_id_t columnID, common::offset_t numNodes, uint64_t k, QueryHNSWConfig config,
+        const HNSWIndexConfig& indexConfig, bool useQuantizedEmbeddings,
+        std::shared_ptr<HNSWIndexEmbeddings> cachedEmbeddings = nullptr);
 
     bool isMasked(common::offset_t offset) const {
         return !hasMask() || semiMask->isMasked(offset);
@@ -315,7 +328,8 @@ public:
         std::unique_ptr<storage::IndexStorageInfo> storageInfo, HNSWIndexConfig config);
 
     std::vector<NodeWithDistance> search(transaction::Transaction* transaction,
-        const EmbeddingHandle& queryVector, HNSWSearchState& searchState) const;
+        const EmbeddingHandle& queryVector, const EmbeddingHandle& exactQueryVector,
+        HNSWSearchState& searchState) const;
 
     static std::unique_ptr<Index> load(main::ClientContext* context,
         storage::StorageManager* storageManager, storage::IndexInfo indexInfo,
@@ -338,7 +352,10 @@ public:
     }
 
     void finalize(main::ClientContext*) override;
-    void checkpoint(main::ClientContext* context, storage::PageAllocator& pageAllocator, storage::ShadowFile& shadowFile) override;
+    void checkpoint(main::ClientContext* context, storage::PageAllocator& pageAllocator,
+        storage::ShadowFile& shadowFile) override;
+    std::shared_ptr<HNSWIndexEmbeddings> getOrCreateQuantizedEmbeddings(
+        const main::ClientContext* context, common::offset_t numNodes) const;
 
 private:
     common::offset_t searchNNInUpperLayer(const EmbeddingHandle& queryVector,
@@ -347,7 +364,8 @@ private:
         const EmbeddingHandle& queryVector, common::offset_t entryNode,
         HNSWSearchState& searchState, bool isUpperLayer) const;
     std::vector<NodeWithDistance> searchBruteForce(transaction::Transaction* transaction,
-        const EmbeddingHandle& queryVector, HNSWSearchState& searchState) const;
+        const EmbeddingHandle& approxQueryVector, const EmbeddingHandle& exactQueryVector,
+        HNSWSearchState& searchState) const;
     std::vector<NodeWithDistance> searchFromCheckpointed(transaction::Transaction* transaction,
         const EmbeddingHandle& queryVector, HNSWSearchState& searchState) const;
     void searchFromUnCheckpointed(transaction::Transaction* transaction,
@@ -416,6 +434,9 @@ private:
 
     void initSearchCandidates(const EmbeddingHandle& queryVector, HNSWSearchState& searchState,
         min_node_priority_queue_t& candidates, max_node_priority_queue_t& results) const;
+    void exactRerankResults(const EmbeddingHandle& exactQueryVector, HNSWSearchState& searchState,
+        std::vector<NodeWithDistance>& result) const;
+    void markQuantizedEmbeddingsCacheDirty(transaction::Transaction* transaction) const;
 
     static SearchType getFilteredSearchType(transaction::Transaction* transaction,
         const HNSWSearchState& searchState);
@@ -426,6 +447,8 @@ private:
 
     storage::MemoryManager* mm;
     storage::NodeTable& nodeTable;
+    storage::NodeTable* quantizedEmbeddingsTable;
+    std::shared_ptr<QuantizedEmbeddingsCacheState> quantizedEmbeddingsCacheState;
     storage::RelTable* upperRelTable;
     storage::RelTable* lowerRelTable;
 };

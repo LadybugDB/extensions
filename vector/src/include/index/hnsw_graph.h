@@ -2,15 +2,23 @@
 
 #include <bitset>
 #include <cmath>
+#include <format>
+#include <memory>
+#include <unordered_map>
 
 #include "common/data_chunk/data_chunk.h"
+#include "index/hnsw_index_utils.h"
 #include "processor/operator/base_partitioner_shared_state.h"
 #include "storage/buffer_manager/memory_manager.h"
 #include "storage/local_cached_column.h"
+#include "transaction/transaction.h"
 
 namespace lbug {
 namespace storage {
 struct NodeTableScanState;
+}
+namespace main {
+class ClientContext;
 }
 namespace vector_extension {
 
@@ -73,7 +81,9 @@ public:
         GetEmbeddingsScanState& scanState) const = 0;
 
     common::length_t getDimension() const { return info.getDimension(); }
-    virtual std::unique_ptr<GetEmbeddingsScanState> constructScanState() const = 0;
+    virtual metric_func_t getMetricFunction(MetricType metric) const;
+    virtual std::unique_ptr<GetEmbeddingsScanState> constructScanState(
+        transaction::Transaction* transaction = nullptr) const = 0;
 
 protected:
     EmbeddingColumnInfo info;
@@ -89,10 +99,120 @@ public:
     std::vector<EmbeddingHandle> getEmbeddings(std::span<const common::offset_t> offset,
         GetEmbeddingsScanState& scanState) const override;
 
-    std::unique_ptr<GetEmbeddingsScanState> constructScanState() const override;
+    std::unique_ptr<GetEmbeddingsScanState> constructScanState(
+        transaction::Transaction* transaction = nullptr) const override;
 
 private:
     storage::CachedColumn* data;
+};
+
+class QuantizedInMemEmbeddings final : public HNSWIndexEmbeddings {
+public:
+    QuantizedInMemEmbeddings(const main::ClientContext* context, common::ArrayTypeInfo typeInfo,
+        storage::NodeTable& table, common::column_id_t columnID, QuantizationType quantization,
+        MetricType metric);
+
+    EmbeddingHandle getEmbedding(common::offset_t offset,
+        GetEmbeddingsScanState& scanState) const override;
+    std::vector<EmbeddingHandle> getEmbeddings(std::span<const common::offset_t> offset,
+        GetEmbeddingsScanState& scanState) const override;
+    std::unique_ptr<GetEmbeddingsScanState> constructScanState(
+        transaction::Transaction* transaction = nullptr) const override;
+
+    metric_func_t getMetricFunction(MetricType metric) const override;
+
+private:
+    QuantizationType quantization;
+    uint64_t strideBytes;
+    std::vector<uint8_t> nullMask;
+    std::unique_ptr<storage::MemoryBuffer> payloadBuffer;
+    uint8_t* payloadDataPtr;
+    std::vector<float> scales;
+    std::vector<float> normSqs;
+    std::vector<QuantizedEmbeddingView> views;
+};
+
+class CachedQuantizedColumn final : public transaction::LocalCacheObject {
+public:
+    static std::string getKey(common::table_id_t quantizedTableID) {
+        return std::format("quantized-{}", quantizedTableID);
+    }
+
+    CachedQuantizedColumn(const main::ClientContext* context, common::ArrayTypeInfo typeInfo,
+        storage::NodeTable& sourceTable, storage::NodeTable& quantizedTable,
+        common::column_id_t sourceColumnID, QuantizationType quantization, MetricType metric,
+        common::offset_t numNodes);
+    DELETE_BOTH_COPY(CachedQuantizedColumn);
+
+    bool isNull(common::offset_t offset) const { return nullMask[offset] != 0; }
+    const QuantizedEmbeddingView* getViews() const { return views.data(); }
+    common::offset_t getNumNodes() const { return nullMask.size(); }
+
+private:
+    void setQuantizedRecord(common::offset_t offset, uint8_t valid, float scale, float normSq,
+        const uint8_t* payload);
+
+    common::ArrayTypeInfo typeInfo;
+    uint64_t strideBytes;
+    uint64_t payloadBytes;
+    std::vector<uint8_t> nullMask;
+    std::unique_ptr<storage::MemoryBuffer> payloadBuffer;
+    uint8_t* payloadDataPtr;
+    std::vector<float> scales;
+    std::vector<float> normSqs;
+    std::vector<QuantizedEmbeddingView> views;
+};
+
+class CachedQuantizedEmbeddings final : public HNSWIndexEmbeddings {
+public:
+    CachedQuantizedEmbeddings(common::ArrayTypeInfo typeInfo, storage::NodeTable& sourceTable,
+        std::shared_ptr<CachedQuantizedColumn> cachedColumn, QuantizationType quantization);
+
+    EmbeddingHandle getEmbedding(common::offset_t offset,
+        GetEmbeddingsScanState& scanState) const override;
+    std::vector<EmbeddingHandle> getEmbeddings(std::span<const common::offset_t> offset,
+        GetEmbeddingsScanState& scanState) const override;
+    std::unique_ptr<GetEmbeddingsScanState> constructScanState(
+        transaction::Transaction* transaction = nullptr) const override;
+    metric_func_t getMetricFunction(MetricType metric) const override;
+
+private:
+    QuantizationType quantization;
+    storage::NodeTable& nodeTable;
+    std::shared_ptr<CachedQuantizedColumn> cachedColumn;
+};
+
+class TableBackedQuantizedEmbeddings final : public HNSWIndexEmbeddings {
+public:
+    TableBackedQuantizedEmbeddings(const main::ClientContext* context,
+        common::ArrayTypeInfo typeInfo, storage::NodeTable& sourceTable,
+        common::column_id_t sourceColumnID, storage::NodeTable& quantizedTable,
+        QuantizationType quantization, MetricType metric, common::offset_t numNodes);
+
+    EmbeddingHandle getEmbedding(common::offset_t offset,
+        GetEmbeddingsScanState& scanState) const override;
+    std::vector<EmbeddingHandle> getEmbeddings(std::span<const common::offset_t> offset,
+        GetEmbeddingsScanState& scanState) const override;
+    std::unique_ptr<GetEmbeddingsScanState> constructScanState(
+        transaction::Transaction* transaction = nullptr) const override;
+    metric_func_t getMetricFunction(MetricType metric) const override;
+
+    void rebuild(const main::ClientContext* context) const;
+    void writeEmbedding(transaction::Transaction* transaction, common::offset_t offset,
+        const EmbeddingHandle& embedding) const;
+
+private:
+    void writeQuantizedRecord(transaction::Transaction* transaction, common::offset_t offset,
+        uint8_t valid, float scale, float normSq, const uint8_t* payload) const;
+
+    QuantizationType quantization;
+    MetricType metric;
+    storage::NodeTable& sourceTable;
+    common::column_id_t sourceColumnID;
+    storage::NodeTable& quantizedTable;
+    transaction::Transaction* defaultTransaction;
+    common::offset_t numNodes;
+    uint64_t strideBytes;
 };
 
 class OnDiskEmbeddingScanState final : public GetEmbeddingsScanState {
@@ -129,7 +249,8 @@ public:
         GetEmbeddingsScanState& scanState) const override;
     std::vector<EmbeddingHandle> getEmbeddings(std::span<const common::offset_t> offset,
         GetEmbeddingsScanState& scanState) const override;
-    std::unique_ptr<GetEmbeddingsScanState> constructScanState() const override;
+    std::unique_ptr<GetEmbeddingsScanState> constructScanState(
+        transaction::Transaction* transaction = nullptr) const override;
 
 private:
     transaction::Transaction* transaction;

@@ -1,5 +1,6 @@
 #include "index/hnsw_index.h"
 
+#include <mutex>
 #include <unordered_set>
 
 #include "catalog/catalog.h"
@@ -21,6 +22,14 @@ namespace vector_extension {
 static constexpr double NAVIX_ONE_HOP_LOCAL_SELECTIVITY_THRESHOLD = 0.4;
 static constexpr double NAVIX_TWO_HOP_SELECTED_NEIGHBOR_ESTIMATE_RATIO = 0.4;
 static constexpr int64_t NAVIX_DIRECTED_FIRST_HOP_DISTANCE_COST_FACTOR = 2;
+
+struct QuantizedEmbeddingsCacheState {
+    std::mutex mtx;
+    std::shared_ptr<CachedQuantizedColumn> cache;
+    common::transaction_t version = transaction::Transaction::DUMMY_START_TIMESTAMP;
+    bool dirty = false;
+    std::unordered_set<common::transaction_t> dirtyTransactions;
+};
 
 InMemHNSWLayer::InMemHNSWLayer(MemoryManager* mm, InMemHNSWLayerInfo info)
     : entryPoint{common::INVALID_OFFSET}, info{info} {
@@ -314,6 +323,11 @@ static std::unique_ptr<HNSWIndexEmbeddings> constructEmbeddingsColumn(
     common::column_id_t columnID, const HNSWIndexConfig& config) {
     auto transaction = Transaction::Get(*context);
     if (config.cacheEmbeddingsColumn) {
+        if (config.quantization != QuantizationType::NONE) {
+            return std::make_unique<QuantizedInMemEmbeddings>(context,
+                common::ArrayTypeInfo{typeInfo.getChildType().copy(), typeInfo.getNumElements()},
+                table, columnID, config.quantization, config.metric);
+        }
         return std::make_unique<InMemEmbeddings>(transaction,
             common::ArrayTypeInfo{typeInfo.getChildType().copy(), typeInfo.getNumElements()},
             table.getTableID(), columnID);
@@ -355,14 +369,15 @@ InMemHNSWIndex::InMemHNSWIndex(const main::ClientContext* context, IndexInfo ind
     lowerGraphSelectionMap = std::make_unique<NodeToHNSWGraphOffsetMap>(numNodes);
     upperGraphSelectionMap =
         std::make_unique<NodeToHNSWGraphOffsetMap>(numNodes, upperLayerSelectionMask.get());
+    auto inMemMetricFunc = embeddings->getMetricFunction(this->config.metric);
     lowerLayer = std::make_unique<InMemHNSWLayer>(MemoryManager::Get(*context),
-        InMemHNSWLayerInfo{numNodes, embeddings.get(), this->metricFunc,
+        InMemHNSWLayerInfo{numNodes, embeddings.get(), inMemMetricFunc,
             getDegreeThresholdToShrink(this->config.ml), this->config.ml, this->config.alpha,
             this->config.efc, *lowerGraphSelectionMap});
     upperLayer = std::make_unique<InMemHNSWLayer>(MemoryManager::Get(*context),
-        InMemHNSWLayerInfo{upperLayerSelectionMask->countNulls(), embeddings.get(),
-            this->metricFunc, getDegreeThresholdToShrink(this->config.mu), this->config.mu,
-            this->config.alpha, this->config.efc, *upperGraphSelectionMap});
+        InMemHNSWLayerInfo{upperLayerSelectionMask->countNulls(), embeddings.get(), inMemMetricFunc,
+            getDegreeThresholdToShrink(this->config.mu), this->config.mu, this->config.alpha,
+            this->config.efc, *upperGraphSelectionMap});
 }
 
 // NOLINTNEXTLINE(readability-make-member-function-const): Semantically non-const function.
@@ -401,6 +416,7 @@ std::shared_ptr<common::BufferWriter> HNSWStorageInfo::serialize() const {
     serializer.write<common::offset_t>(upperEntryPoint);
     serializer.write<common::offset_t>(lowerEntryPoint);
     serializer.write<common::offset_t>(numCheckpointedNodes);
+    serializer.write<common::table_id_t>(quantizedEmbeddingsTableID);
     return bufferWriter;
 }
 
@@ -408,6 +424,7 @@ std::unique_ptr<IndexStorageInfo> HNSWStorageInfo::deserialize(
     std::unique_ptr<common::BufferReader> reader) {
     common::table_id_t upperRelTableID = common::INVALID_TABLE_ID;
     common::table_id_t lowerRelTableID = common::INVALID_TABLE_ID;
+    common::table_id_t quantizedEmbeddingsTableID = common::INVALID_TABLE_ID;
     common::offset_t upperEntryPoint = common::INVALID_OFFSET;
     common::offset_t lowerEntryPoint = common::INVALID_OFFSET;
     common::offset_t checkpointedNodeOffset = common::INVALID_OFFSET;
@@ -417,22 +434,47 @@ std::unique_ptr<IndexStorageInfo> HNSWStorageInfo::deserialize(
     deSer.deserializeValue<common::offset_t>(upperEntryPoint);
     deSer.deserializeValue<common::offset_t>(lowerEntryPoint);
     deSer.deserializeValue<common::offset_t>(checkpointedNodeOffset);
-    return std::make_unique<HNSWStorageInfo>(upperRelTableID, lowerRelTableID, upperEntryPoint,
-        lowerEntryPoint, checkpointedNodeOffset);
+    if (!deSer.finished()) {
+        deSer.deserializeValue<common::table_id_t>(quantizedEmbeddingsTableID);
+    }
+    return std::make_unique<HNSWStorageInfo>(upperRelTableID, lowerRelTableID,
+        quantizedEmbeddingsTableID, upperEntryPoint, lowerEntryPoint, checkpointedNodeOffset);
 }
 
 HNSWSearchState::HNSWSearchState(main::ClientContext* context,
     catalog::TableCatalogEntry* nodeTableEntry, catalog::TableCatalogEntry* upperRelTableEntry,
     catalog::TableCatalogEntry* lowerRelTableEntry, NodeTable& nodeTable,
-    common::column_id_t columnID, common::offset_t numNodes, uint64_t k, QueryHNSWConfig config)
-    : visited{numNodes}, embeddings{std::make_unique<OnDiskEmbeddings>(Transaction::Get(*context),
-                             MemoryManager::Get(*context), getArrayTypeInfo(nodeTable, columnID),
-                             nodeTable, columnID)},
-      embeddingScanState{Transaction::Get(*context), MemoryManager::Get(*context), nodeTable,
-          columnID, embeddings->getDimension()},
-      k{k}, config{config}, semiMask{nullptr}, upperRelTableEntry{upperRelTableEntry},
-      lowerRelTableEntry{lowerRelTableEntry}, searchType{SearchType::UNFILTERED},
-      nbrScanState{nullptr}, secondHopNbrScanState{nullptr} {
+    common::column_id_t columnID, common::offset_t numNodes, uint64_t k, QueryHNSWConfig config,
+    const HNSWIndexConfig& indexConfig, bool useQuantizedEmbeddings,
+    std::shared_ptr<HNSWIndexEmbeddings> cachedEmbeddings)
+    : visited{numNodes}, k{k}, config{config}, semiMask{nullptr},
+      upperRelTableEntry{upperRelTableEntry}, lowerRelTableEntry{lowerRelTableEntry},
+      searchType{SearchType::UNFILTERED}, nbrScanState{nullptr}, secondHopNbrScanState{nullptr} {
+    auto transaction = Transaction::Get(*context);
+    auto typeInfo = getArrayTypeInfo(nodeTable, columnID);
+    if (useQuantizedEmbeddings && indexConfig.quantization != QuantizationType::NONE) {
+        if (cachedEmbeddings != nullptr) {
+            embeddings = std::move(cachedEmbeddings);
+        } else {
+            embeddings = std::make_shared<QuantizedInMemEmbeddings>(context,
+                common::ArrayTypeInfo{typeInfo.getChildType().copy(), typeInfo.getNumElements()},
+                nodeTable, columnID, indexConfig.quantization, indexConfig.metric);
+        }
+        embeddingScanState = embeddings->constructScanState(transaction);
+        if (indexConfig.storeFullPrecisionEmbeddings) {
+            exactEmbeddings = std::make_shared<OnDiskEmbeddings>(transaction,
+                MemoryManager::Get(*context),
+                common::ArrayTypeInfo{typeInfo.getChildType().copy(), typeInfo.getNumElements()},
+                nodeTable, columnID);
+            exactEmbeddingScanState = exactEmbeddings->constructScanState(transaction);
+        }
+    } else {
+        embeddings = std::make_shared<OnDiskEmbeddings>(transaction, MemoryManager::Get(*context),
+            common::ArrayTypeInfo{typeInfo.getChildType().copy(), typeInfo.getNumElements()},
+            nodeTable, columnID);
+        embeddingScanState = embeddings->constructScanState(transaction);
+    }
+    metricFunc = embeddings->getMetricFunction(indexConfig.metric);
     ef = std::max(k, static_cast<uint64_t>(config.efs));
     graph::NativeGraphEntry lowerGraphEntry{{nodeTableEntry}, {lowerRelTableEntry}};
     lowerGraph = std::make_unique<graph::OnDiskGraph>(context, std::move(lowerGraphEntry));
@@ -446,7 +488,7 @@ OnDiskHNSWIndex::HNSWInsertState::HNSWInsertState(main::ClientContext* context,
     common::column_id_t columnID, uint64_t degree)
     : searchState{context, nodeTableEntry, upperRelTableEntry, lowerRelTableEntry, nodeTable,
           columnID, nodeTable.getNumTotalRows(Transaction::Get(*context)), degree,
-          QueryHNSWConfig{}} {
+          QueryHNSWConfig{}, HNSWIndexConfig{}, false} {
     std::vector<common::LogicalType> insertTypes;
     insertTypes.push_back(common::LogicalType::INTERNAL_ID());
     insertTypes.push_back(common::LogicalType::INTERNAL_ID());
@@ -473,7 +515,9 @@ OnDiskHNSWIndex::OnDiskHNSWIndex(const main::ClientContext* context, IndexInfo i
               StorageManager::Get(*context)->getTable(indexInfo.tableID)->cast<NodeTable>(),
               indexInfo.columnIDs[0])},
       mm{MemoryManager::Get(*context)},
-      nodeTable{StorageManager::Get(*context)->getTable(indexInfo.tableID)->cast<NodeTable>()} {
+      nodeTable{StorageManager::Get(*context)->getTable(indexInfo.tableID)->cast<NodeTable>()},
+      quantizedEmbeddingsTable{nullptr},
+      quantizedEmbeddingsCacheState{std::make_shared<QuantizedEmbeddingsCacheState>()} {
     DASSERT(this->indexInfo.columnIDs.size() == 1);
     DASSERT(nodeTable.getColumn(this->indexInfo.columnIDs[0]).getDataType().getLogicalTypeID() ==
             common::LogicalTypeID::ARRAY);
@@ -481,6 +525,50 @@ OnDiskHNSWIndex::OnDiskHNSWIndex(const main::ClientContext* context, IndexInfo i
     const auto& hnswStorageInfo = this->storageInfo->cast<HNSWStorageInfo>();
     lowerRelTable = storageManager->getTable(hnswStorageInfo.lowerRelTableID)->ptrCast<RelTable>();
     upperRelTable = storageManager->getTable(hnswStorageInfo.upperRelTableID)->ptrCast<RelTable>();
+    if (hnswStorageInfo.quantizedEmbeddingsTableID != common::INVALID_TABLE_ID) {
+        quantizedEmbeddingsTable =
+            storageManager->getTable(hnswStorageInfo.quantizedEmbeddingsTableID)
+                ->ptrCast<NodeTable>();
+    }
+}
+
+std::shared_ptr<HNSWIndexEmbeddings> OnDiskHNSWIndex::getOrCreateQuantizedEmbeddings(
+    const main::ClientContext* context, common::offset_t numNodes) const {
+    if (config.quantization == QuantizationType::NONE) {
+        return nullptr;
+    }
+    DASSERT(quantizedEmbeddingsTable != nullptr);
+    if (config.cacheEmbeddingsColumn) {
+        auto transaction = Transaction::Get(*context);
+        auto shouldUseCache = false;
+        std::shared_ptr<CachedQuantizedColumn> cache;
+        {
+            std::lock_guard lck{quantizedEmbeddingsCacheState->mtx};
+            shouldUseCache = !quantizedEmbeddingsCacheState->dirty &&
+                             transaction->getStartTS() >= quantizedEmbeddingsCacheState->version;
+            if (shouldUseCache) {
+                if (quantizedEmbeddingsCacheState->cache == nullptr ||
+                    quantizedEmbeddingsCacheState->cache->getNumNodes() < numNodes) {
+                    quantizedEmbeddingsCacheState->cache =
+                        std::make_shared<CachedQuantizedColumn>(context,
+                            common::ArrayTypeInfo{typeInfo.getChildType().copy(),
+                                typeInfo.getNumElements()},
+                            nodeTable, *quantizedEmbeddingsTable, indexInfo.columnIDs[0],
+                            config.quantization, config.metric, numNodes);
+                }
+                cache = quantizedEmbeddingsCacheState->cache;
+            }
+        }
+        if (shouldUseCache) {
+            return std::make_shared<CachedQuantizedEmbeddings>(
+                common::ArrayTypeInfo{typeInfo.getChildType().copy(), typeInfo.getNumElements()},
+                nodeTable, std::move(cache), config.quantization);
+        }
+    }
+    return std::make_shared<TableBackedQuantizedEmbeddings>(context,
+        common::ArrayTypeInfo{typeInfo.getChildType().copy(), typeInfo.getNumElements()},
+        nodeTable, indexInfo.columnIDs[0], *quantizedEmbeddingsTable, config.quantization,
+        config.metric, numNodes);
 }
 
 std::unique_ptr<Index> OnDiskHNSWIndex::load(main::ClientContext* context, StorageManager*,
@@ -497,23 +585,28 @@ std::unique_ptr<Index> OnDiskHNSWIndex::load(main::ClientContext* context, Stora
 }
 
 std::vector<NodeWithDistance> OnDiskHNSWIndex::search(Transaction* transaction,
-    const EmbeddingHandle& queryVector, HNSWSearchState& searchState) const {
+    const EmbeddingHandle& queryVector, const EmbeddingHandle& exactQueryVector,
+    HNSWSearchState& searchState) const {
     if (isBruteForceSearch(searchState.config)) {
-        auto result = searchBruteForce(transaction, queryVector, searchState);
+        auto result = searchBruteForce(transaction, queryVector, exactQueryVector, searchState);
         result.resize(std::min<uint64_t>(result.size(), searchState.k));
         return result;
     }
     auto result = searchFromCheckpointed(transaction, queryVector, searchState);
     searchFromUnCheckpointed(transaction, queryVector, searchState, result);
     if (result.size() < searchState.k) {
-        result = searchBruteForce(transaction, queryVector, searchState);
+        result = searchBruteForce(transaction, queryVector, exactQueryVector, searchState);
+    }
+    if (searchState.exactEmbeddings != nullptr) {
+        exactRerankResults(exactQueryVector, searchState, result);
     }
     result.resize(std::min<uint64_t>(result.size(), searchState.k));
     return result;
 }
 
 std::vector<NodeWithDistance> OnDiskHNSWIndex::searchBruteForce(Transaction* transaction,
-    const EmbeddingHandle& queryVector, HNSWSearchState& searchState) const {
+    const EmbeddingHandle& approxQueryVector, const EmbeddingHandle& exactQueryVector,
+    HNSWSearchState& searchState) const {
     const auto numTotalRows = nodeTable.getNumTotalRows(transaction);
     std::vector<NodeWithDistance> result;
     result.reserve(
@@ -523,12 +616,21 @@ std::vector<NodeWithDistance> OnDiskHNSWIndex::searchBruteForce(Transaction* tra
             continue;
         }
         const auto vector =
-            searchState.embeddings->getEmbedding(offset, searchState.embeddingScanState);
+            searchState.exactEmbeddings ?
+                searchState.exactEmbeddings->getEmbedding(offset,
+                    *searchState.exactEmbeddingScanState) :
+                searchState.embeddings->getEmbedding(offset, *searchState.embeddingScanState);
         if (vector.isNull()) {
             continue;
         }
-        const auto dist = metricFunc(queryVector.getPtr(), vector.getPtr(),
-            searchState.embeddings->getDimension());
+        double dist;
+        if (searchState.exactEmbeddings != nullptr) {
+            dist = exactMetricFunc(exactQueryVector.getPtr(), vector.getPtr(),
+                searchState.embeddings->getDimension());
+        } else {
+            dist = searchState.metricFunc(approxQueryVector.getPtr(), vector.getPtr(),
+                searchState.embeddings->getDimension());
+        }
         result.emplace_back(offset, dist);
     }
     std::ranges::sort(result, [](const NodeWithDistance& l, const NodeWithDistance& r) {
@@ -565,13 +667,33 @@ void OnDiskHNSWIndex::searchFromUnCheckpointed(Transaction* transaction,
     // TODO(Guodong): Perhaps should switch to scan instead of lookup here.
     for (auto offset = hnswStorageInfo.numCheckpointedNodes; offset < numTotalRows; offset++) {
         const auto vector =
-            searchState.embeddings->getEmbedding(offset, searchState.embeddingScanState);
+            searchState.embeddings->getEmbedding(offset, *searchState.embeddingScanState);
         if (vector.isNull()) {
             continue; // Skip null or deleted values.
         }
-        auto dist = metricFunc(queryVector.getPtr(), vector.getPtr(),
+        auto dist = searchState.metricFunc(queryVector.getPtr(), vector.getPtr(),
             searchState.embeddings->getDimension());
         result.emplace_back(offset, dist);
+    }
+    std::ranges::sort(result, [](const NodeWithDistance& l, const NodeWithDistance& r) {
+        return l.distance < r.distance;
+    });
+}
+
+void OnDiskHNSWIndex::exactRerankResults(const EmbeddingHandle& exactQueryVector,
+    HNSWSearchState& searchState, std::vector<NodeWithDistance>& result) const {
+    if (config.quantization == QuantizationType::NONE || searchState.exactEmbeddings == nullptr) {
+        return;
+    }
+    for (auto& node : result) {
+        const auto vector = searchState.exactEmbeddings->getEmbedding(node.nodeOffset,
+            *searchState.exactEmbeddingScanState);
+        if (vector.isNull()) {
+            node.distance = std::numeric_limits<double_t>::max();
+            continue;
+        }
+        node.distance = exactMetricFunc(exactQueryVector.getPtr(), vector.getPtr(),
+            searchState.embeddings->getDimension());
     }
     std::ranges::sort(result, [](const NodeWithDistance& l, const NodeWithDistance& r) {
         return l.distance < r.distance;
@@ -638,16 +760,34 @@ void OnDiskHNSWIndex::commitInsert(Transaction* transaction,
     DASSERT(nodeIDVector.state->getSelSize() == dataVectors[0]->state->getSelSize());
     auto& hnswInsertState = insertState.cast<HNSWInsertState>();
     auto commitInsertScanState = std::make_unique<CommitInsertEmbeddingScanState>(dataVectors[0]);
+    std::unique_ptr<TableBackedQuantizedEmbeddings> quantizedEmbeddings;
+    if (config.quantization != QuantizationType::NONE) {
+        DASSERT(quantizedEmbeddingsTable != nullptr);
+        quantizedEmbeddings = std::make_unique<TableBackedQuantizedEmbeddings>(
+            nullptr,
+            common::ArrayTypeInfo{typeInfo.getChildType().copy(), typeInfo.getNumElements()},
+            nodeTable, indexInfo.columnIDs[0], *quantizedEmbeddingsTable, config.quantization,
+            config.metric, nodeTable.getNumTotalRows(transaction));
+    }
     for (size_t i = 0; i < nodeIDVector.state->getSelSize(); ++i) {
         auto pos = nodeIDVector.state->getSelVector()[i];
         const auto offset = nodeIDVector.readNodeOffset(pos);
         auto valuePos = dataVectors[0]->state->getSelVector()[i];
         if (dataVectors[0]->isNull(valuePos)) {
+            if (quantizedEmbeddings != nullptr) {
+                auto nullHandle = EmbeddingHandle::createNullHandle();
+                quantizedEmbeddings->writeEmbedding(transaction, offset, nullHandle);
+                markQuantizedEmbeddingsCacheDirty(transaction);
+            }
             continue; // Skip null or deleted values.
         }
         EmbeddingHandle handle{dataVectors[0]->getValue<common::list_entry_t>(valuePos).offset,
             commitInsertScanState.get()};
         insertInternal(transaction, offset, handle, hnswInsertState);
+        if (quantizedEmbeddings != nullptr) {
+            quantizedEmbeddings->writeEmbedding(transaction, offset, handle);
+            markQuantizedEmbeddingsCacheDirty(transaction);
+        }
         auto& hnswStorageInfo = storageInfo->cast<HNSWStorageInfo>();
         hnswStorageInfo.numCheckpointedNodes =
             std::max<common::offset_t>(hnswStorageInfo.numCheckpointedNodes, offset + 1);
@@ -671,7 +811,8 @@ void OnDiskHNSWIndex::finalize(main::ClientContext* context) {
     auto& hnswStorageInfo = storageInfo->cast<HNSWStorageInfo>();
     auto transaction = Transaction::Get(*context);
     const auto numTotalRows = nodeTable.getNumTotalRows(transaction);
-    if (numTotalRows == hnswStorageInfo.numCheckpointedNodes) {
+    const auto numCheckpointedNodes = hnswStorageInfo.numCheckpointedNodes;
+    if (numTotalRows == numCheckpointedNodes) {
         return;
     }
     auto [nodeTableEntry, upperRelTableEntry, lowerRelTableEntry] =
@@ -681,9 +822,21 @@ void OnDiskHNSWIndex::finalize(main::ClientContext* context) {
         indexInfo.columnIDs[0], embeddingDim);
     const auto insertState = std::make_unique<HNSWInsertState>(context, nodeTableEntry,
         upperRelTableEntry, lowerRelTableEntry, nodeTable, indexInfo.columnIDs[0], config.ml);
+    std::unique_ptr<TableBackedQuantizedEmbeddings> quantizedEmbeddings;
+    if (config.quantization != QuantizationType::NONE) {
+        DASSERT(quantizedEmbeddingsTable != nullptr);
+        quantizedEmbeddings = std::make_unique<TableBackedQuantizedEmbeddings>(context,
+            common::ArrayTypeInfo{typeInfo.getChildType().copy(), typeInfo.getNumElements()},
+            nodeTable, indexInfo.columnIDs[0], *quantizedEmbeddingsTable, config.quantization,
+            config.metric, numTotalRows);
+    }
     // TODO(Guodong): Perhaps should switch to scan instead of lookup here.
-    for (auto offset = hnswStorageInfo.numCheckpointedNodes; offset < numTotalRows; offset++) {
+    for (auto offset = numCheckpointedNodes; offset < numTotalRows; offset++) {
         const auto vector = insertState->searchState.embeddings->getEmbedding(offset, *scanState);
+        if (quantizedEmbeddings != nullptr) {
+            quantizedEmbeddings->writeEmbedding(transaction, offset, vector);
+            markQuantizedEmbeddingsCacheDirty(transaction);
+        }
         if (vector.isNull()) {
             continue;
         }
@@ -698,12 +851,51 @@ void OnDiskHNSWIndex::finalize(main::ClientContext* context) {
     hnswStorageInfo.numCheckpointedNodes = numTotalRows;
 }
 
+void OnDiskHNSWIndex::markQuantizedEmbeddingsCacheDirty(Transaction* transaction) const {
+    if (quantizedEmbeddingsTable == nullptr || !config.cacheEmbeddingsColumn) {
+        return;
+    }
+    const auto transactionID = transaction->getID();
+    auto shouldRegisterCallbacks = false;
+    {
+        std::lock_guard lck{quantizedEmbeddingsCacheState->mtx};
+        quantizedEmbeddingsCacheState->dirty = true;
+        shouldRegisterCallbacks =
+            quantizedEmbeddingsCacheState->dirtyTransactions.insert(transactionID).second;
+    }
+    if (!shouldRegisterCallbacks) {
+        return;
+    }
+    const auto cacheState = quantizedEmbeddingsCacheState;
+    transaction->pushCommitCallback([cacheState, transactionID](Transaction& transaction) {
+        std::lock_guard lck{cacheState->mtx};
+        cacheState->cache.reset();
+        // Commit callbacks are serialized by mtx but may run out of commit timestamp order.
+        // Keep the watermark monotonic; dirty remains set until every writer has finished.
+        cacheState->version = std::max(cacheState->version, transaction.getCommitTS());
+        cacheState->dirtyTransactions.erase(transactionID);
+        cacheState->dirty = !cacheState->dirtyTransactions.empty();
+    });
+    transaction->pushRollbackCallback([cacheState, transactionID](Transaction&) {
+        std::lock_guard lck{cacheState->mtx};
+        cacheState->dirtyTransactions.erase(transactionID);
+        cacheState->dirty = !cacheState->dirtyTransactions.empty();
+    });
+}
+
 void OnDiskHNSWIndex::checkpoint(main::ClientContext* context,
     storage::PageAllocator& pageAllocator, [[maybe_unused]] storage::ShadowFile& shadowFile) {
+    const auto& hnswStorageInfo = storageInfo->cast<HNSWStorageInfo>();
     auto [nodeTableEntry, upperRelTableEntry, lowerRelTableEntry] = getIndexTableCatalogEntries(
         catalog::Catalog::Get(*context), &DUMMY_CHECKPOINT_TRANSACTION, indexInfo);
     upperRelTable->checkpoint(context, upperRelTableEntry, pageAllocator);
     lowerRelTable->checkpoint(context, lowerRelTableEntry, pageAllocator);
+    if (hnswStorageInfo.quantizedEmbeddingsTableID != common::INVALID_TABLE_ID) {
+        DASSERT(quantizedEmbeddingsTable != nullptr);
+        auto quantizedEmbeddingsTableEntry = catalog::Catalog::Get(*context)->getTableCatalogEntry(
+            &DUMMY_CHECKPOINT_TRANSACTION, hnswStorageInfo.quantizedEmbeddingsTableID);
+        quantizedEmbeddingsTable->checkpoint(context, quantizedEmbeddingsTableEntry, pageAllocator);
+    }
 }
 
 void OnDiskHNSWIndex::insertInternal(Transaction* transaction, common::offset_t offset,
@@ -730,11 +922,11 @@ common::offset_t OnDiskHNSWIndex::searchNNInUpperLayer(const EmbeddingHandle& qu
     double lastMinDist = std::numeric_limits<double>::max();
     const auto& embeddings = searchState.embeddings;
     const auto currNodeVector =
-        embeddings->getEmbedding(currentNodeOffset, searchState.embeddingScanState);
+        embeddings->getEmbedding(currentNodeOffset, *searchState.embeddingScanState);
     double minDist = 0.0;
     if (!currNodeVector.isNull()) {
-        minDist =
-            metricFunc(queryVector.getPtr(), currNodeVector.getPtr(), embeddings->getDimension());
+        minDist = searchState.metricFunc(queryVector.getPtr(), currNodeVector.getPtr(),
+            embeddings->getDimension());
     }
     const auto scanState = searchState.upperGraph->prepareRelScan(*searchState.upperRelTableEntry,
         hnswStorageInfo.upperRelTableID, indexInfo.tableID, {} /* relProperties */);
@@ -746,10 +938,10 @@ common::offset_t OnDiskHNSWIndex::searchNNInUpperLayer(const EmbeddingHandle& qu
             neighborChunk.forEach([&](auto neighbors, auto, auto i) {
                 auto neighbor = neighbors[i];
                 const auto nbrVector =
-                    embeddings->getEmbedding(neighbor.offset, searchState.embeddingScanState);
+                    embeddings->getEmbedding(neighbor.offset, *searchState.embeddingScanState);
                 if (!nbrVector.isNull()) {
-                    const auto dist = metricFunc(queryVector.getPtr(), nbrVector.getPtr(),
-                        embeddings->getDimension());
+                    const auto dist = searchState.metricFunc(queryVector.getPtr(),
+                        nbrVector.getPtr(), embeddings->getDimension());
                     if (dist < minDist) {
                         minDist = dist;
                         currentNodeOffset = neighbor.offset;
@@ -790,9 +982,9 @@ std::vector<NodeWithDistance> OnDiskHNSWIndex::searchKNNInLayer(Transaction* tra
     initLayerSearchState(transaction, searchState, isUpperLayer);
 
     const auto entryVector =
-        searchState.embeddings->getEmbedding(entryNode, searchState.embeddingScanState);
+        searchState.embeddings->getEmbedding(entryNode, *searchState.embeddingScanState);
     if (!entryVector.isNull()) {
-        auto dist = metricFunc(queryVector.getPtr(), entryVector.getPtr(),
+        auto dist = searchState.metricFunc(queryVector.getPtr(), entryVector.getPtr(),
             searchState.embeddings->getDimension());
         candidates.push({entryNode, dist});
         if (searchState.isMasked(entryNode)) {
@@ -890,12 +1082,12 @@ void OnDiskHNSWIndex::initSearchCandidates(const EmbeddingHandle& queryVector,
             }
             searchState.visited.add(candidate);
             const auto candidateVector =
-                searchState.embeddings->getEmbedding(candidate, searchState.embeddingScanState);
+                searchState.embeddings->getEmbedding(candidate, *searchState.embeddingScanState);
             if (candidateVector.isNull()) {
                 continue;
             }
-            auto candidateDist = metricFunc(queryVector.getPtr(), candidateVector.getPtr(),
-                searchState.embeddings->getDimension());
+            auto candidateDist = searchState.metricFunc(queryVector.getPtr(),
+                candidateVector.getPtr(), searchState.embeddings->getDimension());
             candidates.push({candidate, candidateDist});
             results.push({candidate, candidateDist});
         }
@@ -929,9 +1121,10 @@ void OnDiskHNSWIndex::oneHopSearch(const EmbeddingHandle& queryVector,
             const auto nbr = neighbors[i];
             if (!searchState.visited.contains(nbr.offset) && searchState.isMasked(nbr.offset)) {
                 const auto nbrVector = searchState.embeddings->getEmbedding(nbr.offset,
-                    searchState.embeddingScanState);
+                    *searchState.embeddingScanState);
                 processNbrNodeInKNNSearch(queryVector, nbrVector, nbr.offset, searchState.ef,
-                    searchState.visited, metricFunc, searchState.embeddings->getDimension(),
+                    searchState.visited, searchState.metricFunc,
+                    searchState.embeddings->getDimension(),
                     candidates, results);
             }
         });
@@ -954,9 +1147,10 @@ void OnDiskHNSWIndex::navixFilteredSearch(const EmbeddingHandle& queryVector,
         for (const auto nbr : firstHopNbrs) {
             if (!searchState.visited.contains(nbr) && searchState.isMasked(nbr)) {
                 const auto nbrVector =
-                    searchState.embeddings->getEmbedding(nbr, searchState.embeddingScanState);
+                    searchState.embeddings->getEmbedding(nbr, *searchState.embeddingScanState);
                 processNbrNodeInKNNSearch(queryVector, nbrVector, nbr, searchState.ef,
-                    searchState.visited, metricFunc, searchState.embeddings->getDimension(),
+                    searchState.visited, searchState.metricFunc,
+                    searchState.embeddings->getDimension(),
                     candidates, results);
             }
         }
@@ -994,10 +1188,10 @@ void OnDiskHNSWIndex::randomFilteredSearch(const EmbeddingHandle& queryVector,
         }
         if (!searchState.visited.contains(nbr) && searchState.isMasked(nbr)) {
             const auto nbrVector =
-                searchState.embeddings->getEmbedding(nbr, searchState.embeddingScanState);
+                searchState.embeddings->getEmbedding(nbr, *searchState.embeddingScanState);
             processNbrNodeInKNNSearch(queryVector, nbrVector, nbr, searchState.ef,
-                searchState.visited, metricFunc, searchState.embeddings->getDimension(), candidates,
-                results);
+                searchState.visited, searchState.metricFunc,
+                searchState.embeddings->getDimension(), candidates, results);
         }
         nbrsToExplore.push_back(nbr);
     }
@@ -1019,9 +1213,10 @@ void OnDiskHNSWIndex::randomFilteredSearch(const EmbeddingHandle& queryVector,
                 }
                 if (!searchState.visited.contains(nbr) && searchState.isMasked(nbr)) {
                     const auto nbrVector =
-                        searchState.embeddings->getEmbedding(nbr, searchState.embeddingScanState);
+                        searchState.embeddings->getEmbedding(nbr, *searchState.embeddingScanState);
                     processNbrNodeInKNNSearch(queryVector, nbrVector, nbr, searchState.ef,
-                        searchState.visited, metricFunc, searchState.embeddings->getDimension(),
+                        searchState.visited, searchState.metricFunc,
+                        searchState.embeddings->getDimension(),
                         candidates, results);
                 }
             });
@@ -1049,10 +1244,10 @@ min_node_priority_queue_t OnDiskHNSWIndex::collectFirstHopNbrsDirected(
             const auto neighbor = neighbors[i];
             auto nbrOffset = neighbor.offset;
             if (!searchState.visited.contains(nbrOffset)) {
-                const auto nbrVector =
-                    searchState.embeddings->getEmbedding(nbrOffset, searchState.embeddingScanState);
+                const auto nbrVector = searchState.embeddings->getEmbedding(nbrOffset,
+                    *searchState.embeddingScanState);
                 if (!nbrVector.isNull()) {
-                    auto dist = metricFunc(queryVector.getPtr(), nbrVector.getPtr(),
+                    auto dist = searchState.metricFunc(queryVector.getPtr(), nbrVector.getPtr(),
                         searchState.embeddings->getDimension());
                     candidatesForSecHop.push({nbrOffset, dist});
                     if (searchState.isMasked(nbrOffset)) {
@@ -1081,9 +1276,9 @@ min_node_priority_queue_t OnDiskHNSWIndex::collectFirstHopNbrsDirected(
     for (const auto nbrOffset : firstHopNbrs) {
         if (!searchState.visited.contains(nbrOffset)) {
             const auto nbrVector =
-                searchState.embeddings->getEmbedding(nbrOffset, searchState.embeddingScanState);
+                searchState.embeddings->getEmbedding(nbrOffset, *searchState.embeddingScanState);
             if (!nbrVector.isNull()) {
-                auto dist = metricFunc(queryVector.getPtr(), nbrVector.getPtr(),
+                auto dist = searchState.metricFunc(queryVector.getPtr(), nbrVector.getPtr(),
                     searchState.embeddings->getDimension());
                 candidatesForSecHop.push({nbrOffset, dist});
                 if (searchState.isMasked(nbrOffset)) {
@@ -1127,9 +1322,10 @@ common::offset_vec_t OnDiskHNSWIndex::collectFirstHopNbrsBlind(const EmbeddingHa
                 if (searchState.isMasked(nbr.offset)) {
                     numVisitedNbrs++;
                     auto nbrVector = searchState.embeddings->getEmbedding(nbr.offset,
-                        searchState.embeddingScanState);
+                        *searchState.embeddingScanState);
                     processNbrNodeInKNNSearch(queryVector, nbrVector, nbr.offset, searchState.ef,
-                        searchState.visited, metricFunc, searchState.embeddings->getDimension(),
+                        searchState.visited, searchState.metricFunc,
+                        searchState.embeddings->getDimension(),
                         candidates, results);
                 }
             }
@@ -1150,9 +1346,10 @@ common::offset_vec_t OnDiskHNSWIndex::collectFirstHopNbrsBlind(const EmbeddingHa
             if (searchState.isMasked(nbr)) {
                 numVisitedNbrs++;
                 auto nbrVector =
-                    searchState.embeddings->getEmbedding(nbr, searchState.embeddingScanState);
+                    searchState.embeddings->getEmbedding(nbr, *searchState.embeddingScanState);
                 processNbrNodeInKNNSearch(queryVector, nbrVector, nbr, searchState.ef,
-                    searchState.visited, metricFunc, searchState.embeddings->getDimension(),
+                    searchState.visited, searchState.metricFunc,
+                    searchState.embeddings->getDimension(),
                     candidates, results);
             }
         }
@@ -1227,7 +1424,8 @@ void OnDiskHNSWIndex::createRels(Transaction* transaction, common::offset_t offs
 void OnDiskHNSWIndex::shrinkForNode(Transaction* transaction, common::offset_t offset,
     bool isUpperLayer, common::length_t maxDegree, HNSWInsertState& insertState) {
     const auto& embeddings = *insertState.searchState.embeddings;
-    auto& embeddingScanState = insertState.searchState.embeddingScanState;
+    const auto approxMetricFunc = embeddings.getMetricFunction(config.metric);
+    auto& embeddingScanState = *insertState.searchState.embeddingScanState;
     const auto vector = embeddings.getEmbedding(offset, embeddingScanState);
     DASSERT(!vector.isNull());
     const auto& searchState = insertState.searchState;
@@ -1258,8 +1456,8 @@ void OnDiskHNSWIndex::shrinkForNode(Transaction* transaction, common::offset_t o
             if (nbrVectors[i].isNull()) {
                 continue;
             }
-            auto dist =
-                metricFunc(vector.getPtr(), nbrVectors[i].getPtr(), embeddings.getDimension());
+            auto dist = approxMetricFunc(vector.getPtr(), nbrVectors[i].getPtr(),
+                embeddings.getDimension());
             nbrs.emplace_back(nbrOffsets[i], dist, std::move(nbrVectors[i]));
         }
     }
@@ -1280,8 +1478,8 @@ void OnDiskHNSWIndex::shrinkForNode(Transaction* transaction, common::offset_t o
         for (const auto j : keptNbrs) {
             DASSERT(checkEmbeddingValidity(nbrs, i, embeddings, embeddingScanState));
             DASSERT(checkEmbeddingValidity(nbrs, j, embeddings, embeddingScanState));
-            const auto dist = metricFunc(nbrs[i].embedding.getPtr(), nbrs[j].embedding.getPtr(),
-                embeddings.getDimension());
+            const auto dist = approxMetricFunc(nbrs[i].embedding.getPtr(),
+                nbrs[j].embedding.getPtr(), embeddings.getDimension());
             if (config.alpha * dist < nbrs[i].getDist()) {
                 keepNbr = false;
                 break;
@@ -1347,9 +1545,10 @@ bool OnDiskHNSWIndex::searchOverSecondHopNbrs(const EmbeddingHandle& queryVector
             auto nbr = neighbors[i];
             if (!searchState.visited.contains(nbr.offset) && searchState.isMasked(nbr.offset)) {
                 auto nbrVector = searchState.embeddings->getEmbedding(nbr.offset,
-                    searchState.embeddingScanState);
+                    *searchState.embeddingScanState);
                 processNbrNodeInKNNSearch(queryVector, nbrVector, nbr.offset, ef,
-                    searchState.visited, metricFunc, searchState.embeddings->getDimension(),
+                    searchState.visited, searchState.metricFunc,
+                    searchState.embeddings->getDimension(),
                     candidates, results);
                 numVisitedNbrs++;
                 if (numVisitedNbrs >= config.ml) {

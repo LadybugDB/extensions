@@ -1,5 +1,6 @@
 #include "catalog/catalog.h"
 #include "catalog/catalog_entry/node_table_catalog_entry.h"
+#include "catalog/hnsw_index_catalog_entry.h"
 #include "common/exception/binder.h"
 #include "function/hnsw_index_functions.h"
 #include "function/table/bind_data.h"
@@ -18,15 +19,18 @@ namespace vector_extension {
 struct DropHNSWIndexBindData final : TableFuncBindData {
     catalog::NodeTableCatalogEntry* tableEntry;
     std::string indexName;
+    bool hasQuantizedEmbeddingsTable;
     bool skipAfterBind;
 
     DropHNSWIndexBindData(catalog::NodeTableCatalogEntry* tableEntry, std::string indexName,
-        bool skipAfterBind = false)
+        bool hasQuantizedEmbeddingsTable = false, bool skipAfterBind = false)
         : TableFuncBindData{0}, tableEntry{tableEntry}, indexName{std::move(indexName)},
+          hasQuantizedEmbeddingsTable{hasQuantizedEmbeddingsTable},
           skipAfterBind{skipAfterBind} {}
 
     std::unique_ptr<TableFuncBindData> copy() const override {
-        return std::make_unique<DropHNSWIndexBindData>(tableEntry, indexName, skipAfterBind);
+        return std::make_unique<DropHNSWIndexBindData>(tableEntry, indexName,
+            hasQuantizedEmbeddingsTable, skipAfterBind);
     }
 };
 
@@ -38,9 +42,15 @@ static std::unique_ptr<TableFuncBindData> bindFunc(main::ClientContext* context,
     const auto nodeTableEntry = HNSWIndexUtils::bindNodeTable(*context, tableName);
     if (!HNSWIndexUtils::validateIndexExistence(*context, nodeTableEntry, indexName,
             HNSWIndexUtils::IndexOperation::DROP, config.conflictAction)) {
-        return std::make_unique<DropHNSWIndexBindData>(nullptr, indexName, true);
+        return std::make_unique<DropHNSWIndexBindData>(nullptr, indexName, false, true);
     }
-    return std::make_unique<DropHNSWIndexBindData>(nodeTableEntry, indexName);
+    auto transaction = transaction::Transaction::Get(*context);
+    auto indexEntry =
+        catalog::Catalog::Get(*context)->getIndex(transaction, nodeTableEntry->getTableID(),
+            indexName);
+    const auto auxInfo = indexEntry->getAuxInfo().cast<HNSWIndexAuxInfo>();
+    return std::make_unique<DropHNSWIndexBindData>(nodeTableEntry, indexName,
+        auxInfo.config.quantization != QuantizationType::NONE);
 }
 
 static common::offset_t internalTableFunc(const TableFuncInput& input, TableFuncOutput&) {
@@ -74,6 +84,11 @@ static std::string dropHNSWIndexTables(main::ClientContext& context,
         HNSWIndexUtils::getUpperGraphTableName(nodeTableID, dropHNSWIndexBindData->indexName));
     query += std::format("DROP TABLE {};",
         HNSWIndexUtils::getLowerGraphTableName(nodeTableID, dropHNSWIndexBindData->indexName));
+    if (dropHNSWIndexBindData->hasQuantizedEmbeddingsTable) {
+        query += std::format("DROP TABLE {};",
+            HNSWIndexUtils::getQuantizedEmbeddingsTableName(nodeTableID,
+                dropHNSWIndexBindData->indexName));
+    }
     if (requireNewTransaction) {
         query += "COMMIT;";
     }

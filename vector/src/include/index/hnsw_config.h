@@ -11,6 +11,8 @@ namespace vector_extension {
 
 enum class MetricType : uint8_t { Cosine = 0, L2 = 1, L2_SQUARE = 2, DotProduct = 3 };
 
+enum class QuantizationType : uint8_t { NONE = 0, SQ8 = 1, SQ16 = 2 };
+
 // We use this ratio to calculate the max degree of the upper/lower graph based on the user provided
 // max degree value for the upper/lower graph, respectively.
 static constexpr double DEFAULT_DEGREE_THRESHOLD_RATIO = 1.25;
@@ -80,6 +82,22 @@ struct CacheEmbeddings {
     static constexpr bool DEFAULT_VALUE = true;
 };
 
+struct Quantization {
+    static constexpr const char* NAME = "quantization";
+    static constexpr common::LogicalTypeID TYPE = common::LogicalTypeID::STRING;
+    static constexpr QuantizationType DEFAULT_VALUE = QuantizationType::NONE;
+
+    static void validate(const std::string& value);
+};
+
+struct UseFullPrecisionRerank {
+    static constexpr const char* NAME = "use_full_precision_rerank";
+    static constexpr common::LogicalTypeID TYPE = common::LogicalTypeID::BOOL;
+    static constexpr bool DEFAULT_VALUE = false;
+
+    static void validate(bool value);
+};
+
 struct SkipIfExists {
     static constexpr const char* NAME = "skip_if_exists";
     static constexpr common::LogicalTypeID TYPE = common::LogicalTypeID::BOOL;
@@ -136,6 +154,8 @@ struct HNSWIndexConfig {
     double alpha = Alpha::DEFAULT_VALUE;
     int64_t efc = Efc::DEFAULT_VALUE;
     bool cacheEmbeddingsColumn = CacheEmbeddings::DEFAULT_VALUE;
+    QuantizationType quantization = Quantization::DEFAULT_VALUE;
+    bool storeFullPrecisionEmbeddings = UseFullPrecisionRerank::DEFAULT_VALUE;
     common::ConflictAction conflictAction = SkipIfExists::DEFAULT_VALUE;
 
     HNSWIndexConfig() = default;
@@ -149,14 +169,18 @@ struct HNSWIndexConfig {
     static HNSWIndexConfig deserialize(common::Deserializer& deSer);
 
     static std::string metricToString(MetricType metric);
+    static std::string quantizationToString(QuantizationType quantization);
 
 private:
     HNSWIndexConfig(const HNSWIndexConfig& other)
         : mu{other.mu}, ml{other.ml}, pu{other.pu}, metric{other.metric}, alpha{other.alpha},
           efc{other.efc}, cacheEmbeddingsColumn(other.cacheEmbeddingsColumn),
+          quantization{other.quantization},
+          storeFullPrecisionEmbeddings{other.storeFullPrecisionEmbeddings},
           conflictAction(other.conflictAction) {}
 
     static MetricType getMetricType(const std::string& metricName);
+    static QuantizationType getQuantizationType(const std::string& quantizationName);
 };
 
 struct DropHNSWConfig {
