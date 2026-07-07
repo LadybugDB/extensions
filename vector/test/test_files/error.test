@@ -67,6 +67,12 @@ Binder exception: Alpha must be a double greater than or equal to 1.
 -STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'e_hnsw_index', 'vec', metric := 'invalid');
 ---- error
 Binder exception: Metric must be one of COSINE, L2, L2SQ, DOTPRODUCT or IP.
+-STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'e_hnsw_index', 'vec', quantization := 'invalid');
+---- error
+Binder exception: Quantization must be one of NONE, SQ8 or SQ16.
+-STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'e_hnsw_index', 'vec', metric := 'dotproduct', quantization := 'sq8');
+---- error
+Binder exception: Quantization currently supports COSINE, L2 and L2SQ metrics only.
 -STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'e_hnsw_index', 'vec');
 ---- ok
 -STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'e_hnsw_index', CAST([0.0459,0.0439,0.0251,0.1,0.2,0.3,0.4,0.4], 'FLOAT[8]'), 10, unknown_param := 1) RETURN *;

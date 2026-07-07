@@ -40,9 +40,20 @@ std::string HNSWIndexAuxInfo::toCypher(const IndexCatalogEntry& indexEntry,
     auto propertyName = tableEntry->getProperty(indexEntry.getPropertyIDs()[0]).getName();
     auto metricName = HNSWIndexConfig::metricToString(config.metric);
     cypher += std::format("CALL CREATE_VECTOR_INDEX('{}', '{}', '{}', mu := {}, ml := {}, "
-                          "pu := {}, metric := '{}', alpha := {}, efc := {});",
+                          "pu := {}, metric := '{}', alpha := {}, efc := {}",
         tableName, indexEntry.getIndexName(), propertyName, config.mu, config.ml, config.pu,
         metricName, config.alpha, config.efc);
+    if (!config.cacheEmbeddingsColumn) {
+        cypher += ", cache_embeddings := false";
+    }
+    if (config.quantization != QuantizationType::NONE) {
+        cypher += std::format(", quantization := '{}'",
+            HNSWIndexConfig::quantizationToString(config.quantization));
+    }
+    if (config.storeFullPrecisionEmbeddings) {
+        cypher += ", use_full_precision_rerank := true";
+    }
+    cypher += ");";
     return cypher;
 }
 
