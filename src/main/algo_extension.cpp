@@ -1,0 +1,50 @@
+
+#include "main/algo_extension.h"
+
+#include "function/algo_function.h"
+#include "function/leiden.h"
+#include "main/client_context.h"
+
+namespace lbug {
+namespace algo_extension {
+
+using namespace extension;
+
+void AlgoExtension::load(main::ClientContext* context) {
+    auto& db = *context->getDatabase();
+    ExtensionUtils::addTableFunc<SCCFunction>(db);
+    ExtensionUtils::addTableFuncAlias<SCCAliasFunction>(db);
+    ExtensionUtils::addTableFunc<SCCKosarajuFunction>(db);
+    ExtensionUtils::addTableFuncAlias<SCCKosarajuAliasFunction>(db);
+    ExtensionUtils::addTableFunc<WeaklyConnectedComponentsFunction>(db);
+    ExtensionUtils::addTableFuncAlias<WeaklyConnectedComponentsAliasFunction>(db);
+    ExtensionUtils::addTableFunc<PageRankFunction>(db);
+    ExtensionUtils::addTableFuncAlias<PageRankAliasFunction>(db);
+    ExtensionUtils::addTableFunc<KCoreDecompositionFunction>(db);
+    ExtensionUtils::addTableFuncAlias<KCoreDecompositionAliasFunction>(db);
+    ExtensionUtils::addTableFunc<LouvainFunction>(db);
+    ExtensionUtils::addTableFunc<LeidenFunction>(db);
+    ExtensionUtils::addTableFuncAlias<LeidenAliasFunction>(db);
+    ExtensionUtils::addTableFunc<SpanningForest>(db);
+    ExtensionUtils::addTableFuncAlias<SpanningForestAliasFunction>(db);
+}
+
+} // namespace algo_extension
+} // namespace lbug
+
+#if defined(BUILD_DYNAMIC_LOAD)
+extern "C" {
+#if defined(_WIN32)
+#define INIT_EXPORT __declspec(dllexport)
+#else
+#define INIT_EXPORT __attribute__((visibility("default")))
+#endif
+INIT_EXPORT void init(lbug::main::ClientContext* context) {
+    lbug::algo_extension::AlgoExtension::load(context);
+}
+
+INIT_EXPORT const char* name() {
+    return lbug::algo_extension::AlgoExtension::EXTENSION_NAME;
+}
+}
+#endif
