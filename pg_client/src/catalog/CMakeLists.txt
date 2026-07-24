@@ -1,0 +1,2 @@
+add_library(lbug_pg_client_catalog OBJECT pg_client_catalog.cpp)
+add_dependencies(lbug_pg_client_catalog lbug_common lbug_catalog)
