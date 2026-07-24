@@ -221,9 +221,10 @@ void PgClientCatalog::createForeignRelTable(const std::string& tableName) {
         auto refTable = row.cells[1].value;
         auto lowerCol = colName;
         common::StringUtils::toLower(lowerCol);
-        if (lowerCol.rfind("src", 0) == 0) {
+        if (lowerCol.rfind("src", 0) == 0 || lowerCol.rfind("from", 0) == 0) {
             srcTableName = refTable;
-        } else if (lowerCol.rfind("dst", 0) == 0 || lowerCol.rfind("dest", 0) == 0) {
+        } else if (lowerCol.rfind("dst", 0) == 0 || lowerCol.rfind("dest", 0) == 0 ||
+                   lowerCol.rfind("to", 0) == 0) {
             dstTableName = refTable;
         }
     }
@@ -261,6 +262,9 @@ void PgClientCatalog::createForeignRelTable(const std::string& tableName) {
         return;
     }
 
+    common::table_id_t srcTableID = srcEntry->getTableID();
+    common::table_id_t dstTableID = dstEntry->getTableID();
+
     // Build scan function
     auto query = std::format("SELECT {{}} FROM \"{}\".\"{}\"",
         defaultSchemaName, tableName);
@@ -278,21 +282,49 @@ void PgClientCatalog::createForeignRelTable(const std::string& tableName) {
     }
     tables->createEntry(&transaction::DUMMY_TRANSACTION, std::move(foreignTableEntry));
 
-    // Register a shadow node entry so the table is discoverable via the main catalog
+    // Create bind data for the scan function (empty columns — populated at query time)
+    binder::expression_vector emptyColumns;
+    auto bindData = std::make_shared<PgClientScanBindData>(query, columnNames,
+        connector, emptyColumns);
+
+    // Create RelGroupCatalogEntry in the main catalog so MATCH ... -[...]-> ...
+    // queries can find the rel table. ForeignRelTable (created via
+    // StorageManager::createTable) is responsible for executing the scan using
+    // the scan function / bind data; the connector is mutex-guarded so the
+    // underlying libpq connection is safe across parallel hash-join workers,
+    // and ForeignRelTable now owns the shared state and serializes offset
+    // advancement with its own mutex, matching the morsel-driven model.
     auto foreignDatabaseName = std::format("{}.{}", defaultSchemaName, tableName);
 
-    // For rel tables, create a shadow node entry (not RelGroupCatalogEntry) to avoid
-    // the ForeignRelTable infrastructure which has thread-safety issues with libpq.
-    auto mainTableEntry = std::make_unique<catalog::NodeTableCatalogEntry>(
-        tableName, columnInfo[0].name, foreignDatabaseName, catalog::ShadowTag{});
+    std::vector<catalog::RelTableCatalogInfo> relTableInfos;
+    common::oid_t relOID = tables->getNextOID();
+    relTableInfos.emplace_back(
+        catalog::NodeTableIDPair{srcTableID, dstTableID}, relOID,
+        common::RelMultiplicity::MANY, common::RelMultiplicity::MANY);
+
+    auto relGroupEntry =
+        std::make_unique<catalog::RelGroupCatalogEntry>(tableName,
+            common::RelMultiplicity::MANY, common::RelMultiplicity::MANY,
+            common::ExtendDirection::BOTH, std::move(relTableInfos),
+            "", // storage
+            common::StorageFormat::NONE, scanFunc, bindData,
+            std::move(foreignDatabaseName));
 
     for (auto& def : propertyDefs) {
-        mainTableEntry->addProperty(def);
+        relGroupEntry->addProperty(def);
     }
-    mainTableEntry->setReferencedEntry(attachedEntryPtr);
-    context_->getDatabase()->getCatalog()->addTableEntry(std::move(mainTableEntry));
 
-    // Don't call createTable() for rel-backed shadow entries to avoid ForeignRelTable issues
+    context_->getDatabase()->getCatalog()->addTableEntry(std::move(relGroupEntry));
+
+    // Set up storage for the rel table so the planner can find it. This
+    // instantiates a ForeignRelTable, which lazily creates the scan function's
+    // shared state on the first initScanState and shares it across all
+    // worker threads (morsel-driven parallelism).
+    auto mainEntry = context_->getDatabase()->getCatalog()->getTableCatalogEntry(
+        &transaction::DUMMY_TRANSACTION, tableName);
+    if (mainEntry) {
+        storage::StorageManager::Get(*context_)->createTable(mainEntry);
+    }
 }
 
 std::vector<PgClientColumnInfo> PgClientCatalog::getTableColumnInfo(

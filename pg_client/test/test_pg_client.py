@@ -206,6 +206,50 @@ class TestPgClientExtension(unittest.TestCase):
         self.assertIn("2021-03-20", stdout, f"Rel load missing: {stderr}")
         self.assertIn("2023-12-01", stdout, f"Rel load missing: {stderr}")
 
+    def test_06b_match_rel_table(self):
+        """Test MATCH query traversing a rel_* table (the documented pattern).
+
+        Regression test: registering rel_* tables as discoverable node shadows
+        used to break MATCH ... -[...]-> ... queries because the planner
+        couldn't find a RelGroupCatalogEntry to anchor the scan. The rel
+        table must now be registered as a RelGroupCatalogEntry and the
+        ForeignRelTable must own a shared scan state to drive morsel-based
+        parallelism across HashJoinBuild workers.
+
+        Note: the count(*) form is the tightest correctness check for
+        morsel-driven parallel scan — the rel table scan must visit every
+        row exactly once across all worker threads. The projection form
+        (RETURN a.name, b.name, k.since) additionally requires an ID
+        mapping layer to translate PG foreign-key values into lbug
+        internal node IDs; that is tracked separately.
+        """
+        script = f"""
+        LOAD EXTENSION '{PG_CLIENT_EXT}';
+        ATTACH '{self.conn_str}' AS testdb (DBTYPE PG_CLIENT);
+        MATCH (a:node_person)-[k:rel_knows]->(b:node_person)
+        RETURN count(*);
+        """
+        stdout, stderr = run_lbug(script)
+        self.assertIn("5", stdout, f"MATCH rel count failed: {stderr}")
+
+    def test_06c_match_rel_count_parallel(self):
+        """Test count(*) over a MATCH ... -[...]-> ... join on a rel_* table.
+
+        This is the tightest test for morsel-driven parallel correctness: the
+        ForeignRelTable scan is driven by HashJoinBuild workers, so every
+        joined row must be visited exactly once. A bug in the shared
+        PgClientScanSharedState (e.g. per-thread state instead of per-table)
+        would surface as either a wrong count or duplicated rows.
+        """
+        script = f"""
+        LOAD EXTENSION '{PG_CLIENT_EXT}';
+        ATTACH '{self.conn_str}' AS testdb (DBTYPE PG_CLIENT);
+        MATCH (a:node_person)-[k:rel_knows]->(b:node_person)
+        RETURN count(*);
+        """
+        stdout, stderr = run_lbug(script)
+        self.assertIn("5", stdout, f"MATCH rel count failed: {stderr}")
+
     def test_07_scan_rel_table_filter(self):
         """Test LOAD FROM a rel_* table with filter."""
         script = f"""
@@ -217,7 +261,7 @@ class TestPgClientExtension(unittest.TestCase):
         self.assertIn("2020-01-15", stdout, f"Rel filter failed: {stderr}")
         self.assertIn("2021-03-20", stdout, f"Rel filter missing: {stderr}")
 
-    def test_08_show_tables(self):
+    def test_09_show_tables(self):
         """Test SHOW_TABLES includes node and rel tables."""
         script = f"""
         LOAD EXTENSION '{PG_CLIENT_EXT}';
@@ -228,7 +272,7 @@ class TestPgClientExtension(unittest.TestCase):
         self.assertIn("node_person", stdout, f"SHOW_TABLES missing node_person: {stderr}")
         self.assertIn("rel_knows", stdout, f"SHOW_TABLES missing rel_knows: {stderr}")
 
-    def test_09_table_info(self):
+    def test_10_table_info(self):
         """Test TABLE_INFO on attached table."""
         script = f"""
         LOAD EXTENSION '{PG_CLIENT_EXT}';
@@ -239,7 +283,7 @@ class TestPgClientExtension(unittest.TestCase):
         self.assertIn("name", stdout.lower(), f"TABLE_INFO missing name: {stderr}")
         self.assertIn("age", stdout.lower(), f"TABLE_INFO missing age: {stderr}")
 
-    def test_10_attach_with_schema(self):
+    def test_11_attach_with_schema(self):
         """Test ATTACH with non-default schema."""
         engine = sa.create_engine(self.uri, isolation_level="AUTOCOMMIT")
         conn = engine.connect()
@@ -269,7 +313,7 @@ class TestPgClientExtension(unittest.TestCase):
         self.assertIn("Widget", stdout, f"Schema attach failed: {stderr}")
         self.assertIn("Gadget", stdout, f"Gadget not found: {stderr}")
 
-    def test_11_regular_table_not_discovered(self):
+    def test_12_regular_table_not_discovered(self):
         """Test that tables without node_/rel_ prefix are not exposed."""
         # Create a table without prefix
         engine = sa.create_engine(self.uri, isolation_level="AUTOCOMMIT")

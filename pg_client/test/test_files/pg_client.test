@@ -72,6 +72,16 @@ Alice|30
 Eve|32
 Charlie|35
 
+-CASE MatchOnRelTable
+-SKIP_FSM_LEAK_CHECK
+-LOAD_DYNAMIC_EXTENSION ${PG_CLIENT_EXTENSION_PATH}
+-STATEMENT ATTACH '${PG_CLIENT_CONNECTION_STRING}' as testdb (dbtype PG_CLIENT);
+---- 1
+Attached database successfully.
+-STATEMENT MATCH (a:testdb.node_person)-[k:rel_knows]->(b:testdb.node_person) RETURN count(*);
+---- 1
+5
+
 -CASE ShowTables
 -SKIP_FSM_LEAK_CHECK
 -LOAD_DYNAMIC_EXTENSION ${PG_CLIENT_EXTENSION_PATH}

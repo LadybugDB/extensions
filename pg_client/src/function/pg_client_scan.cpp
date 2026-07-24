@@ -194,18 +194,29 @@ offset_t PgClientScanFunction::tableFunc(const TableFuncInput& input, TableFuncO
     auto pgClientScanBindData = input.bindData->constPtrCast<PgClientScanBindData>();
     auto& queryResult = pgClientScanSharedState->queryResult;
 
-    if (pgClientScanSharedState->currentOffset >= queryResult.rows.size()) {
-        return 0;
+    // Atomically claim a morsel (slice of [startOffset, endOffset)) from the
+    // shared query result. The shared state is owned by the ForeignRelTable
+    // and shared across worker threads, so we must serialize offset updates
+    // — otherwise parallel scans (e.g. the parallel hash join that drives
+    // MATCH ... -[...]-> ... queries) would hand out overlapping rows and
+    // miss others. TableFuncSharedState provides the mutex for exactly this
+    // purpose.
+    uint64_t startOffset = 0;
+    uint64_t batchSize = 0;
+    {
+        std::lock_guard<std::mutex> lk{pgClientScanSharedState->mtx};
+        if (pgClientScanSharedState->currentOffset >= queryResult.rows.size()) {
+            return 0;
+        }
+        uint64_t remainingRows = queryResult.rows.size() - pgClientScanSharedState->currentOffset;
+        batchSize = std::min<uint64_t>(remainingRows, DEFAULT_VECTOR_CAPACITY);
+        startOffset = pgClientScanSharedState->currentOffset;
+        pgClientScanSharedState->currentOffset += batchSize;
     }
 
     auto& dataChunk = output.dataChunk;
     auto numColumns = dataChunk.getNumValueVectors();
     auto& selVector = dataChunk.state->getSelVectorUnsafe();
-
-    // Calculate the number of output rows for this batch
-    uint64_t remainingRows = queryResult.rows.size() - pgClientScanSharedState->currentOffset;
-    // Use DEFAULT_VECTOR_CAPACITY-compatible capacity from the data chunk
-    uint64_t batchSize = std::min<uint64_t>(remainingRows, DEFAULT_VECTOR_CAPACITY);
     selVector.setSelSize(batchSize);
 
     // The output may have more columns than PG result columns:
@@ -224,8 +235,7 @@ offset_t PgClientScanFunction::tableFunc(const TableFuncInput& input, TableFuncO
         if (hasInternalId && colIdx == 0) {
             // Internal ID column - synthesize from row index
             for (auto rowIdx = 0u; rowIdx < batchSize; rowIdx++) {
-                vector.setValue<int64_t>(rowIdx,
-                    pgClientScanSharedState->currentOffset + rowIdx);
+                vector.setValue<int64_t>(rowIdx, startOffset + rowIdx);
             }
             continue;
         }
@@ -255,13 +265,12 @@ offset_t PgClientScanFunction::tableFunc(const TableFuncInput& input, TableFuncO
 
         // Copy data from result to vector, respecting the current offset
         for (auto rowIdx = 0u; rowIdx < batchSize; rowIdx++) {
-            uint64_t srcRowIdx = pgClientScanSharedState->currentOffset + rowIdx;
+            uint64_t srcRowIdx = startOffset + rowIdx;
             setValueFromCell(&vector, rowIdx,
                 queryResult.rows[srcRowIdx].cells[resultColIdx], vector.dataType);
         }
     }
 
-    pgClientScanSharedState->currentOffset += batchSize;
     return batchSize;
 }
 
