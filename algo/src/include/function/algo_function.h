@@ -60,6 +60,13 @@ struct GDSPageRankFunction {
     static function::function_set getFunctionSet();
 };
 
+// icebug (NetworKit)-backed Node2Vec structural embeddings.
+struct GDSNode2VecFunction {
+    static constexpr const char* name = "GDS_NODE2VEC";
+
+    static function::function_set getFunctionSet();
+};
+
 struct KCoreDecompositionFunction {
     static constexpr const char* name = "K_CORE_DECOMPOSITION";
 

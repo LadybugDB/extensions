@@ -1,0 +1,29 @@
+-DATASET CSV empty
+
+--
+
+-CASE GDSNode2VecStar
+-LOAD_DYNAMIC_EXTENSION algo
+-STATEMENT CREATE NODE TABLE N(id INT64 PRIMARY KEY)
+---- ok
+-STATEMENT CREATE REL TABLE E(FROM N TO N)
+---- ok
+-STATEMENT CREATE (a:N{id:0}), (b:N{id:1}), (c:N{id:2}), (d:N{id:3})
+---- ok
+-STATEMENT MATCH (x:N{id:1}), (y:N{id:0}) CREATE (x)-[:E]->(y)
+---- ok
+-STATEMENT MATCH (x:N{id:2}), (y:N{id:0}) CREATE (x)-[:E]->(y)
+---- ok
+-STATEMENT MATCH (x:N{id:3}), (y:N{id:0}) CREATE (x)-[:E]->(y)
+---- ok
+-STATEMENT CALL PROJECT_GRAPH('G', ['N'], ['E'])
+---- ok
+-LOG Node2Vec is stochastic, so we assert the output shape (one 64-dim embedding per node)
+-LOG rather than exact values. The semantic property (structurally-similar nodes have
+-LOG higher cosine similarity) is validated separately.
+-STATEMENT CALL GDS_NODE2VEC('G') RETURN node.id, size(embedding) AS dim ORDER BY node.id
+---- 4
+0|64
+1|64
+2|64
+3|64
