@@ -4,16 +4,14 @@
 #include "catalog/catalog_entry/rel_group_catalog_entry.h"
 #include "common/vector/value_vector.h"
 #include "extension/catalog_extension.h"
+#include <libpq-fe.h>
+#include <vector>
 
 namespace lbug {
 namespace binder {
 struct AttachOption;
 } // namespace binder
-} // namespace lbug
-#include <libpq-fe.h>
-#include <vector>
 
-namespace lbug {
 namespace pg_client_extension {
 
 class PgClientConnector;
@@ -37,12 +35,8 @@ public:
         const std::string& defaultName);
 
 private:
-    void createForeignNodeTable(const std::string& tableName,
-        const std::vector<binder::PropertyDefinition>& properties,
-        const std::string& primaryKey);
-    void createForeignRelTable(const std::string& tableName,
-        const std::vector<binder::PropertyDefinition>& properties,
-        const std::string& srcTable, const std::string& dstTable);
+    void createForeignNodeTable(const std::string& tableName);
+    void createForeignRelTable(const std::string& tableName);
 
     std::vector<PgClientColumnInfo> getTableColumnInfo(
         const std::string& tableName) const;

@@ -58,10 +58,12 @@ void PgClientCatalog::init() {
 
     for (auto& row : result.rows) {
         std::string tableName = row.cells[0].value;
-        if (tableName.starts_with("node_")) {
-            createForeignNodeTable(tableName, {}, tableName.substr(5));
-        } else if (tableName.starts_with("rel_")) {
-            createForeignRelTable(tableName, {}, "", "");
+        auto lowerName = tableName;
+        common::StringUtils::toLower(lowerName);
+        if (lowerName.rfind("rel_", 0) == 0) {
+            createForeignRelTable(tableName);
+        } else if (lowerName.rfind("node_", 0) == 0) {
+            createForeignNodeTable(tableName);
         }
     }
 }
@@ -132,9 +134,7 @@ common::LogicalType pgTypeNameToLogicalType(const std::string& pgType) {
     }
 }
 
-void PgClientCatalog::createForeignNodeTable(const std::string& tableName,
-    const std::vector<binder::PropertyDefinition>&,
-    const std::string& primaryKey) {
+void PgClientCatalog::createForeignNodeTable(const std::string& tableName) {
     // Get column info from information_schema.columns
     auto columnInfo = getTableColumnInfoFromConnector(connector, catalogName,
         defaultSchemaName, tableName);
@@ -145,7 +145,7 @@ void PgClientCatalog::createForeignNodeTable(const std::string& tableName,
 
     // Build property definitions
     std::vector<binder::PropertyDefinition> propertyDefs;
-    std::string pkName = primaryKey.empty() ? columnInfo[0].name : primaryKey;
+    std::string pkName = columnInfo[0].name;
     for (auto& col : columnInfo) {
         propertyDefs.emplace_back(
             binder::ColumnDefinition{col.name, col.type.copy()});
@@ -164,7 +164,8 @@ void PgClientCatalog::createForeignNodeTable(const std::string& tableName,
     // Create the scan function
     auto scanFunction = getScanFunction(scanInfo);
 
-    // Create the foreign table catalog entry
+    // Create the foreign table catalog entry in the attached catalog
+    // Save a raw pointer before moving it into the catalog set
     auto foreignTableEntry = std::make_unique<catalog::PgClientTableCatalogEntry>(
         tableName, std::move(scanFunction), scanInfo);
 
@@ -172,10 +173,10 @@ void PgClientCatalog::createForeignNodeTable(const std::string& tableName,
         foreignTableEntry->addProperty(def);
     }
 
-    // Register in our catalog
+    auto* attachedEntryPtr = foreignTableEntry.get();
     tables->createEntry(&transaction::DUMMY_TRANSACTION, std::move(foreignTableEntry));
 
-    // Create a main catalog entry for node table support
+    // Create a main catalog entry for node table support (in-place queries)
     auto foreignDatabaseName = std::format("{}.{}", defaultSchemaName, tableName);
     auto mainTableEntry = std::make_unique<catalog::NodeTableCatalogEntry>(
         tableName, pkName, foreignDatabaseName, catalog::ShadowTag{});
@@ -184,16 +185,49 @@ void PgClientCatalog::createForeignNodeTable(const std::string& tableName,
         mainTableEntry->addProperty(def);
     }
 
+    // Link the shadow entry to the foreign entry so MATCH queries can find the scan function
+    mainTableEntry->setReferencedEntry(attachedEntryPtr);
+
     context_->getDatabase()->getCatalog()->addTableEntry(std::move(mainTableEntry));
-    auto mainEntry = context_->getDatabase()->getCatalog()->getTableCatalogEntry(
-        &transaction::DUMMY_TRANSACTION, tableName);
-    (void)mainEntry;
 }
 
-void PgClientCatalog::createForeignRelTable(const std::string& tableName,
-    const std::vector<binder::PropertyDefinition>&,
-    const std::string&, const std::string&) {
-    // Get column info from information_schema.columns
+void PgClientCatalog::createForeignRelTable(const std::string& tableName) {
+    // Query foreign key info to find src/dst node tables
+    auto fkQuery = std::format(
+        "SELECT kcu.column_name, ccu.table_name "
+        "FROM information_schema.table_constraints tc "
+        "JOIN information_schema.key_column_usage kcu "
+        "  ON tc.constraint_name = kcu.constraint_name "
+        "  AND tc.table_schema = kcu.table_schema "
+        "JOIN information_schema.constraint_column_usage ccu "
+        "  ON ccu.constraint_name = tc.constraint_name "
+        "  AND ccu.table_schema = tc.table_schema "
+        "WHERE tc.constraint_type = 'FOREIGN KEY' "
+        "  AND tc.table_schema = '{}' "
+        "  AND tc.table_name = '{}'",
+        defaultSchemaName, tableName);
+    auto fkResult = connector.executeQuery(fkQuery);
+
+    std::string srcTableName, dstTableName;
+    for (auto& row : fkResult.rows) {
+        auto colName = row.cells[0].value;
+        auto refTable = row.cells[1].value;
+        auto lowerCol = colName;
+        common::StringUtils::toLower(lowerCol);
+        if (lowerCol.rfind("src", 0) == 0) {
+            srcTableName = refTable;
+        } else if (lowerCol.rfind("dst", 0) == 0 || lowerCol.rfind("dest", 0) == 0) {
+            dstTableName = refTable;
+        }
+    }
+
+    if (srcTableName.empty() || dstTableName.empty()) {
+        // No FK info found — register as a plain foreign table instead
+        createForeignNodeTable(tableName);
+        return;
+    }
+
+    // Get column info
     auto columnInfo = getTableColumnInfoFromConnector(connector, catalogName,
         defaultSchemaName, tableName);
 
@@ -208,28 +242,71 @@ void PgClientCatalog::createForeignRelTable(const std::string& tableName,
             binder::ColumnDefinition{col.name, col.type.copy()});
     }
 
-    // Create the PgClientTableScanInfo for this table
     auto columnNames = getColumnNames(columnInfo);
     auto columnTypes = getColumnTypes(columnInfo);
 
+    // Look up src/dst node tables in the main catalog to get table IDs
+    auto* catalog = context_->getDatabase()->getCatalog();
+    auto* srcEntry = catalog->getTableCatalogEntry(&transaction::DUMMY_TRANSACTION, srcTableName);
+    auto* dstEntry = catalog->getTableCatalogEntry(&transaction::DUMMY_TRANSACTION, dstTableName);
+    if (srcEntry == nullptr || dstEntry == nullptr) {
+        createForeignNodeTable(tableName);
+        return;
+    }
+
+    common::table_id_t srcTableID = srcEntry->getTableID();
+    common::table_id_t dstTableID = dstEntry->getTableID();
+
+    // Build scan function
     auto query = std::format("SELECT {{}} FROM \"{}\".\"{}\"",
         defaultSchemaName, tableName);
 
     auto scanInfo = std::make_shared<PgClientTableScanInfo>(query,
         std::move(columnTypes), std::move(columnNames), connector);
+    auto scanFunc = getScanFunction(scanInfo);
 
-    auto scanFunction = getScanFunction(scanInfo);
-
-    // Create the foreign table catalog entry
+    // Create foreign table entry in attached catalog
     auto foreignTableEntry = std::make_unique<catalog::PgClientTableCatalogEntry>(
-        tableName, std::move(scanFunction), scanInfo);
-
+        tableName, scanFunc, scanInfo);
     for (auto& def : propertyDefs) {
         foreignTableEntry->addProperty(def);
     }
-
-    // Register in our catalog
     tables->createEntry(&transaction::DUMMY_TRANSACTION, std::move(foreignTableEntry));
+
+    // Create bind data for the scan function (empty columns — populated at query time)
+    binder::expression_vector emptyColumns;
+    auto bindData = std::make_shared<PgClientScanBindData>(query, columnNames,
+        connector, emptyColumns);
+
+    // Create RelGroupCatalogEntry in the main catalog
+    auto foreignDatabaseName = std::format("{}.{}", defaultSchemaName, tableName);
+
+    std::vector<catalog::RelTableCatalogInfo> relTableInfos;
+    common::oid_t relOID = tables->getNextOID();
+    relTableInfos.emplace_back(
+        catalog::NodeTableIDPair{srcTableID, dstTableID}, relOID,
+        common::RelMultiplicity::MANY, common::RelMultiplicity::MANY);
+
+    auto relGroupEntry =
+        std::make_unique<catalog::RelGroupCatalogEntry>(tableName,
+            common::RelMultiplicity::MANY, common::RelMultiplicity::MANY,
+            common::ExtendDirection::BOTH, std::move(relTableInfos),
+            "", // storage
+            common::StorageFormat::NONE, scanFunc, bindData,
+            std::move(foreignDatabaseName));
+
+    for (auto& def : propertyDefs) {
+        relGroupEntry->addProperty(def);
+    }
+
+    context_->getDatabase()->getCatalog()->addTableEntry(std::move(relGroupEntry));
+
+    // Set up storage for the rel table so the planner can find it
+    auto mainEntry = context_->getDatabase()->getCatalog()->getTableCatalogEntry(
+        &transaction::DUMMY_TRANSACTION, tableName);
+    if (mainEntry) {
+        storage::StorageManager::Get(*context_)->createTable(mainEntry);
+    }
 }
 
 std::vector<PgClientColumnInfo> PgClientCatalog::getTableColumnInfo(
