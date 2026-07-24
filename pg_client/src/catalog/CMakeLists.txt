@@ -1,2 +1,9 @@
-add_library(lbug_pg_client_catalog OBJECT pg_client_catalog.cpp)
+add_library(lbug_pg_client_catalog
+        OBJECT
+        pg_client_catalog.cpp
+        pg_client_table_catalog_entry.cpp)
 add_dependencies(lbug_pg_client_catalog lbug_common lbug_catalog)
+
+set(PG_CLIENT_EXTENSION_OBJECT_FILES
+        ${PG_CLIENT_EXTENSION_OBJECT_FILES} $<TARGET_OBJECTS:lbug_pg_client_catalog>
+        PARENT_SCOPE)

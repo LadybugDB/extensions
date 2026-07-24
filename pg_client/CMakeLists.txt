@@ -6,6 +6,8 @@ include_directories(
     src/include
     ${PostgreSQL_INCLUDE_DIRS})
 
+add_subdirectory(src/connector)
+add_subdirectory(src/storage)
 add_subdirectory(src/main)
 add_subdirectory(src/catalog)
 add_subdirectory(src/function)

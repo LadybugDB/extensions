@@ -4,16 +4,32 @@
 #include "catalog/catalog_entry/rel_group_catalog_entry.h"
 #include "common/vector/value_vector.h"
 #include "extension/catalog_extension.h"
+
+namespace lbug {
+namespace binder {
+struct AttachOption;
+} // namespace binder
+} // namespace lbug
 #include <libpq-fe.h>
+#include <vector>
 
 namespace lbug {
 namespace pg_client_extension {
+
+class PgClientConnector;
+
+struct PgClientColumnInfo {
+    std::string name;
+    common::LogicalType type;
+};
+
+common::LogicalType pgTypeNameToLogicalType(const std::string& pgType);
 
 class PgClientCatalog : public extension::CatalogExtension {
 public:
     PgClientCatalog(std::string connStr, std::string catalogName,
         std::string defaultSchemaName, main::ClientContext* context,
-        PGconn* pgConn);
+        const PgClientConnector& connector);
 
     void init() override;
 
@@ -28,10 +44,17 @@ private:
         const std::vector<binder::PropertyDefinition>& properties,
         const std::string& srcTable, const std::string& dstTable);
 
+    std::vector<PgClientColumnInfo> getTableColumnInfo(
+        const std::string& tableName) const;
+    std::vector<std::string> getColumnNames(
+        const std::vector<PgClientColumnInfo>& columns) const;
+    std::vector<common::LogicalType> getColumnTypes(
+        const std::vector<PgClientColumnInfo>& columns) const;
+
     std::string connStr;
     std::string catalogName;
     std::string defaultSchemaName;
-    PGconn* pgConn;
+    const PgClientConnector& connector;
     main::ClientContext* context_;
 };
 
