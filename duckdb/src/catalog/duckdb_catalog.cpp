@@ -1,10 +1,14 @@
 #include "catalog/duckdb_catalog.h"
 
+#include <regex>
+
 #include "binder/bound_attach_info.h"
 #include "catalog/catalog_entry/node_table_catalog_entry.h"
+#include "catalog/catalog_entry/rel_group_catalog_entry.h"
 #include "catalog/duckdb_table_catalog_entry.h"
 #include "common/exception/binder.h"
 #include "common/exception/runtime.h"
+#include "common/string_utils.h"
 #include "connector/duckdb_type_converter.h"
 #include "function/duckdb_scan.h"
 #include "storage/buffer_manager/memory_manager.h"
@@ -55,7 +59,13 @@ void DuckDBCatalog::init() {
     conversionFunc(resultChunk->data[0], tableNamesVector, resultChunk->size());
     for (auto i = 0u; i < resultChunk->size(); i++) {
         auto tableName = tableNamesVector.getValue<common::string_t>(i).getAsString();
-        createForeignTable(tableName);
+        auto lowerName = tableName;
+        common::StringUtils::toLower(lowerName);
+        if (lowerName.rfind("rel_", 0) == 0) {
+            createForeignRelTable(tableName);
+        } else {
+            createForeignTable(tableName);
+        }
     }
 }
 
@@ -116,6 +126,111 @@ void DuckDBCatalog::createForeignTable(const std::string& tableName) {
     auto mainEntry = context_->getDatabase()->getCatalog()->getTableCatalogEntry(
         &transaction::DUMMY_TRANSACTION, info->tableName);
     lbug::storage::StorageManager::Get(*context_)->createTable(mainEntry);
+}
+
+void DuckDBCatalog::createForeignRelTable(const std::string& tableName) {
+    // Query foreign key info to find src/dst node tables
+    auto fkQuery = std::format("SELECT kcu.column_name, ccu.table_name "
+                               "FROM information_schema.table_constraints tc "
+                               "JOIN information_schema.key_column_usage kcu "
+                               "  ON tc.constraint_name = kcu.constraint_name "
+                               "  AND tc.table_schema = kcu.table_schema "
+                               "JOIN information_schema.constraint_column_usage ccu "
+                               "  ON ccu.constraint_name = tc.constraint_name "
+                               "  AND ccu.table_schema = tc.table_schema "
+                               "WHERE tc.constraint_type = 'FOREIGN KEY' "
+                               "  AND tc.table_name = '{}'",
+        tableName);
+    auto fkResult = connector.executeQuery(fkQuery);
+
+    std::string srcTableName, dstTableName;
+    for (auto i = 0u; i < fkResult->RowCount(); i++) {
+        auto colName = fkResult->GetValue(0, i).GetValue<std::string>();
+        auto refTable = fkResult->GetValue(1, i).GetValue<std::string>();
+        auto lowerCol = colName;
+        common::StringUtils::toLower(lowerCol);
+        if (lowerCol == "src_id" || lowerCol.find("src") == 0) {
+            srcTableName = refTable;
+        } else if (lowerCol == "dst_id" || lowerCol.find("dst") == 0 ||
+                   lowerCol.find("dest") == 0) {
+            dstTableName = refTable;
+        }
+    }
+
+    if (srcTableName.empty() || dstTableName.empty()) {
+        createForeignTable(tableName);
+        return;
+    }
+
+    // Build property definitions
+    std::vector<binder::PropertyDefinition> propertyDefinitions;
+    bindPropertyDefinitions(tableName, propertyDefinitions);
+
+    // Determine the node table IDs from the main catalog
+    auto* catalog = context_->getDatabase()->getCatalog();
+    auto* srcEntry = catalog->getTableCatalogEntry(&transaction::DUMMY_TRANSACTION, srcTableName);
+    auto* dstEntry = catalog->getTableCatalogEntry(&transaction::DUMMY_TRANSACTION, dstTableName);
+    if (srcEntry == nullptr || dstEntry == nullptr) {
+        createForeignTable(tableName);
+        return;
+    }
+
+    common::table_id_t srcTableID = srcEntry->getTableID();
+    common::table_id_t dstTableID = dstEntry->getTableID();
+
+    // Build query and scan info
+    std::vector<common::LogicalType> columnTypes;
+    std::vector<std::string> columnNames;
+    for (auto& def : propertyDefinitions) {
+        columnNames.push_back(def.getName());
+        columnTypes.push_back(def.getType().copy());
+    }
+
+    auto queryStr =
+        std::format("SELECT * FROM \"{}\".{}.{}", catalogName, defaultSchemaName, tableName);
+    auto duckdbTableInfo = std::make_shared<DuckDBTableScanInfo>(queryStr, std::move(columnTypes),
+        columnNames, connector);
+    auto scanFunc = getScanFunction(duckdbTableInfo);
+
+    // Create DuckDB table catalog entry
+    auto tableEntry =
+        std::make_unique<catalog::DuckDBTableCatalogEntry>(tableName, scanFunc, duckdbTableInfo);
+    for (auto& def : propertyDefinitions) {
+        tableEntry->addProperty(def);
+    }
+    tables->createEntry(&transaction::DUMMY_TRANSACTION, std::move(tableEntry));
+
+    // Create bind data for the scan function
+    binder::expression_vector emptyColumns;
+    auto bindData =
+        std::make_shared<DuckDBScanBindData>(queryStr, columnNames, connector, emptyColumns);
+
+    // Create RelGroupCatalogEntry
+    auto foreignDatabaseName = std::format("{}.{}", catalogName, tableName);
+
+    std::vector<catalog::RelTableCatalogInfo> relTableInfos;
+    auto info = bindCreateTableInfo(tableName);
+    common::oid_t relOID = tables->getNextOID();
+    relTableInfos.emplace_back(catalog::NodeTableIDPair{srcTableID, dstTableID}, relOID,
+        common::RelMultiplicity::MANY, common::RelMultiplicity::MANY);
+
+    auto relGroupEntry =
+        std::make_unique<catalog::RelGroupCatalogEntry>(tableName, common::RelMultiplicity::MANY,
+            common::RelMultiplicity::MANY, common::ExtendDirection::BOTH, std::move(relTableInfos),
+            "", // storage
+            common::StorageFormat::NONE, scanFunc, bindData, std::move(foreignDatabaseName));
+
+    for (auto& def : propertyDefinitions) {
+        relGroupEntry->addProperty(def);
+    }
+
+    context_->getDatabase()->getCatalog()->addTableEntry(std::move(relGroupEntry));
+
+    auto mainEntry = context_->getDatabase()->getCatalog()->getTableCatalogEntry(
+        &transaction::DUMMY_TRANSACTION, tableName);
+    if (mainEntry) {
+        storage::StorageManager::Get(*context_)->createTable(mainEntry);
+    }
 }
 
 static bool getTableInfo(const DuckDBConnector& connector, const std::string& tableName,

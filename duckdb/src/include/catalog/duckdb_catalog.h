@@ -50,6 +50,7 @@ private:
 
 private:
     void createForeignTable(const std::string& tableName);
+    void createForeignRelTable(const std::string& tableName);
 
 protected:
     std::string dbPath;
