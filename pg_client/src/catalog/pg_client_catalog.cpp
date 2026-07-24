@@ -113,16 +113,16 @@ common::LogicalType pgTypeNameToLogicalType(const std::string& pgType) {
                upper == "NAME" || upper == "XML" || upper == "JSON" || upper == "JSONB") {
         return common::LogicalType(common::LogicalTypeID::STRING);
     } else if (upper == "BYTEA" || upper == "BLOB") {
-        return common::LogicalType(common::LogicalTypeID::BLOB);
+        return common::LogicalType(common::LogicalTypeID::STRING);
     } else if (upper == "DATE") {
-        return common::LogicalType(common::LogicalTypeID::DATE);
+        return common::LogicalType(common::LogicalTypeID::STRING);
     } else if (upper == "TIMESTAMP" || upper == "TIMESTAMP WITHOUT TIME ZONE" ||
                upper == "TIMESTAMP WITH TIME ZONE" || upper == "TIMESTAMPTZ") {
-        return common::LogicalType(common::LogicalTypeID::TIMESTAMP);
+        return common::LogicalType(common::LogicalTypeID::STRING);
     } else if (upper == "INTERVAL") {
-        return common::LogicalType(common::LogicalTypeID::INTERVAL);
+        return common::LogicalType(common::LogicalTypeID::STRING);
     } else if (upper == "UUID") {
-        return common::LogicalType(common::LogicalTypeID::UUID);
+        return common::LogicalType(common::LogicalTypeID::STRING);
     } else if (upper == "BOOLEAN[]" || upper == "INTEGER[]" || upper == "TEXT[]" ||
                upper == "VARCHAR[]") {
         return common::LogicalType(common::LogicalTypeID::STRING);
@@ -156,7 +156,7 @@ void PgClientCatalog::createForeignNodeTable(const std::string& tableName,
     auto columnTypes = getColumnTypes(columnInfo);
 
     auto query = std::format("SELECT {{}} FROM \"{}\".\"{}\"",
-        catalogName, tableName);
+        defaultSchemaName, tableName);
 
     auto scanInfo = std::make_shared<PgClientTableScanInfo>(query,
         std::move(columnTypes), std::move(columnNames), connector);
@@ -176,7 +176,7 @@ void PgClientCatalog::createForeignNodeTable(const std::string& tableName,
     tables->createEntry(&transaction::DUMMY_TRANSACTION, std::move(foreignTableEntry));
 
     // Create a main catalog entry for node table support
-    auto foreignDatabaseName = std::format("{}.{}", catalogName, tableName);
+    auto foreignDatabaseName = std::format("{}.{}", defaultSchemaName, tableName);
     auto mainTableEntry = std::make_unique<catalog::NodeTableCatalogEntry>(
         tableName, pkName, foreignDatabaseName, catalog::ShadowTag{});
 
@@ -213,7 +213,7 @@ void PgClientCatalog::createForeignRelTable(const std::string& tableName,
     auto columnTypes = getColumnTypes(columnInfo);
 
     auto query = std::format("SELECT {{}} FROM \"{}\".\"{}\"",
-        catalogName, tableName);
+        defaultSchemaName, tableName);
 
     auto scanInfo = std::make_shared<PgClientTableScanInfo>(query,
         std::move(columnTypes), std::move(columnNames), connector);

@@ -40,12 +40,9 @@ std::unique_ptr<binder::BoundTableScanInfo> PgClientTableCatalogEntry::getBoundS
             uniqueName, columnNames[i]));
     }
 
-    // Build column names for PG query
-    std::vector<std::string> pgColumnNames;
-    if (!nodeUniqueName.empty()) {
-        pgColumnNames.push_back("rowid");
-    }
-    pgColumnNames.insert(pgColumnNames.end(), columnNames.begin(), columnNames.end());
+    // Build column names for PG query (no rowid — PG doesn't have a rowid pseudo-column)
+    // The internal ID column will be synthesized by the table function from row indices
+    std::vector<std::string> pgColumnNames = columnNames;
 
     auto bindData =
         std::make_unique<pg_client_extension::PgClientScanBindData>(

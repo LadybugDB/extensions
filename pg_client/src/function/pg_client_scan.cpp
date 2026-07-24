@@ -139,12 +139,20 @@ static void setValueFromCell(ValueVector* vector, uint32_t pos,
         StringVector::addString(vector, pos, cell.value);
         break;
     }
-    case LogicalTypeID::DATE:
+    case LogicalTypeID::DATE: {
+        // Parse date string (YYYY-MM-DD) to days since epoch
+        // For now, use string representation which Ladybug can parse
+        StringVector::addString(vector, pos, cell.value);
+        break;
+    }
     case LogicalTypeID::TIMESTAMP:
     case LogicalTypeID::TIMESTAMP_MS:
     case LogicalTypeID::TIMESTAMP_NS:
     case LogicalTypeID::TIMESTAMP_SEC:
-    case LogicalTypeID::TIMESTAMP_TZ:
+    case LogicalTypeID::TIMESTAMP_TZ: {
+        StringVector::addString(vector, pos, cell.value);
+        break;
+    }
     case LogicalTypeID::INTERVAL: {
         StringVector::addString(vector, pos, cell.value);
         break;
@@ -183,18 +191,21 @@ offset_t PgClientScanFunction::tableFunc(const TableFuncInput& input, TableFuncO
     uint64_t batchSize = std::min<uint64_t>(remainingRows, DEFAULT_VECTOR_CAPACITY);
     selVector.setSelSize(batchSize);
 
+    // The output may have more columns than PG result columns:
+    // Column 0 = internal ID (synthesized), columns 1+ = actual data
+    // This happens when a scan involves a nodeUniqueName (e.g. MATCH queries).
+    // `columnNamesInPg` only contains actual PG column names (no rowid).
+    bool hasInternalId = numColumns > pgClientScanBindData->columnNamesInPg.size();
+
     // Build a name-to-index map for the result columns
     std::unordered_map<std::string, int> resultColMap;
     buildColumnNameToIndexMap(queryResult.columnNames, resultColMap);
-
-    bool hasInternalId = !pgClientScanBindData->columnNamesInPg.empty() &&
-                         pgClientScanBindData->columnNamesInPg[0] == "rowid";
 
     for (auto colIdx = 0u; colIdx < numColumns; colIdx++) {
         auto& vector = dataChunk.getValueVectorMutable(colIdx);
 
         if (hasInternalId && colIdx == 0) {
-            // Internal ID column - set absolute row indices
+            // Internal ID column - synthesize from row index
             for (auto rowIdx = 0u; rowIdx < batchSize; rowIdx++) {
                 vector.setValue<int64_t>(rowIdx,
                     pgClientScanSharedState->currentOffset + rowIdx);
@@ -211,7 +222,7 @@ offset_t PgClientScanFunction::tableFunc(const TableFuncInput& input, TableFuncO
             continue;
         }
 
-        std::string targetColName = pgClientScanBindData->columnNamesInPg[colIdx];
+        std::string targetColName = pgClientScanBindData->columnNamesInPg[pgColIdx];
 
         // Find this column in the result
         auto it = resultColMap.find(targetColName);
