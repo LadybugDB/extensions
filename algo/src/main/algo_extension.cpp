@@ -38,6 +38,7 @@ void AlgoExtension::load(main::ClientContext* context) {
     ExtensionUtils::addTableFuncAlias<PageRankAliasFunction>(db);
 #if defined(ICEBUG_ENABLED)
     ExtensionUtils::addTableFunc<GDSPageRankFunction>(db);
+    ExtensionUtils::addTableFunc<GDSNode2VecFunction>(db);
 #endif
     ExtensionUtils::addTableFunc<KCoreDecompositionFunction>(db);
     ExtensionUtils::addTableFuncAlias<KCoreDecompositionAliasFunction>(db);
