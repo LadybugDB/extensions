@@ -18,6 +18,7 @@ void AlgoExtension::load(main::ClientContext* context) {
     ExtensionUtils::addTableFuncAlias<WeaklyConnectedComponentsAliasFunction>(db);
     ExtensionUtils::addTableFunc<PageRankFunction>(db);
     ExtensionUtils::addTableFuncAlias<PageRankAliasFunction>(db);
+    ExtensionUtils::addTableFunc<GDSPageRankFunction>(db);
     ExtensionUtils::addTableFunc<KCoreDecompositionFunction>(db);
     ExtensionUtils::addTableFuncAlias<KCoreDecompositionAliasFunction>(db);
     ExtensionUtils::addTableFunc<LouvainFunction>(db);

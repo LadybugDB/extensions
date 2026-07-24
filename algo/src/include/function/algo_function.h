@@ -53,6 +53,13 @@ struct PageRankAliasFunction {
     static constexpr const char* name = "PR";
 };
 
+// icebug (NetworKit)-backed PageRank. Coexists with PAGE_RANK for one release cycle.
+struct GDSPageRankFunction {
+    static constexpr const char* name = "GDS_PAGE_RANK";
+
+    static function::function_set getFunctionSet();
+};
+
 struct KCoreDecompositionFunction {
     static constexpr const char* name = "K_CORE_DECOMPOSITION";
 

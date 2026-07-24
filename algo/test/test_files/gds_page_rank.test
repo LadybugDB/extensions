@@ -1,0 +1,27 @@
+-DATASET CSV empty
+
+--
+
+-CASE GDSPageRankStar
+-LOAD_DYNAMIC_EXTENSION algo
+-STATEMENT CREATE NODE TABLE N(id INT64 PRIMARY KEY)
+---- ok
+-STATEMENT CREATE REL TABLE E(FROM N TO N)
+---- ok
+-STATEMENT CREATE (a:N{id:0}), (b:N{id:1}), (c:N{id:2}), (d:N{id:3})
+---- ok
+-STATEMENT MATCH (x:N{id:1}), (y:N{id:0}) CREATE (x)-[:E]->(y)
+---- ok
+-STATEMENT MATCH (x:N{id:2}), (y:N{id:0}) CREATE (x)-[:E]->(y)
+---- ok
+-STATEMENT MATCH (x:N{id:3}), (y:N{id:0}) CREATE (x)-[:E]->(y)
+---- ok
+-STATEMENT CALL PROJECT_GRAPH('G', ['N'], ['E'])
+---- ok
+-LOG icebug PageRank: the hub (id 0) ranks highest; scores are a sum-to-1 distribution.
+-STATEMENT CALL GDS_PAGE_RANK('G') RETURN node.id, rank ORDER BY rank DESC, node.id
+---- 4
+0|0.479730
+1|0.173423
+2|0.173423
+3|0.173423
