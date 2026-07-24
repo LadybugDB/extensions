@@ -185,10 +185,17 @@ void PgClientCatalog::createForeignNodeTable(const std::string& tableName) {
         mainTableEntry->addProperty(def);
     }
 
-    // Link the shadow entry to the foreign entry so MATCH queries can find the scan function
+    // Link the shadow entry to the foreign entry so planners can find the scan function
     mainTableEntry->setReferencedEntry(attachedEntryPtr);
 
     context_->getDatabase()->getCatalog()->addTableEntry(std::move(mainTableEntry));
+
+    // Register in the storage manager so the query planner can find this table
+    auto* mainEntry = context_->getDatabase()->getCatalog()->getTableCatalogEntry(
+        &transaction::DUMMY_TRANSACTION, tableName);
+    if (mainEntry) {
+        storage::StorageManager::Get(*context_)->createTable(mainEntry);
+    }
 }
 
 void PgClientCatalog::createForeignRelTable(const std::string& tableName) {
@@ -254,9 +261,6 @@ void PgClientCatalog::createForeignRelTable(const std::string& tableName) {
         return;
     }
 
-    common::table_id_t srcTableID = srcEntry->getTableID();
-    common::table_id_t dstTableID = dstEntry->getTableID();
-
     // Build scan function
     auto query = std::format("SELECT {{}} FROM \"{}\".\"{}\"",
         defaultSchemaName, tableName);
@@ -268,45 +272,27 @@ void PgClientCatalog::createForeignRelTable(const std::string& tableName) {
     // Create foreign table entry in attached catalog
     auto foreignTableEntry = std::make_unique<catalog::PgClientTableCatalogEntry>(
         tableName, scanFunc, scanInfo);
+    auto* attachedEntryPtr = foreignTableEntry.get();
     for (auto& def : propertyDefs) {
         foreignTableEntry->addProperty(def);
     }
     tables->createEntry(&transaction::DUMMY_TRANSACTION, std::move(foreignTableEntry));
 
-    // Create bind data for the scan function (empty columns — populated at query time)
-    binder::expression_vector emptyColumns;
-    auto bindData = std::make_shared<PgClientScanBindData>(query, columnNames,
-        connector, emptyColumns);
-
-    // Create RelGroupCatalogEntry in the main catalog
+    // Register a shadow node entry so the table is discoverable via the main catalog
     auto foreignDatabaseName = std::format("{}.{}", defaultSchemaName, tableName);
 
-    std::vector<catalog::RelTableCatalogInfo> relTableInfos;
-    common::oid_t relOID = tables->getNextOID();
-    relTableInfos.emplace_back(
-        catalog::NodeTableIDPair{srcTableID, dstTableID}, relOID,
-        common::RelMultiplicity::MANY, common::RelMultiplicity::MANY);
-
-    auto relGroupEntry =
-        std::make_unique<catalog::RelGroupCatalogEntry>(tableName,
-            common::RelMultiplicity::MANY, common::RelMultiplicity::MANY,
-            common::ExtendDirection::BOTH, std::move(relTableInfos),
-            "", // storage
-            common::StorageFormat::NONE, scanFunc, bindData,
-            std::move(foreignDatabaseName));
+    // For rel tables, create a shadow node entry (not RelGroupCatalogEntry) to avoid
+    // the ForeignRelTable infrastructure which has thread-safety issues with libpq.
+    auto mainTableEntry = std::make_unique<catalog::NodeTableCatalogEntry>(
+        tableName, columnInfo[0].name, foreignDatabaseName, catalog::ShadowTag{});
 
     for (auto& def : propertyDefs) {
-        relGroupEntry->addProperty(def);
+        mainTableEntry->addProperty(def);
     }
+    mainTableEntry->setReferencedEntry(attachedEntryPtr);
+    context_->getDatabase()->getCatalog()->addTableEntry(std::move(mainTableEntry));
 
-    context_->getDatabase()->getCatalog()->addTableEntry(std::move(relGroupEntry));
-
-    // Set up storage for the rel table so the planner can find it
-    auto mainEntry = context_->getDatabase()->getCatalog()->getTableCatalogEntry(
-        &transaction::DUMMY_TRANSACTION, tableName);
-    if (mainEntry) {
-        storage::StorageManager::Get(*context_)->createTable(mainEntry);
-    }
+    // Don't call createTable() for rel-backed shadow entries to avoid ForeignRelTable issues
 }
 
 std::vector<PgClientColumnInfo> PgClientCatalog::getTableColumnInfo(

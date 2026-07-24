@@ -43,6 +43,7 @@ PgClientQueryResult PgClientConnector::executeQuery(const std::string& query) co
         return result;
     }
 
+    std::lock_guard<std::mutex> lk{mtx};
     PGresult* pgResult = PQexec(conn, query.c_str());
     if (!pgResult) {
         result.success = false;

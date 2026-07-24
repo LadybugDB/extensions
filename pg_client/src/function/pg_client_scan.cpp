@@ -79,8 +79,19 @@ struct PgClientScanFunction {
 
 std::unique_ptr<TableFuncSharedState> PgClientScanFunction::initSharedState(
     const TableFuncInitSharedStateInput& input) {
-    auto scanBindData = input.bindData->constPtrCast<PgClientScanBindData>();
-    auto result = scanBindData->connector.executeQuery(scanBindData->getSQL());
+    auto* rawBindData = input.bindData;
+    if (!rawBindData) {
+        throw RuntimeException("PgClientScanFunction::initSharedState: bindData is null");
+    }
+    auto scanBindData = rawBindData->constPtrCast<PgClientScanBindData>();
+    if (!scanBindData) {
+        throw RuntimeException("PgClientScanFunction::initSharedState: cast failed");
+    }
+    auto sql = scanBindData->getSQL();
+    if (sql.empty()) {
+        throw RuntimeException("PgClientScanFunction::initSharedState: SQL is empty");
+    }
+    auto result = scanBindData->connector.executeQuery(sql);
     if (!result.success) {
         throw RuntimeException(
             std::format("Failed to execute query due to error: {}", result.errorMessage));
@@ -173,6 +184,12 @@ static void buildColumnNameToIndexMap(const std::vector<std::string>& columnName
 }
 
 offset_t PgClientScanFunction::tableFunc(const TableFuncInput& input, TableFuncOutput& output) {
+    if (!input.sharedState) {
+        throw RuntimeException("tableFunc: sharedState is null");
+    }
+    if (!input.bindData) {
+        throw RuntimeException("tableFunc: bindData is null");
+    }
     auto pgClientScanSharedState = input.sharedState->ptrCast<PgClientScanSharedState>();
     auto pgClientScanBindData = input.bindData->constPtrCast<PgClientScanBindData>();
     auto& queryResult = pgClientScanSharedState->queryResult;

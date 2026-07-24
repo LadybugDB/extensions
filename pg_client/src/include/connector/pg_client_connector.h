@@ -2,6 +2,7 @@
 
 #include <libpq-fe.h>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -50,6 +51,7 @@ public:
 
 private:
     PGconn* conn;
+    mutable std::mutex mtx;
 };
 
 common::LogicalType pgOidToLogicalType(uint32_t oid);

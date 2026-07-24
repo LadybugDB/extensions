@@ -194,7 +194,19 @@ class TestPgClientExtension(unittest.TestCase):
         self.assertIn("Alice", stdout, f"MATCH missing Alice: {stderr}")
         self.assertIn("Charlie", stdout, f"MATCH missing Charlie: {stderr}")
 
-    def test_06_scan_rel_table_with_filter(self):
+    def test_06_load_rel_table(self):
+        """Test LOAD FROM a rel_* table."""
+        script = f"""
+        LOAD EXTENSION '{PG_CLIENT_EXT}';
+        ATTACH '{self.conn_str}' AS testdb (DBTYPE PG_CLIENT);
+        LOAD FROM testdb.rel_knows RETURN src_id, dst_id, since ORDER BY id;
+        """
+        stdout, stderr = run_lbug(script)
+        self.assertIn("2020-01-15", stdout, f"Rel load failed: {stderr}")
+        self.assertIn("2021-03-20", stdout, f"Rel load missing: {stderr}")
+        self.assertIn("2023-12-01", stdout, f"Rel load missing: {stderr}")
+
+    def test_07_scan_rel_table_filter(self):
         """Test LOAD FROM a rel_* table with filter."""
         script = f"""
         LOAD EXTENSION '{PG_CLIENT_EXT}';
@@ -205,7 +217,7 @@ class TestPgClientExtension(unittest.TestCase):
         self.assertIn("2020-01-15", stdout, f"Rel filter failed: {stderr}")
         self.assertIn("2021-03-20", stdout, f"Rel filter missing: {stderr}")
 
-    def test_07_show_tables(self):
+    def test_08_show_tables(self):
         """Test SHOW_TABLES includes node and rel tables."""
         script = f"""
         LOAD EXTENSION '{PG_CLIENT_EXT}';
@@ -216,7 +228,7 @@ class TestPgClientExtension(unittest.TestCase):
         self.assertIn("node_person", stdout, f"SHOW_TABLES missing node_person: {stderr}")
         self.assertIn("rel_knows", stdout, f"SHOW_TABLES missing rel_knows: {stderr}")
 
-    def test_08_table_info(self):
+    def test_09_table_info(self):
         """Test TABLE_INFO on attached table."""
         script = f"""
         LOAD EXTENSION '{PG_CLIENT_EXT}';
@@ -227,7 +239,7 @@ class TestPgClientExtension(unittest.TestCase):
         self.assertIn("name", stdout.lower(), f"TABLE_INFO missing name: {stderr}")
         self.assertIn("age", stdout.lower(), f"TABLE_INFO missing age: {stderr}")
 
-    def test_09_attach_with_schema(self):
+    def test_10_attach_with_schema(self):
         """Test ATTACH with non-default schema."""
         engine = sa.create_engine(self.uri, isolation_level="AUTOCOMMIT")
         conn = engine.connect()
@@ -257,7 +269,7 @@ class TestPgClientExtension(unittest.TestCase):
         self.assertIn("Widget", stdout, f"Schema attach failed: {stderr}")
         self.assertIn("Gadget", stdout, f"Gadget not found: {stderr}")
 
-    def test_10_regular_table_not_discovered(self):
+    def test_11_regular_table_not_discovered(self):
         """Test that tables without node_/rel_ prefix are not exposed."""
         # Create a table without prefix
         engine = sa.create_engine(self.uri, isolation_level="AUTOCOMMIT")
