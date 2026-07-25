@@ -89,6 +89,8 @@ Attached database successfully.
 ---- 1
 Attached database successfully.
 -STATEMENT CALL SHOW_TABLES() RETURN *;
----- 2
+---- 4
 0|node_person|ATTACHED|testdb(PG_CLIENT)|
+0|node_person|NODE|shadow(graph)|
 1|rel_knows|ATTACHED|testdb(PG_CLIENT)|
+1|rel_knows|REL|public.rel_knows|
