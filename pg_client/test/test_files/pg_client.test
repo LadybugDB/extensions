@@ -7,21 +7,21 @@
 
 -CASE LoadPgClientExtension
 -SKIP_FSM_LEAK_CHECK
--LOAD_DYNAMIC_EXTENSION ${PG_CLIENT_EXTENSION_PATH}
+-LOAD_DYNAMIC_EXTENSION pg_client
 -STATEMENT RETURN 'LOAD OK';
 ---- 1
 LOAD OK
 
 -CASE AttachPgClientDatabase
 -SKIP_FSM_LEAK_CHECK
--LOAD_DYNAMIC_EXTENSION ${PG_CLIENT_EXTENSION_PATH}
+-LOAD_DYNAMIC_EXTENSION pg_client
 -STATEMENT ATTACH '${PG_CLIENT_CONNECTION_STRING}' as testdb (dbtype PG_CLIENT);
 ---- 1
 Attached database successfully.
 
 -CASE ScanNodeTable
 -SKIP_FSM_LEAK_CHECK
--LOAD_DYNAMIC_EXTENSION ${PG_CLIENT_EXTENSION_PATH}
+-LOAD_DYNAMIC_EXTENSION pg_client
 -STATEMENT ATTACH '${PG_CLIENT_CONNECTION_STRING}' as testdb (dbtype PG_CLIENT);
 ---- 1
 Attached database successfully.
@@ -35,7 +35,7 @@ Eve|32
 
 -CASE ScanNodeTableWithFilter
 -SKIP_FSM_LEAK_CHECK
--LOAD_DYNAMIC_EXTENSION ${PG_CLIENT_EXTENSION_PATH}
+-LOAD_DYNAMIC_EXTENSION pg_client
 -STATEMENT ATTACH '${PG_CLIENT_CONNECTION_STRING}' as testdb (dbtype PG_CLIENT);
 ---- 1
 Attached database successfully.
@@ -46,7 +46,7 @@ Eve|32
 
 -CASE ScanRelTable
 -SKIP_FSM_LEAK_CHECK
--LOAD_DYNAMIC_EXTENSION ${PG_CLIENT_EXTENSION_PATH}
+-LOAD_DYNAMIC_EXTENSION pg_client
 -STATEMENT ATTACH '${PG_CLIENT_CONNECTION_STRING}' as testdb (dbtype PG_CLIENT);
 ---- 1
 Attached database successfully.
@@ -60,7 +60,7 @@ Attached database successfully.
 
 -CASE MatchOnNodeTable
 -SKIP_FSM_LEAK_CHECK
--LOAD_DYNAMIC_EXTENSION ${PG_CLIENT_EXTENSION_PATH}
+-LOAD_DYNAMIC_EXTENSION pg_client
 -STATEMENT ATTACH '${PG_CLIENT_CONNECTION_STRING}' as testdb (dbtype PG_CLIENT);
 ---- 1
 Attached database successfully.
@@ -74,7 +74,7 @@ Charlie|35
 
 -CASE MatchOnRelTable
 -SKIP_FSM_LEAK_CHECK
--LOAD_DYNAMIC_EXTENSION ${PG_CLIENT_EXTENSION_PATH}
+-LOAD_DYNAMIC_EXTENSION pg_client
 -STATEMENT ATTACH '${PG_CLIENT_CONNECTION_STRING}' as testdb (dbtype PG_CLIENT);
 ---- 1
 Attached database successfully.
@@ -84,7 +84,7 @@ Attached database successfully.
 
 -CASE ShowTables
 -SKIP_FSM_LEAK_CHECK
--LOAD_DYNAMIC_EXTENSION ${PG_CLIENT_EXTENSION_PATH}
+-LOAD_DYNAMIC_EXTENSION pg_client
 -STATEMENT ATTACH '${PG_CLIENT_CONNECTION_STRING}' as testdb (dbtype PG_CLIENT);
 ---- 1
 Attached database successfully.
