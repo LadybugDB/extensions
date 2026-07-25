@@ -276,7 +276,6 @@ void PgClientCatalog::createForeignRelTable(const std::string& tableName) {
     // Create foreign table entry in attached catalog
     auto foreignTableEntry = std::make_unique<catalog::PgClientTableCatalogEntry>(
         tableName, scanFunc, scanInfo);
-    auto* attachedEntryPtr = foreignTableEntry.get();
     for (auto& def : propertyDefs) {
         foreignTableEntry->addProperty(def);
     }
