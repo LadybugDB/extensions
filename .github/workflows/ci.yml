@@ -18,7 +18,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  EXTENSION_LIST: adbc;azure;delta;duckdb;fts;httpfs;iceberg;json;llm;neo4j;postgres;sqlite;unity_catalog;vector;algo
+  # pg_client requires libpq (PostgreSQL) at build time and a running
+  # PostgreSQL instance at test time (provided by run_pgembed_fixture.py).
+  EXTENSION_LIST: adbc;azure;delta;duckdb;fts;httpfs;iceberg;json;llm;neo4j;pg_client;postgres;sqlite;unity_catalog;vector;algo
 
 jobs:
   # ─────────────────────────────────────────────────────────────────
@@ -206,7 +208,8 @@ jobs:
           dnf install -y 'dnf-command(config-manager)'
           dnf config-manager --set-enabled powertools
           dnf install -y cmake ninja-build python3 python3-pip git wget unzip \
-            gcc-toolset-13 openssl3 openssl3-devel pkg-config
+            gcc-toolset-13 openssl3 openssl3-devel pkg-config \
+            libpq libpq-devel
 
       - name: Install uv
         working-directory: ladybug
