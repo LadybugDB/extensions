@@ -21,7 +21,7 @@ SET row_security = off;
 --
 
 CREATE TABLE public.node_person (
-    id integer NOT NULL,
+    id integer NOT NULL PRIMARY KEY,
     name character varying(100) NOT NULL,
     age integer NOT NULL
 );
@@ -35,8 +35,8 @@ ALTER TABLE public.node_person OWNER TO ci;
 
 CREATE TABLE public.rel_knows (
     id integer NOT NULL,
-    from_id integer NOT NULL,
-    to_id integer NOT NULL,
+    from_id integer NOT NULL REFERENCES public.node_person(id),
+    to_id integer NOT NULL REFERENCES public.node_person(id),
     since date NOT NULL
 );
 
