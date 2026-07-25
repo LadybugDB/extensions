@@ -2,7 +2,6 @@ add_library(lbug_pg_client_storage
         OBJECT
         pg_client_storage.cpp)
 
-add_dependencies(lbug_pg_client_storage lbug_common)
 
 set(PG_CLIENT_EXTENSION_OBJECT_FILES
         ${PG_CLIENT_EXTENSION_OBJECT_FILES} $<TARGET_OBJECTS:lbug_pg_client_storage>
