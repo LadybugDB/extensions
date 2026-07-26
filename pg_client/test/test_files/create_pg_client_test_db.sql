@@ -30,10 +30,10 @@ CREATE TABLE public.node_person (
 ALTER TABLE public.node_person OWNER TO ci;
 
 --
--- Table: rel_knows
+-- Table: fkrel_knows
 --
 
-CREATE TABLE public.rel_knows (
+CREATE TABLE public.fkrel_knows (
     id integer NOT NULL,
     from_id integer NOT NULL REFERENCES public.node_person(id),
     to_id integer NOT NULL REFERENCES public.node_person(id),
@@ -41,7 +41,7 @@ CREATE TABLE public.rel_knows (
 );
 
 
-ALTER TABLE public.rel_knows OWNER TO ci;
+ALTER TABLE public.fkrel_knows OWNER TO ci;
 
 --
 -- Data for node_person
@@ -57,14 +57,14 @@ INSERT INTO public.node_person (id, name, age) VALUES
 SELECT pg_catalog.setval(pg_catalog.pg_get_serial_sequence('public.node_person', 'id'), 5, true);
 
 --
--- Data for rel_knows
+-- Data for fkrel_knows
 --
 
-INSERT INTO public.rel_knows (id, from_id, to_id, since) VALUES
+INSERT INTO public.fkrel_knows (id, from_id, to_id, since) VALUES
     (1, 1, 2, '2020-01-15'),
     (2, 1, 3, '2021-03-20'),
     (3, 2, 4, '2022-06-10'),
     (4, 3, 4, '2023-08-05'),
     (5, 4, 5, '2023-12-01');
 
-SELECT pg_catalog.setval(pg_catalog.pg_get_serial_sequence('public.rel_knows', 'id'), 5, true);
+SELECT pg_catalog.setval(pg_catalog.pg_get_serial_sequence('public.fkrel_knows', 'id'), 5, true);
