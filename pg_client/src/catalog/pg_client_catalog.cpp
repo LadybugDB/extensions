@@ -60,10 +60,24 @@ void PgClientCatalog::init() {
         std::string tableName = row.cells[0].value;
         auto lowerName = tableName;
         common::StringUtils::toLower(lowerName);
-        if (lowerName.rfind("rel_", 0) == 0) {
-            createForeignRelTable(tableName);
-        } else if (lowerName.rfind("node_", 0) == 0) {
+        if (lowerName.rfind("node_", 0) == 0) {
             createForeignNodeTable(tableName);
+        }
+    }
+    // Second pass: register rel tables. Node tables must be registered first so that
+    // FK-based rel tables can resolve their src/dst node table IDs.
+    for (auto& row : result.rows) {
+        std::string tableName = row.cells[0].value;
+        auto lowerName = tableName;
+        common::StringUtils::toLower(lowerName);
+        if (lowerName.rfind("fkrel_", 0) == 0) {
+            // Foreign-key-based rel table: scan-driven, optimizer generates a join.
+            // No CSR columns; backed by a ForeignRelTable.
+            createForeignRelTable(tableName);
+        } else if (lowerName.rfind("rel_", 0) == 0) {
+            // CSR-based rel table: materialized into a local on-disk CSR rel table.
+            // TODO: COPY data from PostgreSQL into a local RelTable.
+            createForeignRelTable(tableName);
         }
     }
 }
@@ -253,17 +267,19 @@ void PgClientCatalog::createForeignRelTable(const std::string& tableName) {
     auto columnNames = getColumnNames(columnInfo);
     auto columnTypes = getColumnTypes(columnInfo);
 
-    // Look up src/dst node tables in the main catalog to get table IDs
-    auto* catalog = context_->getDatabase()->getCatalog();
-    auto* srcEntry = catalog->getTableCatalogEntry(&transaction::DUMMY_TRANSACTION, srcTableName);
-    auto* dstEntry = catalog->getTableCatalogEntry(&transaction::DUMMY_TRANSACTION, dstTableName);
+    // Look up src/dst node tables in the attached catalog (the foreign PgClientTableCatalogEntry
+    // entries), not the main catalog shadows. fkrel_ tables join against the foreign node
+    // entries directly, so the rel's src/dst table IDs must match the entries that
+    // `testdb.node_person` (and bare `node_person` via shadow) resolve to.
+    auto* srcEntry = tables->getEntry(&transaction::DUMMY_TRANSACTION, srcTableName);
+    auto* dstEntry = tables->getEntry(&transaction::DUMMY_TRANSACTION, dstTableName);
     if (srcEntry == nullptr || dstEntry == nullptr) {
         createForeignNodeTable(tableName);
         return;
     }
 
-    common::table_id_t srcTableID = srcEntry->getTableID();
-    common::table_id_t dstTableID = dstEntry->getTableID();
+    common::table_id_t srcTableID = srcEntry->cast<catalog::TableCatalogEntry>().getTableID();
+    common::table_id_t dstTableID = dstEntry->cast<catalog::TableCatalogEntry>().getTableID();
 
     // Build scan function
     auto query = std::format("SELECT {{}} FROM \"{}\".\"{}\"",
