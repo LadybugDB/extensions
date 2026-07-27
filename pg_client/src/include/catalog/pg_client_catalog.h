@@ -26,8 +26,8 @@ common::LogicalType pgTypeNameToLogicalType(const std::string& pgType);
 class PgClientCatalog : public extension::CatalogExtension {
 public:
     PgClientCatalog(std::string connStr, std::string catalogName,
-        std::string defaultSchemaName, main::ClientContext* context,
-        const PgClientConnector& connector);
+        std::string defaultSchemaName, std::string attachedDbName,
+        main::ClientContext* context, const PgClientConnector& connector);
 
     void init() override;
 
@@ -48,6 +48,7 @@ private:
     std::string connStr;
     std::string catalogName;
     std::string defaultSchemaName;
+    std::string attachedDbName;
     const PgClientConnector& connector;
     main::ClientContext* context_;
 };

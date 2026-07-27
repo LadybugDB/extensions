@@ -42,7 +42,7 @@ std::unique_ptr<main::AttachedDatabase> attachPgClient(std::string dbName, std::
     auto schemaName = PgClientCatalog::bindSchemaName(attachOption,
         PgClientStorageExtension::DEFAULT_SCHEMA_NAME);
     auto catalog = std::make_unique<PgClientCatalog>(dbPath, catalogName,
-        schemaName, clientContext, *connector);
+        schemaName, dbName, clientContext, *connector);
     catalog->init();
 
     return std::make_unique<AttachedPgClientDatabase>(dbName,
