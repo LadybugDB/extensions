@@ -22,10 +22,11 @@ namespace lbug {
 namespace pg_client_extension {
 
 PgClientCatalog::PgClientCatalog(std::string connStr, std::string catalogName,
-    std::string defaultSchemaName, main::ClientContext* context,
-    const PgClientConnector& connector)
+    std::string defaultSchemaName, std::string attachedDbName,
+    main::ClientContext* context, const PgClientConnector& connector)
     : CatalogExtension{}, connStr{std::move(connStr)}, catalogName{std::move(catalogName)},
-      defaultSchemaName{std::move(defaultSchemaName)}, connector{connector},
+      defaultSchemaName{std::move(defaultSchemaName)},
+      attachedDbName{std::move(attachedDbName)}, connector{connector},
       context_{context} {}
 
 std::string PgClientCatalog::bindSchemaName(const binder::AttachOption& options,
@@ -191,7 +192,12 @@ void PgClientCatalog::createForeignNodeTable(const std::string& tableName) {
     tables->createEntry(&transaction::DUMMY_TRANSACTION, std::move(foreignTableEntry));
 
     // Create a main catalog entry for node table support (in-place queries)
-    auto foreignDatabaseName = std::format("{}.{}", defaultSchemaName, tableName);
+    //
+    // The shadow entry's foreignDatabaseName must be the lbug attached-database
+    // name -- NOT the schema-qualified PG name ("public.node_person") -- because
+    // the join-push-down optimizer uses it as a lookup key into
+    // DatabaseManager::getAttachedDatabase().
+    auto foreignDatabaseName = attachedDbName;
     auto mainTableEntry = std::make_unique<catalog::NodeTableCatalogEntry>(
         tableName, pkName, foreignDatabaseName, catalog::ShadowTag{});
 
@@ -309,7 +315,11 @@ void PgClientCatalog::createForeignRelTable(const std::string& tableName) {
     // underlying libpq connection is safe across parallel hash-join workers,
     // and ForeignRelTable now owns the shared state and serializes offset
     // advancement with its own mutex, matching the morsel-driven model.
-    auto foreignDatabaseName = std::format("{}.{}", defaultSchemaName, tableName);
+    // The rel group's foreignDatabaseName must be the lbug attached-database
+    // name -- NOT the schema-qualified PG name ("public.fkrel_knows") -- because
+    // the join-push-down optimizer uses it as a lookup key into
+    // DatabaseManager::getAttachedDatabase().
+    auto foreignDatabaseName = attachedDbName;
 
     std::vector<catalog::RelTableCatalogInfo> relTableInfos;
     common::oid_t relOID = tables->getNextOID();
@@ -317,11 +327,15 @@ void PgClientCatalog::createForeignRelTable(const std::string& tableName) {
         catalog::NodeTableIDPair{srcTableID, dstTableID}, relOID,
         common::RelMultiplicity::MANY, common::RelMultiplicity::MANY);
 
+    // Set relStorage to "dbname.tablename" so the foreign join push-down optimizer
+    // can parse it and construct the proper SQL table reference.
+    auto relStorage = attachedDbName + "." + tableName;
+
     auto relGroupEntry =
         std::make_unique<catalog::RelGroupCatalogEntry>(tableName,
             common::RelMultiplicity::MANY, common::RelMultiplicity::MANY,
             common::ExtendDirection::BOTH, std::move(relTableInfos),
-            "", // storage
+            relStorage,
             common::StorageFormat::NONE, scanFunc, bindData,
             std::move(foreignDatabaseName));
 

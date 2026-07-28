@@ -94,4 +94,4 @@ Attached database successfully.
 0|node_person|ATTACHED|testdb(PG_CLIENT)|
 0|node_person|NODE|shadow(graph)|
 1|fkrel_knows|ATTACHED|testdb(PG_CLIENT)|
-1|fkrel_knows|REL|public.fkrel_knows|
+1|fkrel_knows|REL|testdb|
