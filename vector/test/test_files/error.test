@@ -14,7 +14,7 @@ Binder exception: Table test2 does not exist.
 Binder exception: Column vec2 does not exist in table test.
 -STATEMENT CALL CREATE_VECTOR_INDEX('test', 'e_hnsw_index', 'vec');
 ---- error
-Binder exception: VECTOR_INDEX only supports FLOAT/DOUBLE ARRAY columns.
+Binder exception: VECTOR_INDEX only supports FLOAT/DOUBLE/INT8 ARRAY columns.
 -STATEMENT CREATE NODE TABLE embeddings (id int64, vec FLOAT[960], PRIMARY KEY (id));
 ---- ok
 -STATEMENT COPY embeddings FROM "${LBUG_ROOT_DIRECTORY}/dataset/embeddings/embeddings-960-1k.csv" (deLim=',');

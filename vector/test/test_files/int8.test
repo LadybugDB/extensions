@@ -1,0 +1,208 @@
+-DATASET CSV empty
+-BUFFER_POOL_SIZE 134217728
+
+--
+
+-CASE DirectInt8CosineDistances
+-LOAD_DYNAMIC_EXTENSION vector
+-STATEMENT CREATE NODE TABLE embeddings (id INT64, vec INT8[4], PRIMARY KEY (id));
+---- ok
+-STATEMENT CREATE (:embeddings {id: 0, vec: [1, 0, 0, 0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 1, vec: [0, 1, 0, 0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 2, vec: [-1, 0, 0, 0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 3, vec: [1, 0, 0, 0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 4, vec: [0, 0, 0, 0]});
+---- ok
+-STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'i8_cos', 'vec', metric := 'cosine', quantization := 'none');
+---- ok
+# Against [1,0,0,0]: identical->0, orthogonal->1, opposite->2, zero->1
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'i8_cos', CAST([1, 0, 0, 0], 'INT8[4]'), 5, search_type := 'naive') RETURN node.id, distance ORDER BY distance, node.id;
+-CHECK_ORDER
+---- 5
+0|0.000000
+3|0.000000
+1|1.000000
+4|1.000000
+2|2.000000
+# Zero vs zero -> 0; zero vs non-zero -> 1 (SimSIMD policy)
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'i8_cos', CAST([0, 0, 0, 0], 'INT8[4]'), 5, search_type := 'naive') RETURN node.id, distance ORDER BY distance, node.id;
+-CHECK_ORDER
+---- 5
+4|0.000000
+0|1.000000
+1|1.000000
+2|1.000000
+3|1.000000
+# HNSW search returns the same nearest neighbors as naive for exact matches
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'i8_cos', CAST([1, 0, 0, 0], 'INT8[4]'), 2, efs := 50) RETURN node.id, distance ORDER BY distance, node.id;
+-CHECK_ORDER
+---- 2
+0|0.000000
+3|0.000000
+# No internal _QEMB table for the direct INT8 path
+-STATEMENT CALL SHOW_TABLES() WHERE name CONTAINS 'QEMB' RETURN count(*);
+---- 1
+0
+# Cache-on HNSW search remains usable after checkpoint/reload
+-RELOADDB
+-LOAD_DYNAMIC_EXTENSION vector
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'i8_cos', CAST([1, 0, 0, 0], 'INT8[4]'), 2, efs := 50) RETURN node.id, distance ORDER BY distance, node.id;
+-CHECK_ORDER
+---- 2
+0|0.000000
+3|0.000000
+
+-CASE DirectInt8CacheOffAndReload
+-LOAD_DYNAMIC_EXTENSION vector
+-STATEMENT CREATE NODE TABLE embeddings (id INT64, vec INT8[4], PRIMARY KEY (id));
+---- ok
+-STATEMENT CREATE (:embeddings {id: 0, vec: [1, 0, 0, 0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 1, vec: [0, 1, 0, 0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 2, vec: [-1, 0, 0, 0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 3, vec: [1, 0, 0, 0]});
+---- ok
+-STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'i8_cos_nocache', 'vec', metric := 'cosine', quantization := 'none', cache_embeddings := false);
+---- ok
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'i8_cos_nocache', CAST([1, 0, 0, 0], 'INT8[4]'), 2, search_type := 'naive') RETURN node.id, distance ORDER BY distance, node.id;
+-CHECK_ORDER
+---- 2
+0|0.000000
+3|0.000000
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'i8_cos_nocache', CAST([1, 0, 0, 0], 'INT8[4]'), 4, search_type := 'naive') RETURN node.id, distance ORDER BY distance, node.id;
+-CHECK_ORDER
+---- 4
+0|0.000000
+3|0.000000
+1|1.000000
+2|2.000000
+-RELOADDB
+-LOAD_DYNAMIC_EXTENSION vector
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'i8_cos_nocache', CAST([1, 0, 0, 0], 'INT8[4]'), 2, search_type := 'naive') RETURN node.id, distance ORDER BY distance, node.id;
+-CHECK_ORDER
+---- 2
+0|0.000000
+3|0.000000
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'i8_cos_nocache', CAST([1, 0, 0, 0], 'INT8[4]'), 4, efs := 50) RETURN node.id, distance ORDER BY distance, node.id;
+-CHECK_ORDER
+---- 4
+0|0.000000
+3|0.000000
+1|1.000000
+2|2.000000
+
+-CASE DirectInt8NavixFilter
+-LOAD_DYNAMIC_EXTENSION vector
+-STATEMENT CREATE NODE TABLE embeddings (id INT64, vec INT8[4], PRIMARY KEY (id));
+---- ok
+-STATEMENT CREATE (:embeddings {id: 0, vec: [1, 0, 0, 0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 1, vec: [0, 1, 0, 0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 2, vec: [-1, 0, 0, 0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 3, vec: [1, 0, 0, 0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 10, vec: [1, 0, 0, 0]});
+---- ok
+-STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'i8_cos', 'vec', metric := 'cosine', quantization := 'none');
+---- ok
+-STATEMENT CALL project_graph_cypher('G', 'MATCH (n:embeddings) WHERE n.id < 10 RETURN n');
+---- ok
+-STATEMENT CALL QUERY_VECTOR_INDEX('G', 'i8_cos', CAST([1, 0, 0, 0], 'INT8[4]'), 2, search_type := 'navix', efs := 50) RETURN node.id ORDER BY distance, node.id;
+-CHECK_ORDER
+---- 2
+0
+3
+-STATEMENT CALL QUERY_VECTOR_INDEX('G', 'i8_cos', CAST([1, 0, 0, 0], 'INT8[4]'), 5, search_type := 'naive') RETURN node.id ORDER BY distance, node.id;
+-CHECK_ORDER
+---- 4
+0
+3
+1
+2
+-RELOADDB
+-LOAD_DYNAMIC_EXTENSION vector
+-STATEMENT CALL project_graph_cypher('GReloaded', 'MATCH (n:embeddings) WHERE n.id < 10 RETURN n');
+---- ok
+-STATEMENT CALL QUERY_VECTOR_INDEX('GReloaded', 'i8_cos', CAST([1, 0, 0, 0], 'INT8[4]'), 2, search_type := 'navix', efs := 50) RETURN node.id ORDER BY distance, node.id;
+-CHECK_ORDER
+---- 2
+0
+3
+
+-CASE DirectInt8Mutations
+-LOAD_DYNAMIC_EXTENSION vector
+-STATEMENT CREATE NODE TABLE embeddings (id INT64, vec INT8[4], PRIMARY KEY (id));
+---- ok
+-STATEMENT CREATE (:embeddings {id: 0, vec: [1, 0, 0, 0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 1, vec: [0, 1, 0, 0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 2, vec: [-1, 0, 0, 0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 3, vec: [0, 0, 1, 0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 4, vec: [0, 0, 0, 1]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 5, vec: [1, 1, 0, 0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 6, vec: [0, -1, 0, 0]});
+---- ok
+-STATEMENT CREATE (:embeddings {id: 7, vec: [-1, 1, 0, 0]});
+---- ok
+-STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'i8_cos', 'vec', metric := 'cosine', quantization := 'none');
+---- ok
+-STATEMENT CREATE (:embeddings {id: 8, vec: [1, 1, 1, 1]});
+---- ok
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'i8_cos', CAST([1, 1, 1, 1], 'INT8[4]'), 2, efs := 50) RETURN node.id ORDER BY distance, node.id;
+-CHECK_ORDER
+---- 2
+8
+5
+-STATEMENT MATCH (e:embeddings) WHERE e.id = 1 SET e.vec = CAST([2, 1, 0, 0], 'INT8[4]');
+---- ok
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'i8_cos', CAST([2, 1, 0, 0], 'INT8[4]'), 1, efs := 50) RETURN node.id;
+---- 1
+1
+-STATEMENT MATCH (e:embeddings) WHERE e.id = 8 DELETE e;
+---- ok
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'i8_cos', CAST([1, 1, 1, 1], 'INT8[4]'), 1, efs := 50) RETURN node.id;
+---- 1
+5
+-RELOADDB
+-LOAD_DYNAMIC_EXTENSION vector
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'i8_cos', CAST([2, 1, 0, 0], 'INT8[4]'), 1, efs := 50) RETURN node.id;
+---- 1
+1
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'i8_cos', CAST([1, 1, 1, 1], 'INT8[4]'), 1, efs := 50) RETURN node.id;
+---- 1
+5
+
+-CASE DirectInt8RejectUnsupportedConfig
+-LOAD_DYNAMIC_EXTENSION vector
+-STATEMENT CREATE NODE TABLE embeddings (id INT64, vec INT8[4], PRIMARY KEY (id));
+---- ok
+-STATEMENT CREATE (:embeddings {id: 0, vec: [1, 0, 0, 0]});
+---- ok
+-STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'i8_sq8', 'vec', metric := 'cosine', quantization := 'sq8');
+---- error
+Binder exception: Direct INT8 vector indexes require quantization := 'none'.
+-STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'i8_sq16', 'vec', metric := 'cosine', quantization := 'sq16');
+---- error
+Binder exception: Direct INT8 vector indexes require quantization := 'none'.
+-STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'i8_l2', 'vec', metric := 'l2', quantization := 'none');
+---- error
+Binder exception: Direct INT8 vector indexes only support the cosine metric.
+-STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'i8_l2sq', 'vec', metric := 'l2sq', quantization := 'none');
+---- error
+Binder exception: Direct INT8 vector indexes only support the cosine metric.
+-STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'i8_dot', 'vec', metric := 'dotproduct', quantization := 'none');
+---- error
+Binder exception: Direct INT8 vector indexes only support the cosine metric.
