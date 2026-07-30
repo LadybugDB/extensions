@@ -1,5 +1,7 @@
 #pragma once
 
+#include <concepts>
+
 #include "hnsw_config.h"
 #include "storage/table/list_chunk_data.h"
 
@@ -15,7 +17,12 @@ class ClientContext;
 
 namespace vector_extension {
 template<typename T>
-concept VectorElementType = std::is_floating_point_v<T>;
+concept FloatingVectorElementType = std::same_as<T, float> || std::same_as<T, double>;
+
+// Direct HNSW source/query coordinates. SQ8/SQ16 helpers must use FloatingVectorElementType
+// so allowing INT8 here cannot instantiate secondary quantization over INT8 sources.
+template<typename T>
+concept VectorElementType = FloatingVectorElementType<T> || std::same_as<T, int8_t>;
 using metric_func_t = std::function<double(const void*, const void*, uint32_t)>;
 
 struct QuantizedEmbeddingView {
@@ -58,6 +65,16 @@ struct HNSWIndexUtils {
 
     static void validateColumnType(const catalog::TableCatalogEntry& tableEntry,
         const std::string& columnName);
+
+    /**
+     * Enforces direct-INT8 index constraints when the property array child type is INT8.
+     * No-op for FLOAT/DOUBLE sources. INT8 requires cosine with quantization none.
+     *
+     * @param columnType Property logical type (must be ARRAY).
+     * @param config Parsed CREATE_VECTOR_INDEX configuration.
+     */
+    static void validateDirectInt8IndexConfig(const common::LogicalType& columnType,
+        const HNSWIndexConfig& config);
 
     static std::string getUpperGraphTableName(common::table_id_t tableID,
         const std::string& indexName) {

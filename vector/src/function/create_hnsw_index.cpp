@@ -57,6 +57,8 @@ static std::unique_ptr<TableFuncBindData> createInMemHNSWBindFunc(main::ClientCo
     }
     const auto tableID = nodeTableEntry->getTableID();
     HNSWIndexUtils::validateColumnType(*nodeTableEntry, columnName);
+    const auto& columnType = nodeTableEntry->getProperty(columnName).getType();
+    HNSWIndexUtils::validateDirectInt8IndexConfig(columnType, config);
     auto& table =
         storage::StorageManager::Get(*context)->getTable(tableID)->cast<storage::NodeTable>();
     auto propertyID = nodeTableEntry->getPropertyID(columnName);

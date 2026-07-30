@@ -102,6 +102,23 @@ void HNSWIndexUtils::validateColumnType(const catalog::TableCatalogEntry& tableE
     validateColumnType(type);
 }
 
+void HNSWIndexUtils::validateDirectInt8IndexConfig(const common::LogicalType& columnType,
+    const HNSWIndexConfig& config) {
+    const auto& childType =
+        columnType.getExtraTypeInfo()->constPtrCast<common::ArrayTypeInfo>()->getChildType();
+    if (childType.getLogicalTypeID() != common::LogicalTypeID::INT8) {
+        return; // FLOAT/DOUBLE keep existing metric/quantization rules elsewhere.
+    }
+    if (config.metric != MetricType::Cosine) {
+        throw common::BinderException(
+            "Direct INT8 vector indexes only support the cosine metric.");
+    }
+    if (config.quantization != QuantizationType::NONE) {
+        throw common::BinderException(
+            "Direct INT8 vector indexes require quantization := 'none'.");
+    }
+}
+
 template<auto Func, VectorElementType T>
 static double computeDistance(const void* left, const void* right, uint32_t dimension) {
     double distance = 0.0;
@@ -119,12 +136,13 @@ static metric_func_t computeDistanceFuncDispatch(const common::LogicalType& type
         return computeDistance<FUNC_F64, double>;
     }
     default: {
-        UNREACHABLE_CODE;
+        throw common::BinderException(
+            "VECTOR_INDEX only supports FLOAT/DOUBLE/INT8 ARRAY columns.");
     }
     }
 }
 
-template<VectorElementType T>
+template<FloatingVectorElementType T>
 struct ScalarQuantizedVector {
     explicit ScalarQuantizedVector(const T* vector, uint32_t dimension, int8_t maxQuantizedValue)
         : values(dimension), scale{0.0} {
@@ -238,7 +256,7 @@ static uint64_t getQuantizedCachedEmbeddingPayloadBytesInternal(uint64_t dimensi
     return getQuantizedEmbeddingPayloadBytesInternal(dimension, quantization);
 }
 
-template<VectorElementType T>
+template<FloatingVectorElementType T>
 static double computeScalarQuantizedDistance(const void* left, const void* right,
     uint32_t dimension, MetricType metric, int8_t maxQuantizedValue) {
     const auto* leftVector = static_cast<const T*>(left);
@@ -366,6 +384,13 @@ metric_func_t HNSWIndexUtils::getMetricsFunction(MetricType metric, const common
     if (quantization != QuantizationType::NONE && metric != MetricType::DotProduct) {
         return HNSWIndexUtils::getQuantizedCachedMetricsFunction(metric, quantization);
     }
+    if (type.getLogicalTypeID() == common::LogicalTypeID::INT8) {
+        if (metric != MetricType::Cosine || quantization != QuantizationType::NONE) {
+            throw common::BinderException(
+                "Direct INT8 vector indexes only support cosine with quantization := 'none'.");
+        }
+        return computeDistance<simsimd_cos_i8, int8_t>;
+    }
     switch (metric) {
     case MetricType::Cosine: {
         return computeDistanceFuncDispatch<simsimd_cos_f32, simsimd_cos_f64>(type);
@@ -432,11 +457,13 @@ void HNSWIndexUtils::validateColumnType(const common::LogicalType& type) {
         auto& childType =
             type.getExtraTypeInfo()->constPtrCast<common::ArrayTypeInfo>()->getChildType();
         if (childType.getLogicalTypeID() == common::LogicalTypeID::FLOAT ||
-            childType.getLogicalTypeID() == common::LogicalTypeID::DOUBLE) {
+            childType.getLogicalTypeID() == common::LogicalTypeID::DOUBLE ||
+            childType.getLogicalTypeID() == common::LogicalTypeID::INT8) {
             return;
         }
     }
-    throw common::BinderException("VECTOR_INDEX only supports FLOAT/DOUBLE ARRAY columns.");
+    throw common::BinderException(
+        "VECTOR_INDEX only supports FLOAT/DOUBLE/INT8 ARRAY columns.");
 }
 
 } // namespace vector_extension

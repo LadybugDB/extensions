@@ -227,7 +227,7 @@ struct HNSWRawQueryVector : GetEmbeddingsScanState {
     std::vector<T> data;
 };
 
-template<VectorElementType T>
+template<FloatingVectorElementType T>
 static void quantizeQueryVector(const std::vector<T>& src, QuantizationType quantization,
     MetricType metric, uint8_t* payloadDst, float& scaleDst, float& normSqDst) {
     constexpr float zeroScale = 0.0f;
@@ -329,13 +329,18 @@ static offset_t tableFunc(const TableFuncInput& input, TableFuncOutput& output) 
                         exactQueryVectorHandle, exactQueryVectorHandle, localState->searchState);
                     return;
                 }
-                auto queryVector = HNSWQuantizedQueryVector<T>(input.context->clientContext,
-                    bindData->queryExpression, index.getElementType(), dimension,
-                    index.getQuantization(), index.getMetric());
-                auto queryVectorHandle = EmbeddingHandle{0, &queryVector};
-                localState->result =
-                    index.search(transaction::Transaction::Get(*input.context->clientContext),
-                        queryVectorHandle, exactQueryVectorHandle, localState->searchState);
+                if constexpr (FloatingVectorElementType<T>) {
+                    auto queryVector = HNSWQuantizedQueryVector<T>(input.context->clientContext,
+                        bindData->queryExpression, index.getElementType(), dimension,
+                        index.getQuantization(), index.getMetric());
+                    auto queryVectorHandle = EmbeddingHandle{0, &queryVector};
+                    localState->result =
+                        index.search(transaction::Transaction::Get(*input.context->clientContext),
+                            queryVectorHandle, exactQueryVectorHandle, localState->searchState);
+                } else {
+                    // Direct INT8 indexes reject SQ8/SQ16 at bind time.
+                    UNREACHABLE_CODE;
+                }
             },
             [&](auto) { UNREACHABLE_CODE; });
     }
