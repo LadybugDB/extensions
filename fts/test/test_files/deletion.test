@@ -93,3 +93,53 @@ The Quantum World|0.634506
 -STATEMENT MATCH (a:A) RETURN count(a);
 ---- 1
 0
+-CASE FTSDeleteDefaultStopwordWithStemmerNone
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE DefinitionNode(id INT64, name STRING, path STRING, PRIMARY KEY(id));
+---- ok
+-STATEMENT CREATE (:DefinitionNode {id: 1, name: 'tool.go', path: 'tool.go'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('DefinitionNode', 'def_search_idx_0', ['name'], stemmer := 'none');
+---- ok
+# Create-time indexing removes default stopword token 'go', keeping only 'tool'.
+-STATEMENT CALL QUERY_FTS_INDEX('DefinitionNode', 'def_search_idx_0', 'tool') RETURN node.id;
+---- 1
+1
+-STATEMENT CALL QUERY_FTS_INDEX('DefinitionNode', 'def_search_idx_0', 'go') RETURN node.id;
+---- 0
+# Delete maintenance must reconstruct the same stopword-filtered terms as create.
+-STATEMENT UNWIND ['tool.go'] AS path MATCH (n:DefinitionNode) WHERE n.path = path DETACH DELETE n;
+---- ok
+-STATEMENT MATCH (n:DefinitionNode) RETURN count(n);
+---- 1
+0
+
+
+-CASE FTSMixedCreateInsertStopwordDeleteWithStemmerNone
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE DefinitionNode(id INT64, name STRING, path STRING, PRIMARY KEY(id));
+---- ok
+-STATEMENT CREATE (:DefinitionNode {id: 1, name: 'tool.go', path: 'tool.go'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('DefinitionNode', 'def_search_idx_0', ['name'], stemmer := 'none');
+---- ok
+# Create-time row does not index stopword token 'go'.
+-STATEMENT CALL QUERY_FTS_INDEX('DefinitionNode', 'def_search_idx_0', 'go') RETURN node.id;
+---- 0
+-STATEMENT CREATE (:DefinitionNode {id: 2, name: 'server.go', path: 'server.go'});
+---- ok
+# Runtime insert must apply the same stopword filtering as index creation.
+-STATEMENT CALL QUERY_FTS_INDEX('DefinitionNode', 'def_search_idx_0', 'go') RETURN node.id ORDER BY node.id;
+---- 0
+# Deleting a create-time row must not affect the surviving runtime-inserted row.
+-STATEMENT UNWIND ['tool.go'] AS path MATCH (n:DefinitionNode) WHERE n.path = path DETACH DELETE n;
+---- ok
+-STATEMENT MATCH (n:DefinitionNode) RETURN n.id, n.name ORDER BY n.id;
+---- 1
+2|server.go
+-STATEMENT CALL QUERY_FTS_INDEX('DefinitionNode', 'def_search_idx_0', 'server') RETURN node.id;
+---- 1
+2
+# The configured stopword remains absent after deletion.
+-STATEMENT CALL QUERY_FTS_INDEX('DefinitionNode', 'def_search_idx_0', 'go') RETURN node.id;
+---- 0

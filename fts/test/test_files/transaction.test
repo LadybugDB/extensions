@@ -204,3 +204,20 @@ The Mind Machine|0.756869
 199|1.951345
 202|2.016027
 389|1.906131
+
+-CASE FTSDeleteDefaultStopwordAfterReload
+-SKIP_IN_MEM
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE source_doc(ID INT64, content STRING, PRIMARY KEY(ID));
+---- ok
+-STATEMENT CREATE (:source_doc {ID: 1, content: 'tool.go'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('source_doc', 'contentIdx', ['content'], stemmer := 'none');
+---- ok
+-RELOADDB
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT MATCH (d:source_doc) WHERE d.ID = 1 DELETE d;
+---- ok
+-STATEMENT MATCH (d:source_doc) RETURN count(d);
+---- 1
+0

@@ -74,3 +74,17 @@ Binder exception: Cannot drop property abstract in table Book because it is used
 Alice wonderland|0.549301
 Learning Machines|0.599514
 The Quantum World|0.931796
+
+-CASE FTSInsertDefaultStopwordWithStemmerNone
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE doc (ID INT64, content STRING, PRIMARY KEY(ID));
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('doc', 'contentIdx', ['content'], stemmer := 'none');
+---- ok
+-STATEMENT CREATE (:doc {ID: 1, content: 'tool.go'});
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('doc', 'contentIdx', 'tool') RETURN node.ID;
+---- 1
+1
+-STATEMENT CALL QUERY_FTS_INDEX('doc', 'contentIdx', 'go') RETURN node.ID;
+---- 0
