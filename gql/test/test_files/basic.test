@@ -108,3 +108,45 @@ Runtime exception: Failed to parse GQL query: INVALID !!! SYNTAX
 -STATEMENT CALL GQL("")
 ---- error
 Runtime exception: GQL query string must not be empty
+
+
+-CASE GqlCreateGraphAny
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("CREATE GRAPH mygraph ANY")
+---- ok
+
+-STATEMENT CALL SHOW_GRAPHS() RETURN *
+---- 1
+mygraph
+
+
+-CASE GqlCreateGraphAnyIfNotExists
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("CREATE GRAPH IF NOT EXISTS mygraph2 ANY")
+---- ok
+
+-STATEMENT CALL GQL("CREATE GRAPH IF NOT EXISTS mygraph2 ANY")
+---- ok
+
+-STATEMENT CALL SHOW_GRAPHS() RETURN *
+---- 1
+mygraph2
+
+
+-CASE GqlCreatePropertyGraph
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("CREATE PROPERTY GRAPH pg ANY")
+---- ok
+
+-STATEMENT CALL SHOW_GRAPHS() RETURN *
+---- 1
+pg
