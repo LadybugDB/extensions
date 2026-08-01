@@ -1,5 +1,8 @@
 #pragma once
 
+#include <mutex>
+#include <unordered_map>
+
 #include "function/fts_config.h"
 #include "index/fts_internal_table_info.h"
 #include "storage/index/index.h"
@@ -11,13 +14,28 @@ struct FTSInsertState;
 struct FTSDeleteState;
 struct TermInfo;
 
-struct FTSStorageInfo final : storage::IndexStorageInfo {
-    common::idx_t numDocs = 0;
-    double avgDocLen = 0;
+struct FTSStatsDelta {
+    int64_t numDocs = 0;
+    double totalDocLen = 0;
+    common::offset_t numCheckpointedNodes = 0;
+};
+
+struct FTSStatsState {
+    mutable std::mutex mtx;
+    common::idx_t numDocs;
+    double avgDocLen;
     common::offset_t numCheckpointedNodes;
+    std::unordered_map<common::transaction_t, FTSStatsDelta> deltas;
+
+    FTSStatsState(common::idx_t numDocs, double avgDocLen, common::offset_t numCheckpointedNodes)
+        : numDocs{numDocs}, avgDocLen{avgDocLen}, numCheckpointedNodes{numCheckpointedNodes} {}
+};
+
+struct FTSStorageInfo final : storage::IndexStorageInfo {
+    std::shared_ptr<FTSStatsState> stats;
 
     FTSStorageInfo(common::idx_t numDocs, double avgDocLen, common::offset_t numCheckpointedNodes)
-        : numDocs{numDocs}, avgDocLen{avgDocLen}, numCheckpointedNodes{numCheckpointedNodes} {}
+        : stats{std::make_shared<FTSStatsState>(numDocs, avgDocLen, numCheckpointedNodes)} {}
 
     std::shared_ptr<common::BufferWriter> serialize() const override;
 
@@ -53,7 +71,10 @@ public:
         DeleteState& deleteState) override;
 
     void finalize(main::ClientContext* context) override;
-    void checkpoint(main::ClientContext*, storage::PageAllocator& pageAllocator, storage::ShadowFile& shadowFile) override;
+
+    std::pair<common::idx_t, double> getStats(const transaction::Transaction* transaction) const;
+    void checkpoint(main::ClientContext*, storage::PageAllocator& pageAllocator,
+        storage::ShadowFile& shadowFile) override;
 
     static storage::IndexType getIndexType() {
         static const storage::IndexType FTS_INDEX_TYPE{"FTS",
@@ -77,7 +98,7 @@ private:
         common::table_id_t termsTableID) const;
 
     common::nodeID_t deleteFromDocTable(transaction::Transaction* transaction,
-        FTSDeleteState& deleteState, common::nodeID_t deletedNodeID, double& totalDocLen) const;
+        FTSDeleteState& deleteState, common::nodeID_t deletedNodeID, uint64_t& deletedDocLen) const;
 
     void deleteFromTermsTable(transaction::Transaction* transaction,
         std::unordered_map<std::string, TermInfo>& tfCollection,
@@ -85,6 +106,9 @@ private:
 
     void deleteFromAppearsInTable(transaction::Transaction* transaction,
         FTSDeleteState& ftsDeleteState, common::nodeID_t docID) const;
+
+    void updateStats(transaction::Transaction* transaction, int64_t numDocs, double totalDocLen,
+        common::offset_t numCheckpointedNodes);
 
 private:
     FTSInternalTableInfo internalTableInfo;

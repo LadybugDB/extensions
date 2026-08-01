@@ -480,11 +480,10 @@ static std::unique_ptr<TableFuncBindData> bindFunc(main::ClientContext* context,
     auto index = nodeTable->getIndex(indexName);
     DASSERT(index.has_value());
     auto& ftsIndex = index.value()->cast<FTSIndex>();
-    auto& ftsStorageInfo = ftsIndex.getStorageInfo().constCast<FTSStorageInfo>();
+    auto [numDocs, avgDocLen] = ftsIndex.getStats(transaction);
     auto bindData = std::make_unique<QueryFTSBindData>(std::move(columns), std::move(graphEntry),
         nodeOutput, std::move(query), *ftsIndexEntry,
-        std::make_unique<QueryFTSOptionalParams>(input->optionalParamsLegacy),
-        ftsStorageInfo.numDocs, ftsStorageInfo.avgDocLen);
+        std::make_unique<QueryFTSOptionalParams>(input->optionalParamsLegacy), numDocs, avgDocLen);
     context->setUseInternalCatalogEntry(false /* useInternalCatalogEntry */);
     return bindData;
 }

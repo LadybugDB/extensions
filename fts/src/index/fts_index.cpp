@@ -40,6 +40,15 @@ struct TermInfo {
 };
 
 std::shared_ptr<BufferWriter> FTSStorageInfo::serialize() const {
+    idx_t numDocs;
+    double avgDocLen;
+    offset_t numCheckpointedNodes;
+    {
+        std::lock_guard lck{stats->mtx};
+        numDocs = stats->numDocs;
+        avgDocLen = stats->avgDocLen;
+        numCheckpointedNodes = stats->numCheckpointedNodes;
+    }
     auto bufferWriter = std::make_shared<BufferWriter>();
     auto serializer = Serializer(bufferWriter);
     serializer.write<idx_t>(numDocs);
@@ -116,31 +125,26 @@ void FTSIndex::insert(Transaction* transaction, const ValueVector& nodeIDVector,
     const std::vector<ValueVector*>& indexVectors, InsertState& insertState) {
     auto totalInsertedDocLen = 0u;
     idx_t numInsertedDocs = 0;
+    offset_t numCheckpointedNodes = 0;
     auto& ftsInsertState = insertState.cast<FTSInsertState>();
     for (auto i = 0u; i < nodeIDVector.state->getSelSize(); i++) {
         auto pos = nodeIDVector.state->getSelVector()[i];
+        auto insertedNodeID = nodeIDVector.getValue<nodeID_t>(pos);
+        numCheckpointedNodes = std::max(numCheckpointedNodes, insertedNodeID.offset + 1);
         DocInfo docInfo{transaction, config, internalTableInfo.stopWordsTable, indexVectors, i,
             ftsInsertState.updateVectors.mm};
         if (docInfo.termInfos.size() == 0) {
             continue;
         }
-        auto insertedDocID = insertToDocTable(transaction, ftsInsertState,
-            nodeIDVector.getValue<nodeID_t>(pos), docInfo.docLen);
+        auto insertedDocID =
+            insertToDocTable(transaction, ftsInsertState, insertedNodeID, docInfo.docLen);
         totalInsertedDocLen += docInfo.docLen;
         numInsertedDocs++;
         insertToTermsTable(transaction, docInfo.termInfos, ftsInsertState);
         insertToAppearsInTable(transaction, docInfo.termInfos, ftsInsertState, insertedDocID,
             internalTableInfo.termsTable->getTableID());
     }
-    auto& ftsStorageInfo = storageInfo->cast<FTSStorageInfo>();
-    if (numInsertedDocs > 0) {
-        ftsStorageInfo.avgDocLen =
-            (ftsStorageInfo.avgDocLen * ftsStorageInfo.numDocs + totalInsertedDocLen) /
-            (ftsStorageInfo.numDocs + numInsertedDocs);
-        ftsStorageInfo.numDocs += numInsertedDocs;
-    }
-    ftsStorageInfo.numCheckpointedNodes =
-        nodeIDVector.getValue<nodeID_t>(nodeIDVector.state->getSelVector()[0]).offset + 1;
+    updateStats(transaction, numInsertedDocs, totalInsertedDocLen, numCheckpointedNodes);
 }
 
 std::unique_ptr<Index::UpdateState> FTSIndex::initUpdateState(main::ClientContext* context,
@@ -179,8 +183,7 @@ std::unique_ptr<Index::DeleteState> FTSIndex::initDeleteState(const Transaction*
 void FTSIndex::delete_(Transaction* transaction, const ValueVector& nodeIDVector,
     DeleteState& deleteState) {
     auto& ftsDeleteState = deleteState.cast<FTSDeleteState>();
-    auto& ftsStorageInfo = storageInfo->cast<FTSStorageInfo>();
-    double totalDocLen = ftsStorageInfo.avgDocLen * ftsStorageInfo.numDocs;
+    uint64_t totalDeletedDocLen = 0;
     idx_t numDeletedDocs = 0;
     for (auto i = 0u; i < nodeIDVector.state->getSelSize(); i++) {
         auto pos = nodeIDVector.state->getSelVector()[i];
@@ -194,36 +197,93 @@ void FTSIndex::delete_(Transaction* transaction, const ValueVector& nodeIDVector
         if (docInfo.termInfos.size() == 0) {
             continue;
         }
+        uint64_t deletedDocLen = 0;
         auto deletedDocID =
-            deleteFromDocTable(transaction, ftsDeleteState, deletedNodeID, totalDocLen);
+            deleteFromDocTable(transaction, ftsDeleteState, deletedNodeID, deletedDocLen);
         deleteFromTermsTable(transaction, docInfo.termInfos, ftsDeleteState);
         deleteFromAppearsInTable(transaction, ftsDeleteState, deletedDocID);
+        totalDeletedDocLen += deletedDocLen;
         numDeletedDocs++;
     }
-    if (numDeletedDocs > 0) {
-        if (ftsStorageInfo.numDocs == numDeletedDocs) {
-            ftsStorageInfo.avgDocLen = 0;
-        } else {
-            ftsStorageInfo.avgDocLen = totalDocLen / (ftsStorageInfo.numDocs - numDeletedDocs);
-        }
-        ftsStorageInfo.numDocs -= numDeletedDocs;
+    updateStats(transaction, -static_cast<int64_t>(numDeletedDocs),
+        -static_cast<double>(totalDeletedDocLen), 0);
+}
+
+std::pair<idx_t, double> FTSIndex::getStats(const Transaction* transaction) const {
+    const auto stats = storageInfo->cast<FTSStorageInfo>().stats;
+    std::lock_guard lck{stats->mtx};
+    auto numDocs = static_cast<int64_t>(stats->numDocs);
+    auto totalDocLen = stats->avgDocLen * stats->numDocs;
+    if (const auto it = stats->deltas.find(transaction->getID()); it != stats->deltas.end()) {
+        numDocs += it->second.numDocs;
+        totalDocLen += it->second.totalDocLen;
     }
+    DASSERT(numDocs >= 0);
+    return {static_cast<idx_t>(numDocs), numDocs == 0 ? 0 : totalDocLen / numDocs};
+}
+
+void FTSIndex::updateStats(Transaction* transaction, int64_t numDocs, double totalDocLen,
+    offset_t numCheckpointedNodes) {
+    if (numDocs == 0 && totalDocLen == 0 && numCheckpointedNodes == 0) {
+        return;
+    }
+    const auto transactionID = transaction->getID();
+    const auto stats = storageInfo->cast<FTSStorageInfo>().stats;
+    auto registerCallbacks = false;
+    {
+        std::lock_guard lck{stats->mtx};
+        auto [it, inserted] = stats->deltas.try_emplace(transactionID);
+        it->second.numDocs += numDocs;
+        it->second.totalDocLen += totalDocLen;
+        it->second.numCheckpointedNodes =
+            std::max(it->second.numCheckpointedNodes, numCheckpointedNodes);
+        registerCallbacks = inserted;
+    }
+    if (!registerCallbacks) {
+        return;
+    }
+    transaction->pushCommitCallback([stats, transactionID](Transaction&) {
+        std::lock_guard lck{stats->mtx};
+        const auto it = stats->deltas.find(transactionID);
+        DASSERT(it != stats->deltas.end());
+        const auto committedNumDocs = static_cast<int64_t>(stats->numDocs) + it->second.numDocs;
+        const auto committedTotalDocLen =
+            stats->avgDocLen * stats->numDocs + it->second.totalDocLen;
+        DASSERT(committedNumDocs >= 0);
+        stats->numDocs = static_cast<idx_t>(committedNumDocs);
+        stats->avgDocLen = committedNumDocs == 0 ? 0 : committedTotalDocLen / committedNumDocs;
+        stats->numCheckpointedNodes =
+            std::max(stats->numCheckpointedNodes, it->second.numCheckpointedNodes);
+        stats->deltas.erase(it);
+    });
+    transaction->pushRollbackCallback([stats, transactionID](Transaction&) {
+        std::lock_guard lck{stats->mtx};
+        stats->deltas.erase(transactionID);
+    });
 }
 
 void FTSIndex::finalize(main::ClientContext* context) {
-    auto& ftsStorageInfo = storageInfo->cast<FTSStorageInfo>();
+    const auto stats = storageInfo->cast<FTSStorageInfo>().stats;
+    auto transaction = transaction::Transaction::Get(*context);
+    common::offset_t numCheckpointedNodes;
+    {
+        std::lock_guard lck{stats->mtx};
+        numCheckpointedNodes = stats->numCheckpointedNodes;
+        if (const auto it = stats->deltas.find(transaction->getID()); it != stats->deltas.end()) {
+            numCheckpointedNodes = std::max(numCheckpointedNodes, it->second.numCheckpointedNodes);
+        }
+    }
     const auto numTotalRows =
         internalTableInfo.table->getNumTotalRows(&DUMMY_CHECKPOINT_TRANSACTION);
-    if (numTotalRows == ftsStorageInfo.numCheckpointedNodes) {
+    if (numTotalRows == numCheckpointedNodes) {
         return;
     }
-    auto transaction = transaction::Transaction::Get(*context);
     auto dataChunk = DataChunkState::getSingleValueDataChunkState();
     ValueVector idVector{LogicalType::INTERNAL_ID(), MemoryManager::Get(*context), dataChunk};
     IndexTableState indexTableState{MemoryManager::Get(*context), transaction, internalTableInfo,
         indexInfo.columnIDs, idVector, dataChunk};
     internalID_t insertedNodeID = {INVALID_OFFSET, internalTableInfo.table->getTableID()};
-    for (auto offset = ftsStorageInfo.numCheckpointedNodes; offset < numTotalRows; offset++) {
+    for (auto offset = numCheckpointedNodes; offset < numTotalRows; offset++) {
         insertedNodeID.offset = offset;
         idVector.setValue(0, insertedNodeID);
         internalTableInfo.table->initScanState(transaction, *indexTableState.scanState,
@@ -232,7 +292,6 @@ void FTSIndex::finalize(main::ClientContext* context) {
         auto insertState = initInsertState(context, [](offset_t) { return true; });
         insert(transaction, idVector, indexTableState.indexVectors, *insertState);
     }
-    ftsStorageInfo.numCheckpointedNodes = numTotalRows;
 }
 
 void FTSIndex::checkpoint(main::ClientContext* context, storage::PageAllocator& pageAllocator,
@@ -308,7 +367,7 @@ void FTSIndex::insertToAppearsInTable(Transaction* transaction,
 }
 
 nodeID_t FTSIndex::deleteFromDocTable(Transaction* transaction, FTSDeleteState& deleteState,
-    nodeID_t deletedNodeID, double& totalDocLen) const {
+    nodeID_t deletedNodeID, uint64_t& deletedDocLen) const {
     auto& pkVector = deleteState.updateVectors.int64PKVector;
     pkVector.setValue(0, deletedNodeID.offset);
     nodeID_t docNodeID{INVALID_OFFSET, internalTableInfo.docTable->getTableID()};
@@ -323,7 +382,7 @@ nodeID_t FTSIndex::deleteFromDocTable(Transaction* transaction, FTSDeleteState& 
     internalTableInfo.docTable->initScanState(transaction, deleteState.docTableScanState,
         docNodeID.tableID, docNodeID.offset);
     internalTableInfo.docTable->lookup(transaction, deleteState.docTableScanState);
-    totalDocLen -= deleteState.updateVectors.uint64PropVector.getValue<uint64_t>(0);
+    deletedDocLen = deleteState.updateVectors.uint64PropVector.getValue<uint64_t>(0);
     internalTableInfo.docTable->delete_(transaction, deleteState.docTableDeleteState);
     return docNodeID;
 }
