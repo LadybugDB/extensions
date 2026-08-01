@@ -19,9 +19,10 @@ namespace gql_extension {
 std::string GqlToCypherTransformer::Transform(GQLParser::GqlProgramContext &root) {
     cypherResult.clear();
 
-    // Visit the parse tree. The visitor will dispatch to the appropriate
-    // handler based on the statement type.
-    visit(&root);
+    // Visit the parse tree. The visitor dispatches to the appropriate
+    // handler based on the statement type found in the tree.
+    // Note: we override visitChildren below to ensure tree walking works.
+    GQLBaseVisitor::visit(&root);
 
     // If no specific handler produced a result, use the full input text
     // with basic keyword transformations (GQL and Cypher share most syntax).
@@ -32,6 +33,16 @@ std::string GqlToCypherTransformer::Transform(GQLParser::GqlProgramContext &root
     // Apply universal keyword transformations:
     // GQL INSERT → Cypher CREATE
     cypherResult = replaceWord(cypherResult, "INSERT", "CREATE");
+
+    // Strip GQL keywords that LadybugDB Cypher doesn't support:
+    // - PROPERTY (for open type graphs it's a no-op modifier)
+    // - IF NOT EXISTS (LadybugDB Cypher doesn't support this for CREATE GRAPH)
+    if (cypherResult.find("CREATE") == 0 || cypherResult.find("create") == 0) {
+        cypherResult = replaceWord(cypherResult, "PROPERTY", "");
+        cypherResult = replaceWord(cypherResult, "IF NOT EXISTS", "");
+        // Collapse multiple spaces
+        cypherResult = std::regex_replace(cypherResult, std::regex("  +"), " ");
+    }
 
     return cypherResult;
 }
@@ -63,13 +74,62 @@ std::any GqlToCypherTransformer::visitInsertStatement(
 }
 
 // =============================================================================
-// Visitor: CREATE GRAPH (unsupported via CALL GQL)
+// Visitor: CREATE GRAPH → CREATE GRAPH <name>
+//
+// GQL:  CREATE [PROPERTY] GRAPH [IF NOT EXISTS] <name> [ANY] [...]
+// Cypher: CREATE GRAPH <name>
+//
+// Strips PROPERTY, ANY, IF NOT EXISTS, OR REPLACE since LadybugDB Cypher
+// doesn't support these modifiers for CREATE GRAPH.
 // =============================================================================
 
 std::any GqlToCypherTransformer::visitCreateGraphStatement(
-    GQLParser::CreateGraphStatementContext * /*ctx*/) {
-    cypherResult = "RETURN 'CREATE GRAPH must be executed directly, not via CALL GQL' "
-                   "AS message";
+    GQLParser::CreateGraphStatementContext *ctx) {
+    if (!ctx) return {};
+
+    // OR REPLACE is not supported — reject with a clear message
+    if (ctx->OR() || ctx->REPLACE()) {
+        cypherResult =
+            "RETURN 'CREATE OR REPLACE GRAPH is not supported via CALL GQL' "
+            "AS message";
+        return {};
+    }
+
+    // Extract the graph name
+    auto parentAndName = ctx->catalogGraphParentAndName();
+    if (!parentAndName) {
+        // Fall back to source-text based extraction if the parse tree
+        // doesn't have the expected shape (e.g. for PROPERTY GRAPH variants).
+        std::string fullText = sourceText(ctx);
+        // Strip CREATE [OR REPLACE] [PROPERTY] prefix → CREATE GRAPH
+        // Strip trailing type modifiers (ANY, etc.)
+        fullText = replaceWord(fullText, "OR REPLACE", "");
+        fullText = replaceWord(fullText, "PROPERTY", "");
+        fullText = replaceWord(fullText, "IF NOT EXISTS", "");
+        fullText = replaceWord(fullText, "ANY", "");
+        // Collapse whitespace
+        fullText = std::regex_replace(fullText, std::regex("\\s+"), " ");
+        // Trim
+        while (!fullText.empty() && std::isspace(fullText.back())) fullText.pop_back();
+        while (!fullText.empty() && std::isspace(fullText.front())) fullText = fullText.substr(1);
+        cypherResult = fullText;
+        return {};
+    }
+
+    auto graphName = parentAndName->graphName();
+    if (!graphName) {
+        cypherResult = "RETURN 'Invalid CREATE GRAPH: missing graph name' AS message";
+        return {};
+    }
+
+    std::string name = sourceText(graphName);
+
+    // Build Cypher: CREATE GRAPH <name>
+    // (IF NOT EXISTS, PROPERTY, ANY are all stripped — LadybugDB Cypher
+    //  doesn't use these modifiers for open type graphs)
+    std::ostringstream out;
+    out << "CREATE GRAPH " << name;
+    cypherResult = out.str();
     return {};
 }
 
@@ -97,13 +157,14 @@ std::any GqlToCypherTransformer::visitSessionSetGraphClause(
 }
 
 // =============================================================================
-// Default visitor: pass through
+// Default visitor: walk children to find specific statement types
 // =============================================================================
 
-std::any GqlToCypherTransformer::visitChildren(antlr4::tree::ParseTree * /*node*/) {
-    // Default behavior: don't set cypherResult.
-    // The Transform() method will use the full query text as fallback.
-    return {};
+std::any GqlToCypherTransformer::visitChildren(antlr4::tree::ParseTree *node) {
+    // Delegate to the base class which recursively visits all children.
+    // This ensures visitMatchStatement, visitInsertStatement, etc. are called
+    // when the corresponding nodes are found in the parse tree.
+    return GQLBaseVisitor::visitChildren(node);
 }
 
 // =============================================================================
