@@ -150,3 +150,47 @@ mygraph2
 -STATEMENT CALL SHOW_GRAPHS() RETURN *
 ---- 1
 pg
+
+
+-CASE GqlDdlFallbackCreateNodeTable
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("CREATE NODE TABLE Sensor(id INT64, reading DOUBLE, PRIMARY KEY(id))")
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:Sensor {id: 1, reading: 42.5})")
+---- 0
+
+-STATEMENT CALL GQL("MATCH (n:Sensor) RETURN n.id AS id, n.reading AS reading")
+---- 1
+1|42.500000
+
+
+-CASE GqlDdlFallbackCreateRelTable
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("CREATE NODE TABLE A(id INT64, PRIMARY KEY(id))")
+---- ok
+
+-STATEMENT CALL GQL("CREATE NODE TABLE B(id INT64, PRIMARY KEY(id))")
+---- ok
+
+-STATEMENT CALL GQL("CREATE REL TABLE CONNECTS(FROM A TO B, weight INT64)")
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:A {id: 1})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:B {id: 2})")
+---- 0
+
+-STATEMENT MATCH (a:A {id: 1}), (b:B {id: 2}) CREATE (a)-[:CONNECTS {weight: 100}]->(b)
+---- 0
+
+-STATEMENT CALL GQL("MATCH (a:A)-[c:CONNECTS]->(b:B) RETURN a.id AS from, b.id AS to, c.weight AS weight")
+---- 1
+1|2|100

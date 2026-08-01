@@ -82,10 +82,11 @@ static std::unique_ptr<TableFuncBindData> bindFunc(ClientContext *context,
 
     auto tree = parser.gqlProgram();
 
-    // Check for parse errors
+    // If GQL parsing fails, pass through the query as raw Cypher.
+    // This allows LadybugDB-specific DDL (CREATE NODE TYPE, CREATE EDGE TYPE,
+    // CREATE REL TABLE, etc.) to work via CALL GQL without modification.
     if (parser.getNumberOfSyntaxErrors() > 0) {
-        throw common::RuntimeException{
-            std::format("Failed to parse GQL query: {}", trimmed)};
+        return std::make_unique<GqlBindData>(trimmed);
     }
 
     // Transform GQL AST to Cypher
@@ -93,8 +94,7 @@ static std::unique_ptr<TableFuncBindData> bindFunc(ClientContext *context,
     auto cypherQuery = transformer.Transform(*tree);
 
     if (cypherQuery.empty()) {
-        throw common::RuntimeException{
-            std::format("Failed to transform GQL to Cypher: {}", trimmed)};
+        return std::make_unique<GqlBindData>(trimmed);
     }
 
     return std::make_unique<GqlBindData>(std::move(cypherQuery));
