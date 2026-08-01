@@ -1,0 +1,110 @@
+-DATASET CSV empty
+-BUFFER_POOL_SIZE 1024000000
+
+--
+
+-CASE GqlMatchReturn
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(name STRING, age INT64, PRIMARY KEY(name))
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'Alice', age: 30})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'Bob', age: 25})")
+---- 0
+
+-STATEMENT CALL GQL("MATCH (n:Person) RETURN n.name AS name, n.age AS age ORDER BY n.age ASC")
+---- 2
+Bob|25
+Alice|30
+
+
+-CASE GqlMatchWhere
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Product(name STRING, price INT64, PRIMARY KEY(name))
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:Product {name: 'Widget', price: 100})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:Product {name: 'Gadget', price: 200})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:Product {name: 'Doohickey', price: 50})")
+---- 0
+
+-STATEMENT CALL GQL("MATCH (n:Product) WHERE n.price > 60 RETURN n.name AS name, n.price AS price ORDER BY n.price DESC")
+---- 2
+Gadget|200
+Widget|100
+
+
+-CASE GqlMatchPathPattern
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE User(name STRING, PRIMARY KEY(name))
+---- ok
+
+-STATEMENT CREATE NODE TABLE Org(name STRING, PRIMARY KEY(name))
+---- ok
+
+-STATEMENT CREATE REL TABLE WORKS_AT(FROM User TO Org)
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:User {name: 'Alice'})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:Org {name: 'Acme'})")
+---- 0
+
+-STATEMENT MATCH (a:User {name: 'Alice'}), (b:Org {name: 'Acme'}) CREATE (a)-[:WORKS_AT]->(b)
+---- 0
+
+-STATEMENT CALL GQL("MATCH (u:User)-[w:WORKS_AT]->(o:Org) RETURN u.name AS user, o.name AS org")
+---- 1
+Alice|Acme
+
+
+-CASE GqlInsertToCreate
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(val INT64, PRIMARY KEY(val))
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:T {val: 42})")
+---- 0
+
+-STATEMENT MATCH (n:T) RETURN n.val
+---- 1
+42
+
+
+-CASE GqlParseError
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("INVALID !!! SYNTAX")
+---- error
+Runtime exception: Failed to parse GQL query: INVALID !!! SYNTAX
+
+
+-CASE GqlEmptyQuery
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("")
+---- error
+Runtime exception: GQL query string must not be empty
