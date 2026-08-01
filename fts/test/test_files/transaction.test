@@ -221,3 +221,46 @@ The Mind Machine|0.756869
 -STATEMENT MATCH (d:source_doc) RETURN count(d);
 ---- 1
 0
+
+-CASE FTSInsertRollbackMetadata
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE doc(ID INT64, content STRING, PRIMARY KEY(ID));
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('doc', 'contentIdx', ['content'], stemmer := 'none');
+---- ok
+-STATEMENT BEGIN TRANSACTION;
+---- ok
+-STATEMENT COPY doc FROM (RETURN 1 AS ID, 'alpha' AS content);
+---- ok
+-STATEMENT COPY doc FROM (RETURN 2 AS ID, 'beta' AS content);
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('doc', 'contentIdx', 'alpha') RETURN node.ID, score;
+---- 1
+1|0.301030
+-STATEMENT ROLLBACK;
+---- ok
+-STATEMENT CREATE (:doc {ID: 3, content: 'tool'});
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('doc', 'contentIdx', 'tool') RETURN node.ID, score;
+---- 1
+3|0.124939
+
+-CASE FTSDeleteRollbackMetadata
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE doc(ID INT64, content STRING, PRIMARY KEY(ID));
+---- ok
+-STATEMENT CREATE (:doc {ID: 1, content: 'tool'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('doc', 'contentIdx', ['content'], stemmer := 'none');
+---- ok
+-STATEMENT BEGIN TRANSACTION;
+---- ok
+-STATEMENT MATCH (d:doc) WHERE d.ID = 1 DELETE d;
+---- ok
+-STATEMENT CREATE (:doc {ID: 2, content: 'two rolled back terms'});
+---- ok
+-STATEMENT ROLLBACK;
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('doc', 'contentIdx', 'tool') RETURN node.ID, score;
+---- 1
+1|0.124939
