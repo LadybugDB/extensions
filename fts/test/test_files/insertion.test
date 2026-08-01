@@ -88,3 +88,44 @@ The Quantum World|0.931796
 1
 -STATEMENT CALL QUERY_FTS_INDEX('doc', 'contentIdx', 'go') RETURN node.ID;
 ---- 0
+
+-CASE FTSInsertStopwordOnlyBatch
+-SKIP_IN_MEM
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE doc (ID INT64, content STRING, PRIMARY KEY(ID));
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('doc', 'contentIdx', ['content'], stemmer := 'none');
+---- ok
+-STATEMENT COPY doc FROM (RETURN 1 AS ID, 'go' AS content UNION ALL RETURN 2 AS ID, 'tool' AS content);
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('doc', 'contentIdx', 'tool') RETURN node.ID, score;
+---- 1
+2|0.124939
+-STATEMENT MATCH (d:doc) WHERE d.ID = 1 DELETE d;
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('doc', 'contentIdx', 'tool') RETURN node.ID, score;
+---- 1
+2|0.124939
+-STATEMENT MATCH (d:doc) WHERE d.ID = 2 DELETE d;
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('doc', 'contentIdx', 'tool') RETURN node.ID;
+---- 0
+
+
+-CASE FTSInsertStopwordOnlyUnwind
+-SKIP_IN_MEM
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE doc (ID INT64, content STRING, PRIMARY KEY(ID));
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('doc', 'contentIdx', ['content'], stemmer := 'none');
+---- ok
+-STATEMENT UNWIND [{id: 1, content: 'go'}, {id: 2, content: 'tool'}] AS row CREATE (:doc {ID: row.id, content: row.content});
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('doc', 'contentIdx', 'tool') RETURN node.ID, score;
+---- 1
+2|0.124939
+-STATEMENT MATCH (d:doc) WHERE d.ID = 1 DELETE d;
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('doc', 'contentIdx', 'tool') RETURN node.ID, score;
+---- 1
+2|0.124939

@@ -66,16 +66,19 @@ std::unique_ptr<Index::InsertState> FTSIndex::initInsertState(main::ClientContex
 }
 
 static std::vector<std::string> getTerms(Transaction* transaction, FTSConfig& config,
-    NodeTable* stopWordsTable, const std::vector<ValueVector*>& indexVectors, sel_t pos,
+    NodeTable* stopWordsTable, const std::vector<ValueVector*>& indexVectors, sel_t selIdx,
     MemoryManager* mm) {
     std::string content;
     std::vector<std::string> terms;
     RE2 regexPattern{config.ignorePattern};
     for (auto indexVector : indexVectors) {
-        if (indexVector->isNull(pos)) {
+        auto& indexSelVector = indexVector->state->getSelVector();
+        DASSERT(selIdx < indexSelVector.getSelSize());
+        auto indexPos = indexSelVector[selIdx];
+        if (indexVector->isNull(indexPos)) {
             continue;
         }
-        content = indexVector->getValue<string_t>(pos).getAsString();
+        content = indexVector->getValue<string_t>(indexPos).getAsString();
         FTSUtils::normalizeQuery(content, regexPattern);
         auto termsInContent = FTSUtils::tokenizeString(content, config);
         termsInContent = FTSUtils::stemTerms(termsInContent, config, mm, stopWordsTable,
@@ -97,12 +100,12 @@ struct DocInfo {
     uint64_t docLen;
 
     DocInfo(Transaction* transaction, FTSConfig& config, NodeTable* stopWordsTable,
-        const std::vector<ValueVector*>& indexVectors, sel_t pos, MemoryManager* mm);
+        const std::vector<ValueVector*>& indexVectors, sel_t selIdx, MemoryManager* mm);
 };
 
 DocInfo::DocInfo(Transaction* transaction, FTSConfig& config, NodeTable* stopWordsTable,
-    const std::vector<ValueVector*>& indexVectors, sel_t pos, MemoryManager* mm) {
-    auto terms = getTerms(transaction, config, stopWordsTable, indexVectors, pos, mm);
+    const std::vector<ValueVector*>& indexVectors, sel_t selIdx, MemoryManager* mm) {
+    auto terms = getTerms(transaction, config, stopWordsTable, indexVectors, selIdx, mm);
     for (auto& term : terms) {
         termInfos[term].tf++;
     }
@@ -112,27 +115,30 @@ DocInfo::DocInfo(Transaction* transaction, FTSConfig& config, NodeTable* stopWor
 void FTSIndex::insert(Transaction* transaction, const ValueVector& nodeIDVector,
     const std::vector<ValueVector*>& indexVectors, InsertState& insertState) {
     auto totalInsertedDocLen = 0u;
+    idx_t numInsertedDocs = 0;
     auto& ftsInsertState = insertState.cast<FTSInsertState>();
     for (auto i = 0u; i < nodeIDVector.state->getSelSize(); i++) {
         auto pos = nodeIDVector.state->getSelVector()[i];
-        DocInfo docInfo{transaction, config, internalTableInfo.stopWordsTable, indexVectors, pos,
+        DocInfo docInfo{transaction, config, internalTableInfo.stopWordsTable, indexVectors, i,
             ftsInsertState.updateVectors.mm};
         if (docInfo.termInfos.size() == 0) {
-            break;
+            continue;
         }
         auto insertedDocID = insertToDocTable(transaction, ftsInsertState,
             nodeIDVector.getValue<nodeID_t>(pos), docInfo.docLen);
         totalInsertedDocLen += docInfo.docLen;
+        numInsertedDocs++;
         insertToTermsTable(transaction, docInfo.termInfos, ftsInsertState);
         insertToAppearsInTable(transaction, docInfo.termInfos, ftsInsertState, insertedDocID,
             internalTableInfo.termsTable->getTableID());
     }
     auto& ftsStorageInfo = storageInfo->cast<FTSStorageInfo>();
-    auto numInsertedDocs = nodeIDVector.state->getSelSize();
-    ftsStorageInfo.avgDocLen =
-        (ftsStorageInfo.avgDocLen * ftsStorageInfo.numDocs + totalInsertedDocLen) /
-        (ftsStorageInfo.numDocs + numInsertedDocs);
-    ftsStorageInfo.numDocs += numInsertedDocs;
+    if (numInsertedDocs > 0) {
+        ftsStorageInfo.avgDocLen =
+            (ftsStorageInfo.avgDocLen * ftsStorageInfo.numDocs + totalInsertedDocLen) /
+            (ftsStorageInfo.numDocs + numInsertedDocs);
+        ftsStorageInfo.numDocs += numInsertedDocs;
+    }
     ftsStorageInfo.numCheckpointedNodes =
         nodeIDVector.getValue<nodeID_t>(nodeIDVector.state->getSelVector()[0]).offset + 1;
 }
@@ -175,6 +181,7 @@ void FTSIndex::delete_(Transaction* transaction, const ValueVector& nodeIDVector
     auto& ftsDeleteState = deleteState.cast<FTSDeleteState>();
     auto& ftsStorageInfo = storageInfo->cast<FTSStorageInfo>();
     double totalDocLen = ftsStorageInfo.avgDocLen * ftsStorageInfo.numDocs;
+    idx_t numDeletedDocs = 0;
     for (auto i = 0u; i < nodeIDVector.state->getSelSize(); i++) {
         auto pos = nodeIDVector.state->getSelVector()[i];
         auto deletedNodeID = nodeIDVector.getValue<nodeID_t>(pos);
@@ -191,14 +198,16 @@ void FTSIndex::delete_(Transaction* transaction, const ValueVector& nodeIDVector
             deleteFromDocTable(transaction, ftsDeleteState, deletedNodeID, totalDocLen);
         deleteFromTermsTable(transaction, docInfo.termInfos, ftsDeleteState);
         deleteFromAppearsInTable(transaction, ftsDeleteState, deletedDocID);
+        numDeletedDocs++;
     }
-    auto numDeletedDocs = nodeIDVector.state->getSelSize();
-    if (ftsStorageInfo.numDocs == numDeletedDocs) {
-        ftsStorageInfo.avgDocLen = 0;
-    } else {
-        ftsStorageInfo.avgDocLen = totalDocLen / (ftsStorageInfo.numDocs - numDeletedDocs);
+    if (numDeletedDocs > 0) {
+        if (ftsStorageInfo.numDocs == numDeletedDocs) {
+            ftsStorageInfo.avgDocLen = 0;
+        } else {
+            ftsStorageInfo.avgDocLen = totalDocLen / (ftsStorageInfo.numDocs - numDeletedDocs);
+        }
+        ftsStorageInfo.numDocs -= numDeletedDocs;
     }
-    ftsStorageInfo.numDocs -= numDeletedDocs;
 }
 
 void FTSIndex::finalize(main::ClientContext* context) {
