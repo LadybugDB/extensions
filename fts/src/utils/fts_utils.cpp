@@ -1,5 +1,7 @@
 #include "utils/fts_utils.h"
 
+#include <optional>
+
 #include "common/string_utils.h"
 #include "cppjieba/Jieba.hpp"
 #include "function/stem.h"
@@ -42,9 +44,9 @@ StopWordsChecker::StopWordsChecker(MemoryManager* mm, NodeTable* stopwordsTable,
             return StopWords::getDefaultStopWords().contains(term);
         };
     } else {
-        isStopWord = [&](const std::string& term) {
+        isStopWord = [this](const std::string& term) {
             termsVector.setValue(0, term);
-            return stopWordsTable->lookupPK(tx, &termsVector, 0 /* vectorPos */, offset);
+            return stopWordsTable->lookupPK(this->tx, &termsVector, 0 /* vectorPos */, offset);
         };
     }
 }
@@ -61,8 +63,22 @@ bool FTSUtils::hasWildcardPattern(const std::string& term) {
 std::vector<std::string> FTSUtils::stemTerms(std::vector<std::string> terms,
     const FTSConfig& config, MemoryManager* mm, NodeTable* stopwordsTable, Transaction* tx,
     bool isConjunctive, bool isQuery) {
-    if (config.stemmer == "none") {
+    if (config.stemmer == "none" && !isConjunctive) {
         return terms;
+    }
+    std::optional<StopWordsChecker> checker;
+    if (isConjunctive) {
+        checker.emplace(mm, stopwordsTable, tx, config.stopWordsSource == StopWords::DEFAULT_VALUE);
+    }
+    if (config.stemmer == "none") {
+        std::vector<std::string> result;
+        for (auto& term : terms) {
+            if (checker->isStopWord(term)) {
+                continue;
+            }
+            result.push_back(term);
+        }
+        return result;
     }
     StemFunction::validateStemmer(config.stemmer);
     auto sbStemmer = sb_stemmer_new(reinterpret_cast<const char*>(config.stemmer.c_str()), "UTF_8");
@@ -71,10 +87,8 @@ std::vector<std::string> FTSUtils::stemTerms(std::vector<std::string> terms,
         return terms;
     }
     std::vector<std::string> result;
-    StopWordsChecker checker{mm, stopwordsTable, tx,
-        config.stopWordsSource == StopWords::DEFAULT_VALUE};
     for (auto& term : terms) {
-        if (isConjunctive && checker.isStopWord(term)) {
+        if (checker && checker->isStopWord(term)) {
             continue;
         }
         if (isQuery && hasWildcardPattern(term)) {

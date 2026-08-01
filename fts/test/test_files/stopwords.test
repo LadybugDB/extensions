@@ -107,3 +107,24 @@ Binder exception: Given stopwords: 'S3://lbug-test/test123' is not a node table 
 小明|0.743224
 -STATEMENT CALL QUERY_FTS_INDEX('doc', 'docIdx', '有趣') RETURN node.author, score
 ---- 0
+
+-CASE CustomizedStopWordsWithStemmerNone
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE custom_stopwords_none(word STRING, PRIMARY KEY(word));
+---- ok
+-STATEMENT CREATE (:custom_stopwords_none {word: 'go'});
+---- ok
+-STATEMENT CREATE NODE TABLE source_doc(ID INT64, content STRING, PRIMARY KEY(ID));
+---- ok
+-STATEMENT CREATE (:source_doc {ID: 1, content: 'tool.go'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('source_doc', 'contentIdx', ['content'], stopWords := 'custom_stopwords_none', stemmer := 'none');
+---- ok
+-STATEMENT CREATE (:source_doc {ID: 2, content: 'server.go'});
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('source_doc', 'contentIdx', 'tool server') RETURN node.ID ORDER BY node.ID;
+---- 2
+1
+2
+-STATEMENT CALL QUERY_FTS_INDEX('source_doc', 'contentIdx', 'go') RETURN node.ID;
+---- 0
