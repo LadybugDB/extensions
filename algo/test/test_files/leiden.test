@@ -1,0 +1,89 @@
+-DATASET CSV empty
+
+--
+
+-CASE LeidenBasic
+-LOAD_DYNAMIC_EXTENSION algo
+-STATEMENT CREATE NODE TABLE Node(id INT64 PRIMARY KEY);
+---- ok
+-STATEMENT CREATE REL TABLE Edge(FROM Node to Node);
+---- ok
+-STATEMENT CREATE (u0:Node {id: 0}),
+            (u1:Node {id: 1}),
+            (u2:Node {id: 2}),
+            (u3:Node {id: 3}),
+            (u4:Node {id: 4}),
+            (u5:Node {id: 5}),
+            (u6:Node {id: 6}),
+            (u7:Node {id: 7}),
+            (u8:Node {id: 8}),
+            (u9:Node {id: 9}),
+            (u0)-[:Edge]->(u1),
+            (u0)-[:Edge]->(u2),
+            (u1)-[:Edge]->(u2),
+            (u2)-[:Edge]->(u3),
+            (u3)-[:Edge]->(u4),
+            (u5)-[:Edge]->(u6),
+            (u5)-[:Edge]->(u7),
+            (u6)-[:Edge]->(u7),
+            (u7)-[:Edge]->(u8),
+            (u8)-[:Edge]->(u9),
+            (u2)-[:Edge]->(u5),
+            (u4)-[:Edge]->(u9);
+---- ok
+-STATEMENT CALL PROJECT_GRAPH('Graph', ['Node'], ['Edge'])
+---- ok
+
+# RED test: Leiden should return communities (same graph as Louvain test)
+# All 10 nodes must get a community assignment.
+-STATEMENT CALL LEIDEN('Graph') RETURN count(*) AS c;
+---- 1
+10
+
+-CASE LeidenAlias
+-LOAD_DYNAMIC_EXTENSION algo
+-STATEMENT CREATE NODE TABLE Node(id INT64 PRIMARY KEY);
+---- ok
+-STATEMENT CREATE REL TABLE Edge(FROM Node to Node);
+---- ok
+-STATEMENT CREATE (u0:Node {id: 0}),
+            (u1:Node {id: 1}),
+            (u2:Node {id: 2}),
+            (u0)-[:Edge]->(u1),
+            (u1)-[:Edge]->(u2),
+            (u0)-[:Edge]->(u2);
+---- ok
+-STATEMENT CALL PROJECT_GRAPH('Graph', ['Node'], ['Edge'])
+---- ok
+
+-STATEMENT CALL LE('Graph') RETURN count(*) AS c;
+---- 1
+3
+
+-CASE LeidenDisconnected
+-LOAD_DYNAMIC_EXTENSION algo
+-STATEMENT CREATE NODE TABLE Node(id INT64 PRIMARY KEY);
+---- ok
+-STATEMENT CREATE REL TABLE Edge(FROM Node TO Node);
+---- ok
+# Component 1
+-STATEMENT CREATE (:Node {id: 0}), (:Node {id: 1}), (:Node {id: 2});
+---- ok
+-STATEMENT MATCH (a:Node {id: 0}), (b:Node {id: 1}) CREATE (a)-[:Edge]->(b);
+---- ok
+-STATEMENT MATCH (a:Node {id: 1}), (b:Node {id: 2}) CREATE (a)-[:Edge]->(b);
+---- ok
+# Component 2 — isolated
+-STATEMENT CREATE (:Node {id: 10}), (:Node {id: 11}), (:Node {id: 12});
+---- ok
+-STATEMENT MATCH (a:Node {id: 10}), (b:Node {id: 11}) CREATE (a)-[:Edge]->(b);
+---- ok
+-STATEMENT MATCH (a:Node {id: 11}), (b:Node {id: 12}) CREATE (a)-[:Edge]->(b);
+---- ok
+-STATEMENT CALL PROJECT_GRAPH('Graph', ['Node'], ['Edge'])
+---- ok
+
+# Two disconnected components → 2 different community IDs
+-STATEMENT CALL LEIDEN('Graph') WITH community_id, count(*) as cnt RETURN count(distinct community_id) as num_communities;
+---- 1
+2
