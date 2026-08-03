@@ -9,6 +9,7 @@ add_library(lbug_algo_function
         page_rank.cpp
         k_core_decomposition.cpp
         louvain.cpp
+        leiden.cpp
         spanning_forest.cpp
         )
 
