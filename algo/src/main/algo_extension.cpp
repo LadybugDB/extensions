@@ -1,6 +1,7 @@
 #include "main/algo_extension.h"
 
 #include "function/algo_function.h"
+#include "function/leiden.h"
 #include "main/client_context.h"
 
 namespace lbug {
@@ -21,6 +22,8 @@ void AlgoExtension::load(main::ClientContext* context) {
     ExtensionUtils::addTableFunc<KCoreDecompositionFunction>(db);
     ExtensionUtils::addTableFuncAlias<KCoreDecompositionAliasFunction>(db);
     ExtensionUtils::addTableFunc<LouvainFunction>(db);
+    ExtensionUtils::addTableFunc<LeidenFunction>(db);
+    ExtensionUtils::addTableFuncAlias<LeidenAliasFunction>(db);
     ExtensionUtils::addTableFunc<SpanningForest>(db);
     ExtensionUtils::addTableFuncAlias<SpanningForestAliasFunction>(db);
 }
