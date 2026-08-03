@@ -1,0 +1,43 @@
+-DATASET CSV empty
+
+--
+
+# Leiden on a heterogeneous projected graph (two node tables + one edge table).
+# Regression test for the array out-of-bounds assertion that occurred when
+# PhaseState arrays were sized for only the first node table.
+
+-CASE LeidenHeterogeneous
+-LOAD_DYNAMIC_EXTENSION algo
+-STATEMENT CREATE NODE TABLE T(id INT64 PRIMARY KEY, name STRING);
+---- ok
+-STATEMENT CREATE NODE TABLE M(id INT64 PRIMARY KEY, name STRING);
+---- ok
+-STATEMENT CREATE REL TABLE E(FROM T TO M);
+---- ok
+-STATEMENT CREATE (:T {id: 0, name: 't0'}),
+            (:T {id: 1, name: 't1'}),
+            (:T {id: 2, name: 't2'});
+---- ok
+-STATEMENT CREATE (:M {id: 0, name: 'm0'}),
+            (:M {id: 1, name: 'm1'}),
+            (:M {id: 2, name: 'm2'});
+---- ok
+-STATEMENT MATCH (t:T {id: 0}), (m:M {id: 0}), (m2:M {id: 1})
+            CREATE (t)-[:E]->(m), (t)-[:E]->(m2);
+---- ok
+-STATEMENT MATCH (t:T {id: 1}), (m:M {id: 1}), (m2:M {id: 2})
+            CREATE (t)-[:E]->(m), (t)-[:E]->(m2);
+---- ok
+-STATEMENT MATCH (t:T {id: 2}), (m:M {id: 0}), (m2:M {id: 2})
+            CREATE (t)-[:E]->(m), (t)-[:E]->(m2);
+---- ok
+-STATEMENT CALL PROJECT_GRAPH('hg', ['T', 'M'], ['E']);
+---- ok
+# All 6 nodes (3 T + 3 M) must get a community assignment.
+-STATEMENT CALL leiden('hg') RETURN count(*) AS c;
+---- 1
+6
+# Communities must be valid community ids (0 <= id < numNodes).
+-STATEMENT CALL leiden('hg') RETURN max(community_id) < 6 AS valid;
+---- 1
+True
