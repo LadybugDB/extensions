@@ -209,7 +209,29 @@ jobs:
           dnf config-manager --set-enabled powertools
           dnf install -y cmake ninja-build python3 python3-pip git wget unzip \
             gcc-toolset-13 openssl3 openssl3-devel pkg-config \
-            libpq libpq-devel
+            libpq libpq-devel libomp-devel
+
+      - name: Shim libomp.so.5 -> installed libomp (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -e
+          # Icebug links against libomp.so.5, but the
+          # libomp-devel package in manylinux_2_28 ships a version-numbered
+          # SONAME that changes between LLVM releases.  Resolve whichever
+          # libomp is actually installed and alias it to libomp.so.5 so the
+          # loader/linker can find it regardless of the LLVM version.
+          if [ ! -e /lib64/libomp.so.5 ]; then
+            # Highest versioned libomp.so.* wins; fall back to the unversioned one.
+            SRC="$(ls /lib64/libomp.so.* 2>/dev/null | sort -V | tail -n 1)"
+            [ -n "$SRC" ] || SRC=/lib64/libomp.so
+            if [ -e "$SRC" ]; then
+              ln -s "$(basename "$SRC")" /lib64/libomp.so.5
+              ldconfig
+            else
+              echo "WARNING: no libomp runtime found to alias to libomp.so.5" >&2
+            fi
+          fi
+          ldconfig -p | grep libomp || true
 
       - name: Install uv
         working-directory: ladybug
