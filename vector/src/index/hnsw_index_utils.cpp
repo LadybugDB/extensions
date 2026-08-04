@@ -142,7 +142,7 @@ static metric_func_t computeDistanceFuncDispatch(const common::LogicalType& type
     }
 }
 
-template<FloatingVectorElementType T>
+template<ScalarQuantizationInputType T>
 struct ScalarQuantizedVector {
     explicit ScalarQuantizedVector(const T* vector, uint32_t dimension, int8_t maxQuantizedValue)
         : values(dimension), scale{0.0} {
@@ -256,7 +256,7 @@ static uint64_t getQuantizedCachedEmbeddingPayloadBytesInternal(uint64_t dimensi
     return getQuantizedEmbeddingPayloadBytesInternal(dimension, quantization);
 }
 
-template<FloatingVectorElementType T>
+template<ScalarQuantizationInputType T>
 static double computeScalarQuantizedDistance(const void* left, const void* right,
     uint32_t dimension, MetricType metric, int8_t maxQuantizedValue) {
     const auto* leftVector = static_cast<const T*>(left);

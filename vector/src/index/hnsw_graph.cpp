@@ -291,7 +291,7 @@ std::vector<EmbeddingHandle> InMemEmbeddings::getEmbeddings(
     return ret;
 }
 
-template<FloatingVectorElementType T>
+template<ScalarQuantizationInputType T>
 static void quantizeEmbedding(const T* src, uint64_t dimension, QuantizationType quantization,
     MetricType metric, uint8_t* payloadDst, float& scaleDst, float& normSqDst) {
     constexpr float zeroScale = 0.0f;
