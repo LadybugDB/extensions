@@ -1,0 +1,35 @@
+-DATASET CSV empty
+
+--
+
+-CASE EmbeddingSimilarity
+-LOAD_DYNAMIC_EXTENSION timeseries
+# Two 3-dimensional vectors
+-STATEMENT CALL embedding_similarity(
+    CAST([1.0, 0.0, 0.0], 'DOUBLE[]'),
+    CAST([1.0, 0.0, 0.0], 'DOUBLE[]')
+) RETURN cosine_similarity, feature_similarity, dimension_count;
+---- 1
+1.0|1.0|3
+
+-CASE EmbeddingSimilarityOrthogonal
+-LOAD_DYNAMIC_EXTENSION timeseries
+# Orthogonal vectors — cosine similarity should be 0
+-STATEMENT CALL embedding_similarity(
+    CAST([1.0, 0.0, 0.0], 'DOUBLE[]'),
+    CAST([0.0, 1.0, 0.0], 'DOUBLE[]')
+) RETURN cosine_similarity;
+---- 1
+0.0
+
+-CASE DetectDriftPoints
+-LOAD_DYNAMIC_EXTENSION timeseries
+# 5 embeddings of dimension 3, with a drift between label 2 and 3
+-STATEMENT CALL detect_drift_points(
+    CAST([1.0, 0.0, 0.0, 1.0, 0.1, 0.0, 1.0, 0.2, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.1], 'DOUBLE[]'),
+    5,
+    CAST([100, 200, 300, 400, 500], 'INT64[]'),
+    3,
+    threshold := 0.1
+) RETURN label, drift_magnitude, significance, direction;
+---- ok
