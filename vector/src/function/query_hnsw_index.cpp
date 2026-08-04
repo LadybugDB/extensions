@@ -227,7 +227,7 @@ struct HNSWRawQueryVector : GetEmbeddingsScanState {
     std::vector<T> data;
 };
 
-template<FloatingVectorElementType T>
+template<ScalarQuantizationInputType T>
 static void quantizeQueryVector(const std::vector<T>& src, QuantizationType quantization,
     MetricType metric, uint8_t* payloadDst, float& scaleDst, float& normSqDst) {
     constexpr float zeroScale = 0.0f;
@@ -329,7 +329,7 @@ static offset_t tableFunc(const TableFuncInput& input, TableFuncOutput& output) 
                         exactQueryVectorHandle, exactQueryVectorHandle, localState->searchState);
                     return;
                 }
-                if constexpr (FloatingVectorElementType<T>) {
+                if constexpr (ScalarQuantizationInputType<T>) {
                     auto queryVector = HNSWQuantizedQueryVector<T>(input.context->clientContext,
                         bindData->queryExpression, index.getElementType(), dimension,
                         index.getQuantization(), index.getMetric());

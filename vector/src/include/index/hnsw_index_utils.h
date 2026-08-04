@@ -17,12 +17,13 @@ class ClientContext;
 
 namespace vector_extension {
 template<typename T>
-concept FloatingVectorElementType = std::same_as<T, float> || std::same_as<T, double>;
+concept ScalarQuantizationInputType = std::same_as<T, float> || std::same_as<T, double>;
 
-// Direct HNSW source/query coordinates. SQ8/SQ16 helpers must use FloatingVectorElementType
-// so allowing INT8 here cannot instantiate secondary quantization over INT8 sources.
+// Direct HNSW source/query coordinates. SQ8/SQ16 helpers must use
+// ScalarQuantizationInputType so allowing INT8 here cannot instantiate secondary quantization
+// over INT8 sources.
 template<typename T>
-concept VectorElementType = FloatingVectorElementType<T> || std::same_as<T, int8_t>;
+concept VectorElementType = ScalarQuantizationInputType<T> || std::same_as<T, int8_t>;
 using metric_func_t = std::function<double(const void*, const void*, uint32_t)>;
 
 struct QuantizedEmbeddingView {
