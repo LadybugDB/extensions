@@ -1,0 +1,46 @@
+-DATASET CSV empty
+
+--
+
+-CASE GDSLouvainTwoCliques
+-LOAD_DYNAMIC_EXTENSION algo
+-STATEMENT CREATE NODE TABLE Node(id INT64 PRIMARY KEY);
+---- ok
+-STATEMENT CREATE REL TABLE Edge(FROM Node to Node);
+---- ok
+-STATEMENT CREATE (u0:Node {id: 0}),
+            (u1:Node {id: 1}),
+            (u2:Node {id: 2}),
+            (u3:Node {id: 3}),
+            (u4:Node {id: 4}),
+            (u5:Node {id: 5}),
+            (u6:Node {id: 6}),
+            (u7:Node {id: 7}),
+            (u0)-[:Edge]->(u1),
+            (u0)-[:Edge]->(u2),
+            (u1)-[:Edge]->(u2),
+            (u0)-[:Edge]->(u3),
+            (u1)-[:Edge]->(u3),
+            (u2)-[:Edge]->(u3),
+            (u4)-[:Edge]->(u5),
+            (u4)-[:Edge]->(u6),
+            (u5)-[:Edge]->(u6),
+            (u4)-[:Edge]->(u7),
+            (u5)-[:Edge]->(u7),
+            (u6)-[:Edge]->(u7),
+            (u3)-[:Edge]->(u4);
+---- ok
+-STATEMENT CALL PROJECT_GRAPH('Graph', ['Node'], ['Edge'])
+---- ok
+-LOG icebug PLM community IDs are arbitrary and PLM is parallel (nondeterministic), so assert structure not exact IDs: two communities, one per clique, joined by a bridge edge (u3-u4).
+-STATEMENT CALL GDS_LOUVAIN('Graph') RETURN COUNT(DISTINCT community_id)
+---- 1
+2
+-STATEMENT CALL GDS_LOUVAIN('Graph') WITH node, community_id WHERE node.id IN [0, 1, 2, 3]
+            RETURN COUNT(DISTINCT community_id)
+---- 1
+1
+-STATEMENT CALL GDS_LOUVAIN('Graph') WITH node, community_id WHERE node.id IN [4, 5, 6, 7]
+            RETURN COUNT(DISTINCT community_id)
+---- 1
+1

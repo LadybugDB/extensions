@@ -67,6 +67,14 @@ struct GDSNode2VecFunction {
     static function::function_set getFunctionSet();
 };
 
+// icebug (NetworKit)-backed Louvain community detection. Coexists with LOUVAIN for one release
+// cycle.
+struct GDSLouvainFunction {
+    static constexpr const char* name = "GDS_LOUVAIN";
+
+    static function::function_set getFunctionSet();
+};
+
 struct KCoreDecompositionFunction {
     static constexpr const char* name = "K_CORE_DECOMPOSITION";
 
