@@ -11,6 +11,7 @@ namespace algo_extension {
 using namespace extension;
 
 void AlgoExtension::load(main::ClientContext* context) {
+#if defined(ICEBUG_ENABLED)
     // Arrow's default memory pool is mimalloc-backed, and mimalloc's per-thread init is not
     // safe on threads that predate libarrow's dlopen — GDS functions allocating Arrow buffers
     // from ladybug worker threads segfault in _mi_thread_init (non-deterministically; ~half of
@@ -18,6 +19,7 @@ void AlgoExtension::load(main::ClientContext* context) {
     // first used; Arrow reads this env var lazily, and load() runs before any GDS allocation.
     // overwrite=0 respects a user-provided value.
     setenv("ARROW_DEFAULT_MEMORY_POOL", "system", 0);
+#endif
     auto& db = *context->getDatabase();
     ExtensionUtils::addTableFunc<SCCFunction>(db);
     ExtensionUtils::addTableFuncAlias<SCCAliasFunction>(db);
@@ -27,7 +29,9 @@ void AlgoExtension::load(main::ClientContext* context) {
     ExtensionUtils::addTableFuncAlias<WeaklyConnectedComponentsAliasFunction>(db);
     ExtensionUtils::addTableFunc<PageRankFunction>(db);
     ExtensionUtils::addTableFuncAlias<PageRankAliasFunction>(db);
+#if defined(ICEBUG_ENABLED)
     ExtensionUtils::addTableFunc<GDSPageRankFunction>(db);
+#endif
     ExtensionUtils::addTableFunc<KCoreDecompositionFunction>(db);
     ExtensionUtils::addTableFuncAlias<KCoreDecompositionAliasFunction>(db);
     ExtensionUtils::addTableFunc<LouvainFunction>(db);
