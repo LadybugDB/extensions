@@ -1,5 +1,7 @@
 #include "main/algo_extension.h"
 
+#include <cstdlib>
+
 #include "function/algo_function.h"
 #include "main/client_context.h"
 
@@ -9,6 +11,13 @@ namespace algo_extension {
 using namespace extension;
 
 void AlgoExtension::load(main::ClientContext* context) {
+    // Arrow's default memory pool is mimalloc-backed, and mimalloc's per-thread init is not
+    // safe on threads that predate libarrow's dlopen — GDS functions allocating Arrow buffers
+    // from ladybug worker threads segfault in _mi_thread_init (non-deterministically; ~half of
+    // full-suite runs). Steer Arrow to the system allocator once, before its default pool is
+    // first used; Arrow reads this env var lazily, and load() runs before any GDS allocation.
+    // overwrite=0 respects a user-provided value.
+    setenv("ARROW_DEFAULT_MEMORY_POOL", "system", 0);
     auto& db = *context->getDatabase();
     ExtensionUtils::addTableFunc<SCCFunction>(db);
     ExtensionUtils::addTableFuncAlias<SCCAliasFunction>(db);

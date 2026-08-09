@@ -141,12 +141,7 @@ static void buildCSR(table_id_t tableID, offset_t numNodes, Graph* graph, InMemG
 
 static std::shared_ptr<arrow::UInt64Array> toU64(const std::function<offset_t(offset_t)>& at,
     offset_t count) {
-    // Arrow's *default* pool is mimalloc-backed. When libarrow is pulled in by dlopen()ing this
-    // extension, mimalloc's per-thread init races on ladybug worker threads that already existed
-    // before the load, and segfaults inside _mi_thread_init (~60% of runs when GDS_PAGE_RANK runs
-    // after another algo test in the same process). The system (malloc) pool has no such
-    // thread-local bootstrap and is stable.
-    arrow::UInt64Builder builder(arrow::system_memory_pool());
+    arrow::UInt64Builder builder;
     (void)builder.Reserve(count);
     for (offset_t i = 0; i < count; ++i) {
         (void)builder.Append(static_cast<uint64_t>(at(i)));
