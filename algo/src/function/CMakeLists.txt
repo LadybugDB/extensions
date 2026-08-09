@@ -1,21 +1,34 @@
 add_subdirectory(config)
 
-add_library(lbug_algo_function
-        OBJECT
+set(_algo_function_sources
         component_ids.cpp
         strongly_connected_components.cpp
         strongly_connected_components_kosaraju.cpp
         weakly_connected_components.cpp
         page_rank.cpp
-        gds_page_rank.cpp
         k_core_decomposition.cpp
         louvain.cpp
         spanning_forest.cpp
         )
+if (ICEBUG_ENABLED)
+    # gds_page_rank.cpp includes NetworKit + Arrow headers. Linking the imported targets to the
+    # object library propagates their compile flags + include dirs to it.
+    list(APPEND _algo_function_sources gds_page_rank.cpp)
+endif ()
 
-# gds_page_rank.cpp includes NetworKit + Arrow headers (Arrow pulls in <omp.h>). Linking the
-# imported targets to the object library propagates their compile flags + include dirs to it.
-target_link_libraries(lbug_algo_function PRIVATE Arrow::arrow_shared OpenMP::OpenMP_CXX)
+add_library(lbug_algo_function
+        OBJECT
+        ${_algo_function_sources})
+
+if (ICEBUG_ENABLED)
+    target_link_libraries(lbug_algo_function PRIVATE Arrow::arrow_shared OpenMP::OpenMP_CXX)
+    # ICEBUG_ENABLED is read by gds_page_rank.cpp via #ifdef to skip its body when icebug is off
+    # (defensive: source isn't compiled in that case, but matches the header-side guard).
+    target_compile_definitions(lbug_algo_function PRIVATE ICEBUG_ENABLED)
+else ()
+    # Other sources still use <omp.h> for parallel regions, so keep the OpenMP link — just drop Arrow.
+    target_link_libraries(lbug_algo_function PRIVATE OpenMP::OpenMP_CXX)
+endif ()
 
 set(ALGO_EXTENSION_OBJECT_FILES
         ${ALGO_EXTENSION_OBJECT_FILES} $<TARGET_OBJECTS:lbug_algo_function>

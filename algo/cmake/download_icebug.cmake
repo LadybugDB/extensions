@@ -4,6 +4,20 @@
 # Default: download the prebuilt release for this platform into vendor/ (Arrow + OpenMP stay
 # system deps). Dev override: set -DICEBUG_SOURCE_DIR=<icebug checkout with a build/> to link a
 # local source build instead (e.g. when the prebuilt's pinned Arrow version differs from yours).
+#
+# Reads the ICEBUG_ENABLED cache option from the parent CMakeLists.txt. If it's OFF we leave
+# ICEBUG_INCLUDE_DIR / ICEBUG_LIB / ICEBUG_RPATH_DIR empty and return immediately. If the
+# prebuilt download fails (offline CI, GitHub rate limit, etc.) we flip ICEBUG_ENABLED to OFF
+# (cached, so re-configures don't re-fail), emit a WARNING, and return — the algo extension
+# then builds without the GDS_* bridge instead of aborting configure.
+
+if (NOT ICEBUG_ENABLED)
+    message(STATUS "icebug: disabled via -DICEBUG_ENABLED=OFF; skipping download + lib resolution")
+    set(ICEBUG_INCLUDE_DIR "")
+    set(ICEBUG_LIB "ICEBUG_LIB-NOTFOUND")
+    set(ICEBUG_RPATH_DIR "")
+    return()
+endif ()
 
 if (NOT DEFINED ICEBUG_SOURCE_DIR AND DEFINED ENV{ICEBUG_SOURCE_DIR})
     set(ICEBUG_SOURCE_DIR "$ENV{ICEBUG_SOURCE_DIR}")
@@ -51,7 +65,19 @@ if (NOT EXISTS "${ICEBUG_VENDOR_DIR}/lib")
     file(DOWNLOAD "${_ib_url}" "${ICEBUG_VENDOR_DIR}/${_ib_asset}" STATUS _ib_dl SHOW_PROGRESS)
     list(GET _ib_dl 0 _ib_dl_code)
     if (NOT _ib_dl_code EQUAL 0)
-        message(FATAL_ERROR "Failed to download icebug (${_ib_url}): ${_ib_dl}")
+        message(WARNING
+                "Failed to download icebug prebuilt (${_ib_url}): ${_ib_dl}\n"
+                "  Disabling ICEBUG_ENABLED; the algo extension will still build with the "
+                "hand-rolled algos (PAGE_RANK, SCC, etc.) but GDS_* functions won't be available.\n"
+                "  To re-enable, ensure outbound HTTPS to github.com works, pre-populate "
+                "extension/algo/vendor/ with the prebuilt, or pass "
+                "-DICEBUG_SOURCE_DIR=<local checkout>.")
+        set(ICEBUG_INCLUDE_DIR "")
+        set(ICEBUG_LIB "ICEBUG_LIB-NOTFOUND")
+        set(ICEBUG_RPATH_DIR "")
+        # Force so re-configures don't retry the failing download.
+        set(ICEBUG_ENABLED OFF CACHE BOOL "Enable icebug-backed GDS_* algorithms" FORCE)
+        return()
     endif ()
     file(ARCHIVE_EXTRACT INPUT "${ICEBUG_VENDOR_DIR}/${_ib_asset}" DESTINATION "${ICEBUG_VENDOR_DIR}")
 endif ()
