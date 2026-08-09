@@ -18,7 +18,14 @@ void AlgoExtension::load(main::ClientContext* context) {
     // full-suite runs). Steer Arrow to the system allocator once, before its default pool is
     // first used; Arrow reads this env var lazily, and load() runs before any GDS allocation.
     // overwrite=0 respects a user-provided value.
+#if defined(_WIN32)
+    // setenv() is not available on MSVC; _putenv_s always overwrites, so check first.
+    if (getenv("ARROW_DEFAULT_MEMORY_POOL") == nullptr) {
+        _putenv_s("ARROW_DEFAULT_MEMORY_POOL", "system");
+    }
+#else
     setenv("ARROW_DEFAULT_MEMORY_POOL", "system", 0);
+#endif
 #endif
     auto& db = *context->getDatabase();
     ExtensionUtils::addTableFunc<SCCFunction>(db);
