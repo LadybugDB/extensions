@@ -9,6 +9,13 @@ if (ICEBUG_ENABLED)
     target_compile_definitions(algo_extension_main PRIVATE ICEBUG_ENABLED)
 endif ()
 
+if (WIN32)
+    # This OBJECT library is compiled independently of the final lbug_algo_extension target.
+    # lbug's INTERFACE LBUG_STATIC_DEFINE does not propagate here, but all sources in the
+    # extension must use the empty LBUG_API (static-link ABI) on Windows to avoid LNK4217.
+    target_compile_definitions(algo_extension_main PRIVATE LBUG_STATIC_DEFINE)
+endif()
+
 set(ALGO_EXTENSION_OBJECT_FILES
         ${ALGO_EXTENSION_OBJECT_FILES} $<TARGET_OBJECTS:algo_extension_main>
         PARENT_SCOPE)
