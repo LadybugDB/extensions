@@ -42,6 +42,16 @@ if (ICEBUG_ENABLED)
             ${ICEBUG_LIB}
             Arrow::arrow_shared
             OpenMP::OpenMP_CXX)
+    if (WIN32 AND ICEBUG_STATE_LIB)
+        # The static networkit.lib imports the GlobalState singleton from networkit_state.dll;
+        # link its import lib so the __imp_GlobalState::* thunks resolve.
+        target_link_libraries(${_algo_target} PRIVATE ${ICEBUG_STATE_LIB})
+        # Deploy the DLL next to the built extension so those imports resolve at load time.
+        add_custom_command(TARGET ${_algo_target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${ICEBUG_STATE_DLL}"
+                        "$<TARGET_FILE_DIR:${_algo_target}>")
+    endif ()
     # Let the loaded extension find a shared libnetworkit (prebuilt path); harmless for a static lib.
     set_target_properties(${_algo_target} PROPERTIES
             BUILD_RPATH "${ICEBUG_RPATH_DIR}"
