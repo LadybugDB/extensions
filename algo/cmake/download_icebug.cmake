@@ -31,6 +31,12 @@ if (DEFINED ICEBUG_SOURCE_DIR)
             "${ICEBUG_SOURCE_DIR}/extlibs/ttmath")
     find_library(ICEBUG_LIB networkit PATHS "${ICEBUG_SOURCE_DIR}/build" NO_DEFAULT_PATH REQUIRED)
     get_filename_component(ICEBUG_RPATH_DIR "${ICEBUG_LIB}" DIRECTORY)
+    if (WIN32)
+        # See the prebuilt branch below: on Windows the GlobalState singleton is a separate
+        # DLL + import lib that the static networkit.lib imports via dllimport thunks.
+        find_library(ICEBUG_STATE_LIB networkit_state PATHS "${ICEBUG_SOURCE_DIR}/build" NO_DEFAULT_PATH REQUIRED)
+        set(ICEBUG_STATE_DLL "${ICEBUG_SOURCE_DIR}/build/networkit_state.dll")
+    endif ()
     return()
 endif ()
 
@@ -85,4 +91,14 @@ endif ()
 set(ICEBUG_INCLUDE_DIR "${ICEBUG_VENDOR_DIR}/include")
 set(ICEBUG_RPATH_DIR "${ICEBUG_VENDOR_DIR}/lib")
 find_library(ICEBUG_LIB networkit PATHS "${ICEBUG_VENDOR_DIR}/lib" NO_DEFAULT_PATH REQUIRED)
+if (WIN32)
+    # The vendored Windows artifact splits NetworKit into a large static lib (networkit.lib)
+    # plus a separate DLL + import lib for the GlobalState singleton (networkit_state). The
+    # static lib's members (Log.cpp.obj etc.) reference the GlobalState accessors via
+    # __imp_* dllimport thunks, so consumers must ALSO link the import lib and deploy the DLL
+    # next to the loaded extension.
+    find_library(ICEBUG_STATE_LIB networkit_state PATHS "${ICEBUG_VENDOR_DIR}/lib/networkit" NO_DEFAULT_PATH REQUIRED)
+    set(ICEBUG_STATE_DLL "${ICEBUG_VENDOR_DIR}/lib/networkit/networkit_state.dll")
+    message(STATUS "icebug state lib: ${ICEBUG_STATE_LIB}")
+endif ()
 message(STATUS "icebug: ${ICEBUG_LIB}")
