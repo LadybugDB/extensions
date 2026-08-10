@@ -30,6 +30,13 @@ else ()
     target_link_libraries(lbug_algo_function PRIVATE OpenMP::OpenMP_CXX)
 endif ()
 
+if (WIN32)
+    # This OBJECT library is compiled independently of the final lbug_algo_extension target.
+    # lbug's INTERFACE LBUG_STATIC_DEFINE does not propagate here, but all sources in the
+    # extension must use the empty LBUG_API (static-link ABI) on Windows to avoid LNK4217.
+    target_compile_definitions(lbug_algo_function PRIVATE LBUG_STATIC_DEFINE)
+endif()
+
 set(ALGO_EXTENSION_OBJECT_FILES
         ${ALGO_EXTENSION_OBJECT_FILES} $<TARGET_OBJECTS:lbug_algo_function>
         PARENT_SCOPE)
