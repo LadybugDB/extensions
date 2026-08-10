@@ -95,6 +95,10 @@ std::any GqlToCypherTransformer::visitCreateGraphStatement(
         return {};
     }
 
+    // Record GQL "IF NOT EXISTS" semantics — enforced by the extension at
+    // rewrite time (LadybugDB Cypher has no IF NOT EXISTS for CREATE GRAPH).
+    sawIfNotExistsCreateGraph = ctx->IF() && ctx->NOT();
+
     // Extract the graph name
     auto parentAndName = ctx->catalogGraphParentAndName();
     if (!parentAndName) {
@@ -123,6 +127,7 @@ std::any GqlToCypherTransformer::visitCreateGraphStatement(
     }
 
     std::string name = sourceText(graphName);
+    createGraphName = name;
 
     // Build Cypher: CREATE GRAPH <name>
     // (IF NOT EXISTS, PROPERTY, ANY are all stripped — LadybugDB Cypher

@@ -28,19 +28,19 @@ Alice|30
 -STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
 ---- ok
 
--STATEMENT CREATE NODE TABLE Product(name STRING, price INT64, PRIMARY KEY(name))
+-STATEMENT CREATE NODE TABLE Item(name STRING, price INT64, PRIMARY KEY(name))
 ---- ok
 
--STATEMENT CALL GQL("INSERT (n:Product {name: 'Widget', price: 100})")
+-STATEMENT CALL GQL("INSERT (n:Item {name: 'Widget', price: 100})")
 ---- 0
 
--STATEMENT CALL GQL("INSERT (n:Product {name: 'Gadget', price: 200})")
+-STATEMENT CALL GQL("INSERT (n:Item {name: 'Gadget', price: 200})")
 ---- 0
 
--STATEMENT CALL GQL("INSERT (n:Product {name: 'Doohickey', price: 50})")
+-STATEMENT CALL GQL("INSERT (n:Item {name: 'Doohickey', price: 50})")
 ---- 0
 
--STATEMENT CALL GQL("MATCH (n:Product) WHERE n.price > 60 RETURN n.name AS name, n.price AS price ORDER BY n.price DESC")
+-STATEMENT CALL GQL("MATCH (n:Item) WHERE n.price > 60 RETURN n.name AS name, n.price AS price ORDER BY n.price DESC")
 ---- 2
 Gadget|200
 Widget|100
@@ -120,7 +120,7 @@ Runtime exception: GQL query string must not be empty
 
 -STATEMENT CALL SHOW_GRAPHS() RETURN *
 ---- 1
-mygraph
+mygraph|STANDARD
 
 
 -CASE GqlCreateGraphAnyIfNotExists
@@ -136,7 +136,7 @@ mygraph
 
 -STATEMENT CALL SHOW_GRAPHS() RETURN *
 ---- 1
-mygraph2
+mygraph2|STANDARD
 
 
 -CASE GqlCreatePropertyGraph
@@ -149,7 +149,7 @@ mygraph2
 
 -STATEMENT CALL SHOW_GRAPHS() RETURN *
 ---- 1
-pg
+pg|STANDARD
 
 
 -CASE GqlDdlFallbackCreateNodeTable

@@ -30,6 +30,12 @@ public:
     // Walk the GQL parse tree and return an equivalent Cypher query string.
     std::string Transform(GQLParser::GqlProgramContext &root);
 
+    // Set when the statement is "CREATE [PROPERTY] GRAPH IF NOT EXISTS <name>".
+    // LadybugDB Cypher has no IF NOT EXISTS for CREATE GRAPH, so the extension
+    // enforces the GQL existence semantics at bind/rewrite time.
+    bool sawIfNotExistsCreateGraph = false;
+    std::string createGraphName;
+
 private:
     const std::string &query;
     std::string cypherResult;
