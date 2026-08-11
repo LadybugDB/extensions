@@ -191,6 +191,6 @@ pg|STANDARD
 -STATEMENT MATCH (a:A {id: 1}), (b:B {id: 2}) CREATE (a)-[:CONNECTS {weight: 100}]->(b)
 ---- 0
 
--STATEMENT CALL GQL("MATCH (a:A)-[c:CONNECTS]->(b:B) RETURN a.id AS from, b.id AS to, c.weight AS weight")
+-STATEMENT CALL GQL("MATCH (a:A)-[c:CONNECTS]->(b:B) RETURN a.id AS from_, b.id AS to, c.weight AS weight")
 ---- 1
 1|2|100
