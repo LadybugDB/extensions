@@ -5,6 +5,11 @@
 # extension then builds without the GDS_* bridge (the hand-rolled algos still work, just no
 # GDS_PAGE_RANK). Pass -DICEBUG_ENABLED=OFF to skip the network round-trip entirely.
 option(ICEBUG_ENABLED "Enable icebug-backed GDS_* algorithms (requires outbound HTTPS to github.com)" ON)
+# icebug has no wasm prebuilt; force-disable in wasm builds so we don't try to
+# find_package(Arrow) or download/vendor libnetworkit for a target that can't link it.
+if (BUILD_WASM)
+    set(ICEBUG_ENABLED OFF CACHE BOOL "Enable icebug-backed GDS_* algorithms" FORCE)
+endif ()
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/download_icebug.cmake)
 
