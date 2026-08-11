@@ -1,5 +1,5 @@
 
-// Generated from third_party/opengql/GQL.g4 by ANTLR 4.13.2
+// Generated from third_party/opengql/GQL.g4 by ANTLR 4.13.1
 
 
 #include "GQLVisitor.h"
@@ -40,7 +40,7 @@ struct GQLParserStaticData final {
 #if ANTLR4_USE_THREAD_LOCAL_CACHE
 static thread_local
 #endif
-std::unique_ptr<GQLParserStaticData> gqlParserStaticData = nullptr;
+GQLParserStaticData *gqlParserStaticData = nullptr;
 
 void gqlParserInitialize() {
 #if ANTLR4_USE_THREAD_LOCAL_CACHE
@@ -2149,7 +2149,7 @@ void gqlParserInitialize() {
   for (size_t i = 0; i < count; i++) { 
     staticData->decisionToDFA.emplace_back(staticData->atn->getDecisionState(i), i);
   }
-  gqlParserStaticData = std::move(staticData);
+  gqlParserStaticData = staticData.release();
 }
 
 }
