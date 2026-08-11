@@ -1,5 +1,5 @@
 
-// Generated from third_party/opengql/GQL.g4 by ANTLR 4.13.2
+// Generated from third_party/opengql/GQL.g4 by ANTLR 4.13.1
 
 
 #include "GQLLexer.h"
@@ -45,7 +45,7 @@ struct GQLLexerStaticData final {
 #if ANTLR4_USE_THREAD_LOCAL_CACHE
 static thread_local
 #endif
-std::unique_ptr<GQLLexerStaticData> gqllexerLexerStaticData = nullptr;
+GQLLexerStaticData *gqllexerLexerStaticData = nullptr;
 
 void gqllexerLexerInitialize() {
 #if ANTLR4_USE_THREAD_LOCAL_CACHE
@@ -1831,7 +1831,7 @@ void gqllexerLexerInitialize() {
   for (size_t i = 0; i < count; i++) { 
     staticData->decisionToDFA.emplace_back(staticData->atn->getDecisionState(i), i);
   }
-  gqllexerLexerStaticData = std::move(staticData);
+  gqllexerLexerStaticData = staticData.release();
 }
 
 }
