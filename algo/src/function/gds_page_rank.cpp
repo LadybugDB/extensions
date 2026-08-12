@@ -7,9 +7,9 @@
 // one release cycle; the icebug-backed ones live alongside under GDS_* names.
 #include "binder/binder.h"
 #include "common/exception/binder.h"
-#include "common/in_mem_graph.h"
 #include "common/string_utils.h"
 #include "function/algo_function.h"
+#include "function/gds_csr_bridge.h"
 #include "function/config/max_iterations_config.h"
 #include "function/config/page_rank_config.h"
 #include "function/gds/gds_utils.h"
@@ -69,10 +69,14 @@ struct GDSPageRankOptionalParams final : public MaxIterationOptionalParams {
 };
 
 struct GDSPageRankBindData final : public GDSBindData {
+    // Projected graph name, for looking up the entry's materialized arrow CSR at run time.
+    std::string graphName;
+
     GDSPageRankBindData(expression_vector columns, graph::NativeGraphEntry graphEntry,
         std::shared_ptr<Expression> nodeOutput,
-        std::unique_ptr<GDSPageRankOptionalParams> optionalParams)
-        : GDSBindData{std::move(columns), std::move(graphEntry), expression_vector{nodeOutput}} {
+        std::unique_ptr<GDSPageRankOptionalParams> optionalParams, std::string graphName)
+        : GDSBindData{std::move(columns), std::move(graphEntry), expression_vector{nodeOutput}},
+          graphName{std::move(graphName)} {
         this->optionalParams = std::move(optionalParams);
     }
 
@@ -114,43 +118,6 @@ private:
     std::unique_ptr<ValueVector> rankVector;
 };
 
-// Materialize the projected graph's undirected adjacency as an InMemGraph CSR (fwd + bwd),
-// exactly as the Louvain path does.
-static void buildCSR(table_id_t tableID, offset_t numNodes, Graph* graph, InMemGraph& inMem) {
-    const auto nbrTables = graph->getRelInfos(tableID);
-    const auto nbrInfo = nbrTables[0];
-    const auto scanState = graph->prepareRelScan(*nbrInfo.relGroupEntry, nbrInfo.relTableID,
-        nbrInfo.dstTableID, {}, false /*randomLookup*/);
-    for (offset_t nodeId = 0; nodeId < numNodes; ++nodeId) {
-        inMem.initNextNode();
-        const nodeID_t nid = {nodeId, tableID};
-        for (auto chunk : graph->scanFwd(nid, *scanState)) {
-            chunk.forEach(
-                [&](auto neighbors, auto, auto i) { inMem.insertNbr(neighbors[i].offset); });
-        }
-        for (auto chunk : graph->scanBwd(nid, *scanState)) {
-            chunk.forEach([&](auto neighbors, auto, auto i) {
-                if (neighbors[i].offset != nodeId) {
-                    inMem.insertNbr(neighbors[i].offset);
-                }
-            });
-        }
-    }
-    inMem.initNextNode(); // trailing sentinel: csrOffsets[numNodes] == numEdges
-}
-
-static std::shared_ptr<arrow::UInt64Array> toU64(const std::function<offset_t(offset_t)>& at,
-    offset_t count) {
-    arrow::UInt64Builder builder;
-    (void)builder.Reserve(count);
-    for (offset_t i = 0; i < count; ++i) {
-        (void)builder.Append(static_cast<uint64_t>(at(i)));
-    }
-    std::shared_ptr<arrow::Array> arr;
-    (void)builder.Finish(&arr);
-    return std::static_pointer_cast<arrow::UInt64Array>(arr);
-}
-
 static offset_t tableFunc(const TableFuncInput& input, TableFuncOutput&) {
     auto clientContext = input.context->clientContext;
     auto transaction = transaction::Transaction::Get(*clientContext);
@@ -167,17 +134,12 @@ static offset_t tableFunc(const TableFuncInput& input, TableFuncOutput&) {
     auto bindData = input.bindData->constPtrCast<GDSPageRankBindData>();
     auto& config = bindData->optionalParams->constCast<GDSPageRankOptionalParams>();
 
-    // 1. Ladybug engine graph -> InMemGraph CSR.
-    InMemGraph inMem(numNodes, mm);
-    buildCSR(tableID, numNodes, graph, inMem);
+    // 1. Undirected CSR — zero-copy from the projected graph's materialized arrow CSR when
+    // available, scan fallback otherwise (see gds_csr_bridge.cpp).
+    auto csr = buildUndirectedCSR(clientContext, bindData->graphName, graph, tableID, numNodes, mm);
 
-    // 2. CSR -> Arrow UInt64 arrays (indptr length numNodes+1, indices length numEdges).
-    auto outIndptr = toU64([&](offset_t i) { return inMem.csrOffsets[i]; }, numNodes + 1);
-    auto outIndices =
-        toU64([&](offset_t i) { return inMem.csrEdges[i].neighbor; }, inMem.csrEdges.size());
-
-    // 3. icebug: zero-copy GraphR over the Arrow CSR, then PageRank.
-    NetworKit::GraphR g(numNodes, /*directed=*/false, outIndices, outIndptr);
+    // 2. icebug: zero-copy GraphR over the Arrow CSR, then PageRank.
+    NetworKit::GraphR g(numNodes, /*directed=*/false, csr.indices, csr.indptr);
     NetworKit::PageRank pr(g, config.dampingFactor.getParamVal(), config.tolerance.getParamVal());
     pr.run();
     const std::vector<double>& scores = pr.scores();
@@ -200,7 +162,8 @@ static std::unique_ptr<TableFuncBindData> bindFunc(main::ClientContext* context,
     columns.push_back(nodeOutput->constCast<NodeExpression>().getInternalID());
     columns.push_back(input->binder->createVariable(RANK_COLUMN_NAME, LogicalType::DOUBLE()));
     return std::make_unique<GDSPageRankBindData>(std::move(columns), std::move(graphEntry),
-        nodeOutput, std::make_unique<GDSPageRankOptionalParams>(input->optionalParamsLegacy));
+        nodeOutput, std::make_unique<GDSPageRankOptionalParams>(input->optionalParamsLegacy),
+        std::move(graphName));
 }
 
 function_set GDSPageRankFunction::getFunctionSet() {

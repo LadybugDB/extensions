@@ -19,7 +19,17 @@
 -STATEMENT CALL PROJECT_GRAPH('G', ['N'], ['E'])
 ---- ok
 -LOG icebug PageRank: the hub (id 0) ranks highest; scores are a sum-to-1 distribution.
+-LOG Plain projection consumes the graph entry's materialized arrow CSR (zero-copy path).
 -STATEMENT CALL GDS_PAGE_RANK('G') RETURN node.id, rank ORDER BY rank DESC, node.id
+---- 4
+0|0.479730
+1|0.173423
+2|0.173423
+3|0.173423
+-LOG Filtered projection skips materialization; the scan fallback must produce identical ranks.
+-STATEMENT CALL PROJECT_GRAPH('GPred', ['N'], {E: 'r.rowid >= 0'})
+---- ok
+-STATEMENT CALL GDS_PAGE_RANK('GPred') RETURN node.id, rank ORDER BY rank DESC, node.id
 ---- 4
 0|0.479730
 1|0.173423

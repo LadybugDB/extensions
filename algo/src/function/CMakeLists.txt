@@ -13,7 +13,7 @@ set(_algo_function_sources
 if (ICEBUG_ENABLED)
     # gds_page_rank.cpp includes NetworKit + Arrow headers. Linking the imported targets to the
     # object library propagates their compile flags + include dirs to it.
-    list(APPEND _algo_function_sources gds_page_rank.cpp)
+    list(APPEND _algo_function_sources gds_csr_bridge.cpp gds_page_rank.cpp)
 endif ()
 
 add_library(lbug_algo_function
