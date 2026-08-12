@@ -19,8 +19,10 @@ class MemoryManager;
 
 namespace algo_extension {
 
-// Symmetric (undirected) adjacency of the projected graph as Arrow CSR, ready to hand to
-// NetworKit::GraphR. Shared by every icebug-backed GDS function.
+// Symmetric (undirected) SIMPLE adjacency of the projected graph as Arrow CSR, ready to hand
+// to NetworKit::GraphR. Shared by every icebug-backed GDS function. Both construction paths
+// coalesce parallel edges and reciprocal pairs (symmetrize()'s A + A.T semantics): GDS
+// operates on the simple undirected projection.
 struct BridgeCSR {
     std::shared_ptr<arrow::UInt64Array> indptr;  // length numNodes + 1
     std::shared_ptr<arrow::UInt64Array> indices; // length numEdges (symmetric, per-row sorted
