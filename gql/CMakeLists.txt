@@ -20,6 +20,15 @@ target_link_libraries(lbug_${EXTENSION_LIB_NAME}_extension PRIVATE antlr4_runtim
 # dynamic symbol table. Hide everything except the required `init`/`name`
 # entry points so the extension's private antlr4_runtime stays private.
 if (NOT WIN32 AND NOT BUILD_STATIC_EXTENSION)
-    set_target_properties(lbug_${EXTENSION_LIB_NAME}_extension PROPERTIES
-        LINK_FLAGS "-Wl,--version-script,${CMAKE_CURRENT_SOURCE_DIR}/gql_symver.map")
+    if (APPLE)
+        # Apple's ld64 does not support GNU ld's --version-script; the
+        # equivalent is -exported_symbols_list. Preserve the pre-existing
+        # -undefined dynamic_lookup flag that build_extension_lib() set.
+        get_target_property(_gql_link_flags lbug_${EXTENSION_LIB_NAME}_extension LINK_FLAGS)
+        set_target_properties(lbug_${EXTENSION_LIB_NAME}_extension PROPERTIES
+            LINK_FLAGS "${_gql_link_flags} -Wl,-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/gql_exported_symbols.list")
+    else ()
+        set_target_properties(lbug_${EXTENSION_LIB_NAME}_extension PROPERTIES
+            LINK_FLAGS "-Wl,--version-script,${CMAKE_CURRENT_SOURCE_DIR}/gql_symver.map")
+    endif ()
 endif()
