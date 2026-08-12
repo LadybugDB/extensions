@@ -35,3 +35,82 @@
 1|0.173423
 2|0.173423
 3|0.173423
+
+-CASE GDSPageRankParallelEdges
+-LOAD_DYNAMIC_EXTENSION algo
+-STATEMENT CREATE NODE TABLE N(id INT64 PRIMARY KEY)
+---- ok
+-STATEMENT CREATE REL TABLE E(FROM N TO N)
+---- ok
+-STATEMENT CREATE (a:N{id:0}), (b:N{id:1}), (c:N{id:2})
+---- ok
+-LOG Multigraph: (0,1) twice, plus the reciprocal (1,0), plus (1,2).
+-STATEMENT MATCH (x:N{id:0}), (y:N{id:1}) CREATE (x)-[:E]->(y)
+---- ok
+-STATEMENT MATCH (x:N{id:0}), (y:N{id:1}) CREATE (x)-[:E]->(y)
+---- ok
+-STATEMENT MATCH (x:N{id:1}), (y:N{id:0}) CREATE (x)-[:E]->(y)
+---- ok
+-STATEMENT MATCH (x:N{id:1}), (y:N{id:2}) CREATE (x)-[:E]->(y)
+---- ok
+-LOG GDS operates on the SIMPLE undirected projection: parallel edges and reciprocal pairs
+-LOG coalesce on BOTH paths, so the multigraph ranks equal the clean path graph 0-1-2 below.
+-STATEMENT CALL PROJECT_GRAPH('GM', ['N'], ['E'])
+---- ok
+-STATEMENT CALL GDS_PAGE_RANK('GM') RETURN node.id, rank ORDER BY node.id
+---- 3
+0|0.256757
+1|0.486486
+2|0.256757
+-LOG Same multigraph through the scan fallback (filtered projection): identical ranks.
+-STATEMENT CALL PROJECT_GRAPH('GMPred', ['N'], {E: 'r.rowid >= 0'})
+---- ok
+-STATEMENT CALL GDS_PAGE_RANK('GMPred') RETURN node.id, rank ORDER BY node.id
+---- 3
+0|0.256757
+1|0.486486
+2|0.256757
+-LOG Cross-check: a clean simple path 0-1-2 produces the same distribution.
+-STATEMENT CREATE NODE TABLE NC(id INT64 PRIMARY KEY)
+---- ok
+-STATEMENT CREATE REL TABLE EC(FROM NC TO NC)
+---- ok
+-STATEMENT CREATE (a:NC{id:0}), (b:NC{id:1}), (c:NC{id:2})
+---- ok
+-STATEMENT MATCH (x:NC{id:0}), (y:NC{id:1}) CREATE (x)-[:EC]->(y)
+---- ok
+-STATEMENT MATCH (x:NC{id:1}), (y:NC{id:2}) CREATE (x)-[:EC]->(y)
+---- ok
+-STATEMENT CALL PROJECT_GRAPH('GC', ['NC'], ['EC'])
+---- ok
+-STATEMENT CALL GDS_PAGE_RANK('GC') RETURN node.id, rank ORDER BY node.id
+---- 3
+0|0.256757
+1|0.486486
+2|0.256757
+
+-CASE GDSPageRankStaleProjection
+-LOAD_DYNAMIC_EXTENSION algo
+-STATEMENT CREATE NODE TABLE N(id INT64 PRIMARY KEY)
+---- ok
+-STATEMENT CREATE REL TABLE E(FROM N TO N)
+---- ok
+-STATEMENT CREATE (a:N{id:0}), (b:N{id:1}), (c:N{id:2}), (d:N{id:3})
+---- ok
+-STATEMENT MATCH (x:N{id:1}), (y:N{id:0}) CREATE (x)-[:E]->(y)
+---- ok
+-STATEMENT MATCH (x:N{id:2}), (y:N{id:0}) CREATE (x)-[:E]->(y)
+---- ok
+-STATEMENT CALL PROJECT_GRAPH('GS', ['N'], ['E'])
+---- ok
+-LOG Mutate the rel table AFTER projection (node cardinality unchanged): the pinned CSR is now
+-LOG stale, the change-epoch check must reject it, and the fallback must serve LIVE storage —
+-LOG so the ranks below are the full 3-leaf star, not the 2-edge graph that was projected.
+-STATEMENT MATCH (x:N{id:3}), (y:N{id:0}) CREATE (x)-[:E]->(y)
+---- ok
+-STATEMENT CALL GDS_PAGE_RANK('GS') RETURN node.id, rank ORDER BY rank DESC, node.id
+---- 4
+0|0.479730
+1|0.173423
+2|0.173423
+3|0.173423
