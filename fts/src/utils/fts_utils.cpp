@@ -1,12 +1,12 @@
 #include "utils/fts_utils.h"
 
 #include "common/string_utils.h"
-#include "cppjieba/Jieba.hpp"
 #include "function/stem.h"
 #include "libstemmer.h"
 #include "re2.h"
 #include "storage/storage_manager.h"
 #include "storage/table/node_table.h"
+#include "utils/tokenizer.h"
 
 namespace lbug {
 namespace fts_extension {
@@ -94,17 +94,11 @@ std::vector<std::string> FTSUtils::stemTerms(std::vector<std::string> terms,
     return result;
 }
 
-std::vector<std::string> FTSUtils::tokenizeString(std::string& str, const FTSConfig& config) {
-    std::vector<std::string> terms;
-    if (config.tokenizer == "jieba") {
-        cppjieba::Jieba jieba(config.jiebaDictDir + "/jieba.dict.utf8",
-            config.jiebaDictDir + "/hmm_model.utf8", config.jiebaDictDir + "/user.dict.utf8",
-            config.jiebaDictDir + "/idf.utf8", config.jiebaDictDir + "/stop_words.utf8");
-        jieba.CutForSearch(str, terms);
-    } else {
-        terms = StringUtils::split(str, " ", true /* ignoreEmptyStringParts */);
-    }
-    return terms;
+std::vector<std::string> FTSUtils::tokenizeString(const std::string& str,
+    const FTSConfig& config) {
+    // Tokenizer instances are cached in the pool, so this is cheap even though
+    // constructing a jieba tokenizer loads and indexes a dictionary.
+    return TokenizerPool::getOrCreate(config.tokenizer, config.tokenizerParams)->tokenize(str);
 }
 
 } // namespace fts_extension
