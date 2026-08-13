@@ -58,7 +58,8 @@ struct FTSUtils {
         return std::format("{}_tokenize", getInternalTablePrefix(tableID, indexName));
     }
 
-    static std::vector<std::string> tokenizeString(std::string& str, const FTSConfig& tokenizer);
+    static std::vector<std::string> tokenizeString(const std::string& str,
+        const FTSConfig& tokenizer);
 };
 
 } // namespace fts_extension
