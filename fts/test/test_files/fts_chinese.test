@@ -90,3 +90,22 @@ Python和机器学习结合开发AI应用
 ---- 2
 AI研究
 NLP应用
+
+# === Incremental Insert After Index Creation ===
+# Regression: the rewritten _CREATE_FTS_INDEX used to drop the tokenizer
+# option, so incremental inserts fell back to 'simple' tokenization and the
+# new rows' Chinese terms were never indexed.
+-CASE ChineseIncrementalInsert
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE ZhDoc (ID SERIAL, text STRING, PRIMARY KEY (ID));
+---- ok
+-STATEMENT CREATE (d:ZhDoc {text: '我爱北京天安门'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('ZhDoc', 'zh_idx', ['text'], tokenizer:='jieba', stemmer:='none');
+---- ok
+-STATEMENT CREATE (d:ZhDoc {text: '北京欢迎你'});
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('ZhDoc', 'zh_idx', '北京', conjunctive:=false, top:=5) RETURN node.text ORDER BY node.text;
+---- 2
+北京欢迎你
+我爱北京天安门
