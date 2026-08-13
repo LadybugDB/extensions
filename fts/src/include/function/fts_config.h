@@ -4,6 +4,7 @@
 
 #include "common/types/types.h"
 #include "function/table/bind_input.h"
+#include "utils/tokenizer.h"
 #include <format>
 
 namespace lbug {
@@ -65,9 +66,14 @@ struct Tokenizer {
 
 struct TokenizerInfo {
     std::string tokenizer = Tokenizer::DEFAULT_VALUE;
-    std::string jiebaDictDir = std::format("{}/extension/fts/build/dict", LBUG_ROOT_DIRECTORY);
+    // Tokenizer-specific parameters (e.g. "jieba_dict_dir" for the jieba tokenizer).
+    TokenizerParams params;
 
-    TokenizerInfo() = default;
+    TokenizerInfo() {
+        params["jieba_dict_dir"] = std::format("{}/extension/fts/build/dict", LBUG_ROOT_DIRECTORY);
+        params["mecab_dict_dir"] =
+            std::format("{}/extension/fts/build/dict-ipadic", LBUG_ROOT_DIRECTORY);
+    }
 };
 
 struct FTSConfig;
@@ -95,16 +101,19 @@ struct FTSConfig {
     std::string ignorePattern = "";
     std::string ignorePatternQuery = "";
     std::string tokenizer = "";
-    std::string jiebaDictDir = "";
+    // Serialized as an unordered map after a magic marker; entries of legacy
+    // catalogs (which stored a single "jiebaDictDir" string here) are folded
+    // into tokenizerParams["jieba_dict_dir"] at deserialization time.
+    TokenizerParams tokenizerParams = {};
 
     FTSConfig() = default;
     FTSConfig(std::string stemmer, std::string stopWordsTableName, std::string stopWordsSource,
         std::string ignorePattern, std::string ignorePatternQuery, std::string tokenizer,
-        std::string jiebaDictDir)
+        TokenizerParams tokenizerParams)
         : stemmer{std::move(stemmer)}, stopWordsTableName{std::move(stopWordsTableName)},
           stopWordsSource{std::move(stopWordsSource)}, ignorePattern{std::move(ignorePattern)},
           ignorePatternQuery{std::move(ignorePatternQuery)}, tokenizer{std::move(tokenizer)},
-          jiebaDictDir{std::move(jiebaDictDir)} {}
+          tokenizerParams{std::move(tokenizerParams)} {}
 
     void serialize(common::Serializer& serializer) const;
 
