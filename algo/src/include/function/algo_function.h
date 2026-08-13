@@ -75,6 +75,14 @@ struct GDSLouvainFunction {
     static function::function_set getFunctionSet();
 };
 
+// icebug (NetworKit)-backed Leiden community detection (ParallelLeidenView) — higher partition
+// quality and performance than Louvain; prefer for new work.
+struct GDSLeidenFunction {
+    static constexpr const char* name = "GDS_LEIDEN";
+
+    static function::function_set getFunctionSet();
+};
+
 // icebug (NetworKit)-backed personalized PageRank (random walk with restart from caller-supplied
 // source nodes) — scores measure standing relative to the sources, not globally.
 struct GDSPprFunction {
