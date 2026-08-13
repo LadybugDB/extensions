@@ -156,8 +156,11 @@ CreateFTSConfig::CreateFTSConfig(main::ClientContext& context, common::table_id_
             Tokenizer::validate(tokenizerInfo.tokenizer);
         } else if (lowerCaseName == "jieba_dict_dir") {
             value.validateType(common::LogicalTypeID::STRING);
-            tokenizerInfo.jiebaDictDir =
-                common::StringUtils::getLower(value.getValue<std::string>());
+            // Note: the dict dir is a file path and must not be lower-cased.
+            tokenizerInfo.params["jieba_dict_dir"] = value.getValue<std::string>();
+        } else if (lowerCaseName == "mecab_dict_dir") {
+            value.validateType(common::LogicalTypeID::STRING);
+            tokenizerInfo.params["mecab_dict_dir"] = value.getValue<std::string>();
         } else {
             throw common::BinderException{"Unrecognized optional parameter: " + name};
         }
@@ -166,8 +169,15 @@ CreateFTSConfig::CreateFTSConfig(main::ClientContext& context, common::table_id_
 
 FTSConfig CreateFTSConfig::getFTSConfig() const {
     return FTSConfig{stemmer, stopWordsTableInfo.tableName, stopWordsTableInfo.stopWords,
-        ignorePattern, ignorePatternQuery, tokenizerInfo.tokenizer, tokenizerInfo.jiebaDictDir};
+        ignorePattern, ignorePatternQuery, tokenizerInfo.tokenizer, tokenizerInfo.params};
 }
+
+// Magic marker written before the tokenizer params so that deserialization can
+// tell apart new catalogs (marker + unordered map) from legacy ones (a single
+// "jiebaDictDir" string field).
+namespace {
+constexpr const char* TOKENIZER_PARAMS_MAGIC = "lbug_tokenizer_params_v1";
+} // namespace
 
 void FTSConfig::serialize(common::Serializer& serializer) const {
     serializer.serializeValue(stemmer);
@@ -176,7 +186,8 @@ void FTSConfig::serialize(common::Serializer& serializer) const {
     serializer.serializeValue(ignorePattern);
     serializer.serializeValue(ignorePatternQuery);
     serializer.serializeValue(tokenizer);
-    serializer.serializeValue(jiebaDictDir);
+    serializer.serializeValue(std::string{TOKENIZER_PARAMS_MAGIC});
+    serializer.serializeUnorderedMap(tokenizerParams);
 }
 
 FTSConfig FTSConfig::deserialize(common::Deserializer& deserializer) {
@@ -187,7 +198,14 @@ FTSConfig FTSConfig::deserialize(common::Deserializer& deserializer) {
     deserializer.deserializeValue(config.ignorePattern);
     deserializer.deserializeValue(config.ignorePatternQuery);
     deserializer.deserializeValue(config.tokenizer);
-    deserializer.deserializeValue(config.jiebaDictDir);
+    std::string tokenizerParamsField;
+    deserializer.deserializeValue(tokenizerParamsField);
+    if (tokenizerParamsField == TOKENIZER_PARAMS_MAGIC) {
+        deserializer.deserializeUnorderedMap(config.tokenizerParams);
+    } else {
+        // Legacy catalog: the field after tokenizer was the jieba dict dir.
+        config.tokenizerParams["jieba_dict_dir"] = tokenizerParamsField;
+    }
     return config;
 }
 
@@ -214,7 +232,7 @@ void TopK::validate(uint64_t value) {
 }
 
 void Tokenizer::validate(const std::string& tokenizer) {
-    if (tokenizer == "simple" || tokenizer == "jieba") {
+    if (TokenizerRegistry::isSupported(tokenizer)) {
         return;
     }
     throw common::BinderException{
