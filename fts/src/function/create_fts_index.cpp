@@ -157,13 +157,22 @@ std::string createFTSIndexQuery(ClientContext& context, const TableFuncBindData&
     std::string query = "";
     if (!catalog::Catalog::Get(context)->containsMacro(transaction::Transaction::Get(context),
             FTSUtils::getTokenizeMacroName(tableID, indexName))) {
-        // TOKENIZE(text, tokenizer, extra_param)
+        // TOKENIZE(text, tokenizer, extra_param); the extra param is the
+        // dictionary directory for dictionary-based tokenizers. Pick it by
+        // tokenizer name (the params map holds defaults for all tokenizers).
+        auto& tokenizerParams = ftsBindData->createFTSConfig.tokenizerInfo.params;
+        auto& tokenizerName = ftsBindData->createFTSConfig.tokenizerInfo.tokenizer;
+        std::string extraParam = "";
+        if (tokenizerName == "jieba") {
+            extraParam = tokenizerParams.at("jieba_dict_dir");
+        } else if (tokenizerName == "mecab") {
+            extraParam = tokenizerParams.at("mecab_dict_dir");
+        }
         query += std::format(R"(CREATE MACRO `{}`(query) AS
                             TOKENIZE(lower(regexp_replace(CAST(query as STRING), '{}', ' ', 'g')), '{}', '{}');)",
             FTSUtils::getTokenizeMacroName(tableID, indexName),
             formatStrInCypher(ftsBindData->createFTSConfig.ignorePattern),
-            ftsBindData->createFTSConfig.tokenizerInfo.tokenizer,
-            ftsBindData->createFTSConfig.tokenizerInfo.jiebaDictDir);
+            ftsBindData->createFTSConfig.tokenizerInfo.tokenizer, extraParam);
     }
 
     // Create the stop words table if not exists, or the user is not using the default english
@@ -236,7 +245,17 @@ std::string createFTSIndexQuery(ClientContext& context, const TableFuncBindData&
     std::string params;
     params += std::format("stemmer := '{}', ", ftsBindData->createFTSConfig.stemmer);
     params +=
-        std::format("stopWords := '{}'", ftsBindData->createFTSConfig.stopWordsTableInfo.stopWords);
+        std::format("stopWords := '{}', ", ftsBindData->createFTSConfig.stopWordsTableInfo.stopWords);
+    // The internal index uses this config for incremental inserts/updates and
+    // queries, so the tokenizer (and its parameters) must be forwarded or it
+    // silently falls back to the default 'simple' tokenizer.
+    params += std::format("tokenizer := '{}'", ftsBindData->createFTSConfig.tokenizerInfo.tokenizer);
+    auto& ftsTokenizerParams = ftsBindData->createFTSConfig.tokenizerInfo.params;
+    if (ftsBindData->createFTSConfig.tokenizerInfo.tokenizer == "jieba") {
+        params += std::format(", jieba_dict_dir := '{}'", ftsTokenizerParams.at("jieba_dict_dir"));
+    } else if (ftsBindData->createFTSConfig.tokenizerInfo.tokenizer == "mecab") {
+        params += std::format(", mecab_dict_dir := '{}'", ftsTokenizerParams.at("mecab_dict_dir"));
+    }
     query += std::format("CALL _CREATE_FTS_INDEX('{}', '{}', {}, {});", tableName, indexName,
         properties, params);
     query += std::format("RETURN 'Index {} has been created.' as result;", ftsBindData->indexName);
