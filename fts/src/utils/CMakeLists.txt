@@ -1,6 +1,7 @@
 add_library(lbug_fts_utils
         OBJECT
-        fts_utils.cpp)
+        fts_utils.cpp
+        tokenizer.cpp)
 
 set(FTS_EXTENSION_OBJECT_FILES
         ${FTS_EXTENSION_OBJECT_FILES} $<TARGET_OBJECTS:lbug_fts_utils>
