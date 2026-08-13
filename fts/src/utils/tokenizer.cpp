@@ -60,10 +60,18 @@ public:
     explicit MeCabTokenizer(const TokenizerParams& params) {
         auto dictDir =
             params.contains("mecab_dict_dir") ? params.at("mecab_dict_dir") : std::string{};
-        tagger.reset(MeCab::createTagger((std::string("-d ") + dictDir).c_str()));
+        // Pass the rc file explicitly. Without -r, MeCab falls back to
+        // MECAB_DEFAULT_RC, which is a build-time absolute path that does not
+        // exist in deployed environments (zip extracted elsewhere, build dir
+        // cleaned up) — the tagger then fails to create. The rc file ships
+        // alongside the dictionary (generated at build time).
+        tagger.reset(MeCab::createTagger(
+            (std::string("-d ") + dictDir + " -r " + dictDir + "/mecabrc").c_str()));
         if (!tagger) {
-            throw BinderException{
-                std::format("Failed to create mecab tagger with dict dir: '{}'.", dictDir)};
+            auto lastError = MeCab::getLastError();
+            throw BinderException{std::format(
+                "Failed to create mecab tagger with dict dir: '{}'. (mecab error: {})", dictDir,
+                lastError ? lastError : "unknown")};
         }
     }
 
