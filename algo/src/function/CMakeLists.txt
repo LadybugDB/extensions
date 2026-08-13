@@ -14,7 +14,7 @@ if (ICEBUG_ENABLED)
     # The gds_*.cpp sources include NetworKit + Arrow headers. Linking the imported targets to
     # the object library propagates their compile flags + include dirs to it.
     list(APPEND _algo_function_sources gds_csr_bridge.cpp gds_page_rank.cpp gds_node2vec.cpp
-            gds_louvain.cpp)
+            gds_louvain.cpp gds_ppr.cpp)
 endif ()
 
 add_library(lbug_algo_function

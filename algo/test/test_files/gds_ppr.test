@@ -1,0 +1,88 @@
+-DATASET CSV empty
+
+--
+
+-CASE GDSPprStarFromLeaf
+-LOAD_DYNAMIC_EXTENSION algo
+-STATEMENT CREATE NODE TABLE N(id INT64 PRIMARY KEY)
+---- ok
+-STATEMENT CREATE REL TABLE E(FROM N TO N)
+---- ok
+-STATEMENT CREATE (a:N{id:0}), (b:N{id:1}), (c:N{id:2}), (d:N{id:3})
+---- ok
+-STATEMENT MATCH (x:N{id:1}), (y:N{id:0}) CREATE (x)-[:E]->(y)
+---- ok
+-STATEMENT MATCH (x:N{id:2}), (y:N{id:0}) CREATE (x)-[:E]->(y)
+---- ok
+-STATEMENT MATCH (x:N{id:3}), (y:N{id:0}) CREATE (x)-[:E]->(y)
+---- ok
+-STATEMENT CALL PROJECT_GRAPH('G', ['N'], ['E'])
+---- ok
+-LOG Personalized from leaf 1: teleportation returns to the anchor only, so scores are relative
+-LOG to it — the anchor and the hub dominate, the symmetric far leaves trail. (Contrast plain
+-LOG GDS_PAGE_RANK, where all three leaves tie.)
+-STATEMENT CALL GDS_PPR('G', [1]) RETURN node.id, rank ORDER BY node.id
+---- 4
+0|0.459459
+1|0.280180
+2|0.130180
+3|0.130180
+-LOG Empty source list is a binder error.
+-STATEMENT CALL GDS_PPR('G', []) RETURN node.id, rank
+---- error
+Binder exception: GDS_PPR requires at least one source node.
+-LOG Out-of-range source is an error naming the offending offset.
+-STATEMENT CALL GDS_PPR('G', [99]) RETURN node.id, rank
+---- error
+Binder exception: GDS_PPR source node offset 99 is out of range: the projected graph has 4 nodes.
+
+-CASE GDSPprTrustClosure
+-LOAD_DYNAMIC_EXTENSION algo
+-STATEMENT CREATE NODE TABLE M(id INT64 PRIMARY KEY)
+---- ok
+-STATEMENT CREATE REL TABLE F(FROM M TO M)
+---- ok
+-STATEMENT CREATE (:M{id:0}),(:M{id:1}),(:M{id:2}),(:M{id:3}),(:M{id:4}),(:M{id:5}),(:M{id:6}),(:M{id:7})
+---- ok
+-STATEMENT MATCH (x:M{id:0}),(y:M{id:1}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT MATCH (x:M{id:0}),(y:M{id:2}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT MATCH (x:M{id:1}),(y:M{id:2}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT MATCH (x:M{id:0}),(y:M{id:3}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT MATCH (x:M{id:1}),(y:M{id:3}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT MATCH (x:M{id:2}),(y:M{id:3}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT MATCH (x:M{id:4}),(y:M{id:5}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT MATCH (x:M{id:4}),(y:M{id:6}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT MATCH (x:M{id:5}),(y:M{id:6}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT MATCH (x:M{id:4}),(y:M{id:7}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT MATCH (x:M{id:5}),(y:M{id:7}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT MATCH (x:M{id:6}),(y:M{id:7}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT MATCH (x:M{id:3}),(y:M{id:4}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT CALL PROJECT_GRAPH('GT', ['M'], ['F'])
+---- ok
+-LOG Two 4-cliques joined by a bridge (3-4). Anchored at node 0 in clique A, trust mass stays
+-LOG in the anchor's community: clique A scores 0.17-0.29, clique B 0.03-0.07 — the closure
+-LOG boundary is visible in the distribution. This is the confidence primitive for
+-LOG viewpoint-based trust: scores are relative to the anchors, not global.
+-STATEMENT CALL GDS_PPR('GT', [0]) RETURN node.id, rank ORDER BY node.id
+---- 8
+0|0.288406
+1|0.171523
+2|0.171523
+3|0.193927
+4|0.070664
+5|0.034653
+6|0.034653
+7|0.034653
