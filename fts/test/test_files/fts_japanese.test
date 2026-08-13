@@ -1,0 +1,52 @@
+-DATASET CSV empty-db
+
+--
+
+# Japanese FTS via the MeCab tokenizer with the compiled ipadic dictionary.
+# The dictionary is generated at build time (third_party/mecab) and copied
+# next to the extension; mecab_dict_dir defaults to that location.
+-CASE JapaneseFTSBasic
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE JpDoc (ID SERIAL, text STRING, PRIMARY KEY (ID));
+---- ok
+-STATEMENT CREATE (d:JpDoc {text: '東京タワーは赤い塔です'});
+---- ok
+-STATEMENT CREATE (d:JpDoc {text: '東京大学で勉強する'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('JpDoc', 'jp_idx', ['text'], tokenizer:='mecab', stemmer:='none');
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('JpDoc', 'jp_idx', '東京タワー', conjunctive:=false, top:=5) RETURN node.text;
+---- 1
+東京タワーは赤い塔です
+-STATEMENT CALL QUERY_FTS_INDEX('JpDoc', 'jp_idx', '勉強', conjunctive:=false, top:=5) RETURN node.text;
+---- 1
+東京大学で勉強する
+-STATEMENT CALL QUERY_FTS_INDEX('JpDoc', 'jp_idx', '東京', conjunctive:=false, top:=5) RETURN node.text;
+---- 1
+東京タワーは赤い塔です
+
+-CASE JapaneseIncrementalInsert
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE JpDoc (ID SERIAL, text STRING, PRIMARY KEY (ID));
+---- ok
+-STATEMENT CREATE (d:JpDoc {text: '東京タワーは赤い塔です'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('JpDoc', 'jp_idx', ['text'], tokenizer:='mecab', stemmer:='none');
+---- ok
+-STATEMENT CREATE (d:JpDoc {text: '東京大学で勉強する'});
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('JpDoc', 'jp_idx', '勉強', conjunctive:=false, top:=5) RETURN node.text;
+---- 1
+東京大学で勉強する
+
+-CASE JapaneseCustomDictDir
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE JpDoc (ID SERIAL, text STRING, PRIMARY KEY (ID));
+---- ok
+-STATEMENT CREATE (d:JpDoc {text: '日本語の全文検索テスト'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('JpDoc', 'jp_idx', ['text'], tokenizer:='mecab', stemmer:='none', mecab_dict_dir := '${LBUG_ROOT_DIRECTORY}/extension/fts/build/dict-ipadic');
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('JpDoc', 'jp_idx', '全文検索', conjunctive:=false, top:=5) RETURN node.text;
+---- 1
+日本語の全文検索テスト
