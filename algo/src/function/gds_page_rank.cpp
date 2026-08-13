@@ -1,31 +1,16 @@
 // GDS_PAGE_RANK — PageRank backed by icebug (a NetworKit fork with zero-copy Arrow CSR ingest).
-// Same CALL surface as the hand-rolled PAGE_RANK, but the compute is delegated to libnetworkit:
-// we materialize the projected graph's adjacency as CSR, build a NetworKit::GraphR over Arrow
-// buffers, run NetworKit::PageRank, and stream the scores back through the GDS result pipeline.
-//
-// Part of the icebug bridge (adsharma-invited): the `algo` extension keeps its existing algos for
-// one release cycle; the icebug-backed ones live alongside under GDS_* names.
-#include "binder/binder.h"
-#include "common/exception/binder.h"
+// Same CALL surface as the hand-rolled PAGE_RANK, but the compute is delegated to libnetworkit.
+// All bridge plumbing lives in GDSPerNodeScalarAlgo (gds_algo_template.h); this file is the
+// algorithm descriptor: name, output column, optional params, and the NetworKit invocation.
 #include "common/string_utils.h"
 #include "function/algo_function.h"
-#include "function/gds_csr_bridge.h"
 #include "function/config/max_iterations_config.h"
 #include "function/config/page_rank_config.h"
-#include "function/gds/gds_utils.h"
-#include "function/gds/gds_vertex_compute.h"
-#include "function/table/bind_input.h"
-#include "processor/execution_context.h"
-#include "transaction/transaction.h"
-#include <arrow/api.h>
+#include "function/gds_algo_template.h"
 #include <networkit/centrality/PageRank.hpp>
-#include <networkit/graph/GraphR.hpp>
 
-using namespace lbug::processor;
 using namespace lbug::common;
 using namespace lbug::binder;
-using namespace lbug::storage;
-using namespace lbug::graph;
 using namespace lbug::function;
 
 namespace lbug {
@@ -68,117 +53,24 @@ struct GDSPageRankOptionalParams final : public MaxIterationOptionalParams {
     }
 };
 
-struct GDSPageRankBindData final : public GDSBindData {
-    // Projected graph name, for looking up the entry's materialized arrow CSR at run time.
-    std::string graphName;
+struct GDSPageRankDesc {
+    static constexpr const char* name = GDSPageRankFunction::name;
+    static constexpr const char* OUTPUT_COLUMN = "rank";
+    using OutputType = double;
+    using Params = GDSPageRankOptionalParams;
+    using Extra = NoExtraArgs;
 
-    GDSPageRankBindData(expression_vector columns, graph::NativeGraphEntry graphEntry,
-        std::shared_ptr<Expression> nodeOutput,
-        std::unique_ptr<GDSPageRankOptionalParams> optionalParams, std::string graphName)
-        : GDSBindData{std::move(columns), std::move(graphEntry), expression_vector{nodeOutput}},
-          graphName{std::move(graphName)} {
-        this->optionalParams = std::move(optionalParams);
-    }
-
-    std::unique_ptr<TableFuncBindData> copy() const override {
-        return std::make_unique<GDSPageRankBindData>(*this);
+    static std::vector<double> run(const NetworKit::GraphR& g, offset_t /*numNodes*/,
+        const Params& params, const Extra::type&) {
+        NetworKit::PageRank pr(g, params.dampingFactor.getParamVal(),
+            params.tolerance.getParamVal());
+        pr.run();
+        return pr.scores();
     }
 };
-
-// Emits (node, rank) rows, reading the icebug PageRank scores by node offset.
-class GDSPageRankResultVertexCompute : public GDSResultVertexCompute {
-public:
-    GDSPageRankResultVertexCompute(storage::MemoryManager* mm, GDSFuncSharedState* sharedState,
-        const std::vector<double>& scores)
-        : GDSResultVertexCompute{mm, sharedState}, scores{scores} {
-        nodeIDVector = createVector(LogicalType::INTERNAL_ID());
-        rankVector = createVector(LogicalType::DOUBLE());
-    }
-
-    void beginOnTableInternal(table_id_t) override {}
-
-    void vertexCompute(offset_t startOffset, offset_t endOffset, table_id_t tableID) override {
-        for (auto i = startOffset; i < endOffset; ++i) {
-            if (skip(i)) {
-                continue;
-            }
-            nodeIDVector->setValue<nodeID_t>(0, nodeID_t{i, tableID});
-            rankVector->setValue<double>(0, i < scores.size() ? scores[i] : 0.0);
-            localFT->append(vectors);
-        }
-    }
-
-    std::unique_ptr<VertexCompute> copy() override {
-        return std::make_unique<GDSPageRankResultVertexCompute>(mm, sharedState, scores);
-    }
-
-private:
-    const std::vector<double>& scores;
-    std::unique_ptr<ValueVector> nodeIDVector;
-    std::unique_ptr<ValueVector> rankVector;
-};
-
-static offset_t tableFunc(const TableFuncInput& input, TableFuncOutput&) {
-    auto clientContext = input.context->clientContext;
-    auto transaction = transaction::Transaction::Get(*clientContext);
-    auto sharedState = input.sharedState->ptrCast<GDSFuncSharedState>();
-    auto graph = sharedState->graph.get();
-    auto maxOffsetMap = graph->getMaxOffsetMap(transaction);
-    // MVP: single node table (the common case; multi-table is a follow-up).
-    if (maxOffsetMap.size() != 1) {
-        throw BinderException{"GDS_PAGE_RANK currently supports single-node-table graphs only."};
-    }
-    const auto tableID = maxOffsetMap.begin()->first;
-    const auto numNodes = maxOffsetMap.begin()->second;
-    auto mm = MemoryManager::Get(*clientContext);
-    auto bindData = input.bindData->constPtrCast<GDSPageRankBindData>();
-    auto& config = bindData->optionalParams->constCast<GDSPageRankOptionalParams>();
-
-    // 1. Undirected CSR — zero-copy from the projected graph's materialized arrow CSR when
-    // available, scan fallback otherwise (see gds_csr_bridge.cpp).
-    auto csr = buildUndirectedCSR(clientContext, bindData->graphName, graph, tableID, numNodes, mm);
-
-    // 2. icebug: zero-copy GraphR over the Arrow CSR, then PageRank.
-    NetworKit::GraphR g(numNodes, /*directed=*/false, csr.indices, csr.indptr);
-    NetworKit::PageRank pr(g, config.dampingFactor.getParamVal(), config.tolerance.getParamVal());
-    pr.run();
-    const std::vector<double>& scores = pr.scores();
-
-    // 4. Stream scores back through the GDS result pipeline.
-    auto outputVC = std::make_unique<GDSPageRankResultVertexCompute>(mm, sharedState, scores);
-    GDSUtils::runVertexCompute(input.context, GDSDensityState::DENSE, graph, *outputVC);
-    sharedState->factorizedTablePool.mergeLocalTables();
-    return 0;
-}
-
-static constexpr char RANK_COLUMN_NAME[] = "rank";
-
-static std::unique_ptr<TableFuncBindData> bindFunc(main::ClientContext* context,
-    const TableFuncBindInput* input) {
-    auto graphName = input->getLiteralVal<std::string>(0);
-    auto graphEntry = GDSFunction::bindGraphEntry(*context, graphName);
-    auto nodeOutput = GDSFunction::bindNodeOutput(*input, graphEntry.getNodeEntries());
-    expression_vector columns;
-    columns.push_back(nodeOutput->constCast<NodeExpression>().getInternalID());
-    columns.push_back(input->binder->createVariable(RANK_COLUMN_NAME, LogicalType::DOUBLE()));
-    return std::make_unique<GDSPageRankBindData>(std::move(columns), std::move(graphEntry),
-        nodeOutput, std::make_unique<GDSPageRankOptionalParams>(input->optionalParamsLegacy),
-        std::move(graphName));
-}
 
 function_set GDSPageRankFunction::getFunctionSet() {
-    function_set result;
-    auto func = std::make_unique<TableFunction>(GDSPageRankFunction::name,
-        std::vector<LogicalTypeID>{LogicalTypeID::ANY});
-    func->bindFunc = bindFunc;
-    func->tableFunc = tableFunc;
-    func->initSharedStateFunc = GDSFunction::initSharedState;
-    func->initLocalStateFunc = TableFunction::initEmptyLocalState;
-    func->canParallelFunc = [] { return false; };
-    func->getLogicalPlanFunc = GDSFunction::getLogicalPlan;
-    func->getPhysicalPlanFunc = GDSFunction::getPhysicalPlan;
-    result.push_back(std::move(func));
-    return result;
+    return GDSPerNodeScalarAlgo<GDSPageRankDesc>::getFunctionSet();
 }
 
 } // namespace algo_extension

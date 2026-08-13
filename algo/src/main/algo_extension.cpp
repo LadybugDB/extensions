@@ -40,6 +40,7 @@ void AlgoExtension::load(main::ClientContext* context) {
     ExtensionUtils::addTableFunc<GDSPageRankFunction>(db);
     ExtensionUtils::addTableFunc<GDSNode2VecFunction>(db);
     ExtensionUtils::addTableFunc<GDSLouvainFunction>(db);
+    ExtensionUtils::addTableFunc<GDSLeidenFunction>(db);
     ExtensionUtils::addTableFunc<GDSPprFunction>(db);
 #endif
     ExtensionUtils::addTableFunc<KCoreDecompositionFunction>(db);
