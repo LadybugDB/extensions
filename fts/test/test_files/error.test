@@ -206,4 +206,4 @@ Error: "missing ]: [a-z".
 -STATEMENT CALL CREATE_FTS_INDEX('person', 'personIdx', ['fName'], tokenizer := 'french')
 ---- error
 Binder exception: Unsupported tokenizer: french.
-Supported tokenizers: 'simple' (default), 'jieba' (advanced Chinese)
+Supported tokenizers: 'simple' (default), 'jieba' (Chinese), 'mecab' (Japanese)
