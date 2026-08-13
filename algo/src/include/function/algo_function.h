@@ -75,6 +75,14 @@ struct GDSLouvainFunction {
     static function::function_set getFunctionSet();
 };
 
+// icebug (NetworKit)-backed personalized PageRank (random walk with restart from caller-supplied
+// source nodes) — scores measure standing relative to the sources, not globally.
+struct GDSPprFunction {
+    static constexpr const char* name = "GDS_PPR";
+
+    static function::function_set getFunctionSet();
+};
+
 struct KCoreDecompositionFunction {
     static constexpr const char* name = "K_CORE_DECOMPOSITION";
 
