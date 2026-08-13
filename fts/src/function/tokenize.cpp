@@ -6,10 +6,10 @@
 #include "common/types/string_t.h"
 #include "common/types/types.h"
 #include "common/vector/value_vector.h"
-#include "cppjieba/Jieba.hpp"
 #include "expression_evaluator/expression_evaluator_utils.h"
 #include "function/scalar_function.h"
 #include "re2.h"
+#include "utils/tokenizer.h"
 
 namespace lbug {
 namespace fts_extension {
@@ -17,16 +17,17 @@ namespace fts_extension {
 using namespace function;
 using namespace common;
 
-struct JiebaBindData final : public FunctionBindData {
-    std::shared_ptr<cppjieba::Jieba> jieba;
+struct TokenizerBindData final : public FunctionBindData {
+    std::shared_ptr<const ITokenizer> tokenizer;
 
-    JiebaBindData(common::logical_type_vec_t paramTypes, std::shared_ptr<cppjieba::Jieba> jieba)
+    TokenizerBindData(common::logical_type_vec_t paramTypes,
+        std::shared_ptr<const ITokenizer> tokenizer)
         : FunctionBindData{std::move(paramTypes),
               common::LogicalType::LIST(common::LogicalType::STRING())},
-          jieba{std::move(jieba)} {}
+          tokenizer{std::move(tokenizer)} {}
 
     std::unique_ptr<FunctionBindData> copy() const override {
-        return std::make_unique<JiebaBindData>(copyVector(paramTypes), jieba);
+        return std::make_unique<TokenizerBindData>(copyVector(paramTypes), tokenizer);
     }
 };
 
@@ -38,21 +39,11 @@ static void addTokensToVector(const std::vector<std::string>& tokens, list_entry
     }
 }
 
-struct JiebaTokenizer {
+struct TokenizeOp {
     static void operation(string_t& text, string_t& /*tokenizerName*/, string_t& /*extraParam*/,
         list_entry_t& result, common::ValueVector& resultVector, void* dataPtr) {
-        std::vector<std::string> tokens;
-        auto bindData = reinterpret_cast<JiebaBindData*>(dataPtr);
-        bindData->jieba->CutForSearch(text.getAsString(), tokens);
-        addTokensToVector(tokens, result, resultVector);
-    }
-};
-
-struct SimpleTokenizer {
-    static void operation(string_t& text, string_t& /*tokenizerName*/, string_t& /*extraParam*/,
-        list_entry_t& result, common::ValueVector& resultVector, void* /*dataPtr*/) {
-        auto tokens =
-            StringUtils::split(text.getAsString(), " ", true /* ignoreEmptyStringParts */);
+        auto bindData = reinterpret_cast<TokenizerBindData*>(dataPtr);
+        auto tokens = bindData->tokenizer->tokenize(text.getAsString());
         addTokensToVector(tokens, result, resultVector);
     }
 };
@@ -62,37 +53,31 @@ static std::unique_ptr<FunctionBindData> bindFunc(const ScalarBindFuncInput& inp
         throw BinderException{"The tokenizer parameter must be a literal expression."};
     }
     if (input.arguments[2]->expressionType != ExpressionType::LITERAL) {
-        throw BinderException{"The path to the jieba dict directory must be a literal expression."};
+        throw BinderException{"The tokenizer parameter must be a literal expression."};
     }
     auto value = evaluator::ExpressionEvaluatorUtils::evaluateConstantExpression(input.arguments[1],
         input.context);
-    auto tokenizer = common::StringUtils::getLower(value.getValue<std::string>());
-    if (tokenizer == "jieba") {
-        std::string dictDir = evaluator::ExpressionEvaluatorUtils::evaluateConstantExpression(
-            input.arguments[2], input.context)
-                                  .getValue<std::string>();
-        std::string dict = dictDir + "/jieba.dict.utf8";
-        std::string hmm = dictDir + "/hmm_model.utf8";
-        std::string user = dictDir + "/user.dict.utf8"; // Contains custom AI/ML terms
-        std::string idf = dictDir + "/idf.utf8";
-        std::string stop = dictDir + "/stop_words.utf8";
-        auto jieba = std::make_unique<cppjieba::Jieba>(dict, hmm, user, idf, stop);
-        input.definition->ptrCast<ScalarFunction>()->execFunc =
-            ScalarFunction::TernaryRegexExecFunction<string_t, string_t, string_t, list_entry_t,
-                JiebaTokenizer>;
-        return std::make_unique<JiebaBindData>(
-            binder::ExpressionUtil::getDataTypes(input.arguments), std::move(jieba));
-    } else if (tokenizer == "simple" || tokenizer == "") {
-        input.definition->ptrCast<ScalarFunction>()->execFunc =
-            ScalarFunction::TernaryRegexExecFunction<string_t, string_t, string_t, list_entry_t,
-                SimpleTokenizer>;
-        return FunctionBindData::getSimpleBindData(input.arguments,
-            LogicalType::LIST(LogicalType::STRING()));
-    } else {
-        throw common::BinderException{
-            "Unsupported tokenizer: " + tokenizer +
-            ".\nSupported tokenizers: 'simple' (default), 'jieba' (advanced Chinese)"};
+    auto tokenizerName = common::StringUtils::getLower(value.getValue<std::string>());
+    if (tokenizerName.empty()) {
+        tokenizerName = "simple";
     }
+    // The third argument is the tokenizer's extra parameter; for 'jieba' it is
+    // the dictionary directory.
+    auto extraParam = evaluator::ExpressionEvaluatorUtils::evaluateConstantExpression(
+        input.arguments[2], input.context)
+                          .getValue<std::string>();
+    TokenizerParams params;
+    if (tokenizerName == "jieba") {
+        params["jieba_dict_dir"] = extraParam;
+    } else if (tokenizerName == "mecab") {
+        params["mecab_dict_dir"] = extraParam;
+    }
+    auto tokenizer = TokenizerPool::getOrCreate(tokenizerName, params);
+    input.definition->ptrCast<ScalarFunction>()->execFunc =
+        ScalarFunction::TernaryRegexExecFunction<string_t, string_t, string_t, list_entry_t,
+            TokenizeOp>;
+    return std::make_unique<TokenizerBindData>(
+        binder::ExpressionUtil::getDataTypes(input.arguments), std::move(tokenizer));
 }
 
 function::function_set TokenizeFunction::getFunctionSet() {
