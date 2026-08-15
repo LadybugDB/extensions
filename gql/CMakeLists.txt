@@ -6,6 +6,14 @@ include_directories(
         src/parser
         ${PROJECT_SOURCE_DIR}/src/include/parser/antlr_parser)  # For GQL parser includes
 
+# antlr4_runtime is built as a static library (see third_party/antlr4_runtime/CMakeLists.txt).
+# On Windows its headers default to `__declspec(dllimport)`, which makes MSVC emit
+# references to the (non-existent) ANTLR DLL for inline/compiler-generated members
+# such as AbstractParseTreeVisitor::shouldVisitNextChild and its destructor, causing
+# LNK2001. Define ANTLR4CPP_STATIC so those members are emitted locally, matching how
+# the core library builds its own ANTLR consumers (src/CMakeLists.txt).
+add_compile_definitions(ANTLR4CPP_STATIC)
+
 add_subdirectory(src/parser)
 add_subdirectory(src/function)
 add_subdirectory(src/main)
