@@ -1,0 +1,26 @@
+-DATASET CSV empty
+
+--
+
+-CASE AIExtractNullAndBinding
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/llm/build/libllm.lbug_extension"
+---- ok
+
+-STATEMENT RETURN AI_EXTRACT(NULL, 'Extract a value', 'sk-test-key')
+---- 1
+
+-STATEMENT RETURN AI_EXTRACT('text', 'instruction', 'sk-test-key', 'other_provider')
+---- error
+Binder exception: AI_EXTRACT supports only provider openai_compatible in phase 1.
+
+-STATEMENT RETURN AI_EXTRACT('text', 'instruction', 'sk-test-key', 'openai_compatible', 'gpt-4o-mini', 'ftp://localhost/v1')
+---- error
+Binder exception: AI_EXTRACT endpoint must be a valid HTTP(S) base URL.
+
+-STATEMENT RETURN AI_EXTRACT('text', 'instruction', 'sk-test-key', 42)
+---- error
+Binder exception: AI_EXTRACT argument 4 must be STRING.
+
+-STATEMENT RETURN AI_EXTRACT('text', 'instruction', 'sk-test-key', 'openai_compatible', 'gpt-4o-mini', 'https://')
+---- error
+Binder exception: AI_EXTRACT endpoint must be a valid HTTP(S) base URL.

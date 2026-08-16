@@ -18,6 +18,7 @@ void LlmExtension::load(main::ClientContext* context) {
     auto& db = *context->getDatabase();
 
     extension::ExtensionUtils::addScalarFunc<CreateEmbedding>(db);
+    extension::ExtensionUtils::addScalarFunc<AIExtract>(db);
 }
 
 } // namespace llm_extension
