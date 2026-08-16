@@ -6,6 +6,7 @@ add_library(lbug_llm_providers
         google-vertex.cpp
         google-gemini.cpp
         amazon-bedrock.cpp
+        openai-compatible.cpp
 )
 
 set(LLM_EXTENSION_OBJECT_FILES
