@@ -1,16 +1,15 @@
 #include "providers/openai-compatible.h"
 
+#include <algorithm>
+#include <cctype>
+#include <mutex>
+
 #include "common/exception/connection.h"
 #include "common/exception/interrupt.h"
 #include "common/exception/runtime.h"
 #include "common/json.h"
 #include "main/client_context.h"
-
 #include <curl/curl.h>
-
-#include <algorithm>
-#include <cctype>
-#include <mutex>
 
 using namespace lbug::common;
 
@@ -43,9 +42,7 @@ struct CurlHandle {
 };
 
 struct CurlHeaders {
-    ~CurlHeaders() {
-        curl_slist_free_all(headers);
-    }
+    ~CurlHeaders() { curl_slist_free_all(headers); }
 
     void append(const char* header) {
         auto* appended = curl_slist_append(headers, header);
@@ -75,7 +72,8 @@ std::string normalizeBaseURL(std::string baseURL) {
     }
     if (std::any_of(baseURL.begin(), baseURL.end(),
             [](unsigned char c) { return std::iscntrl(c) || std::isspace(c); })) {
-        throw RuntimeException("AI_EXTRACT endpoint must not contain whitespace or control characters.");
+        throw RuntimeException(
+            "AI_EXTRACT endpoint must not contain whitespace or control characters.");
     }
     const auto schemeEnd = baseURL.find("://") + 3;
     const auto authorityEnd = baseURL.find_first_of("/?#", schemeEnd);
@@ -136,8 +134,10 @@ std::string buildPayload(const CompletionRequest& request) {
     char* payload = yyjson_mut_write_opts(doc, YYJSON_WRITE_NOFLAG, nullptr, nullptr, &writeError);
     if (payload == nullptr) {
         yyjson_mut_doc_free(doc);
-        auto message = writeError.msg == nullptr ? "unknown JSON serialization error" : writeError.msg;
-        throw RuntimeException(std::string("AI_EXTRACT could not serialize the provider request: ") + message);
+        auto message =
+            writeError.msg == nullptr ? "unknown JSON serialization error" : writeError.msg;
+        throw RuntimeException(
+            std::string("AI_EXTRACT could not serialize the provider request: ") + message);
     }
     std::string result(payload);
     free(payload);
@@ -151,15 +151,19 @@ std::string parseCompletionContent(const std::string& body) {
         throw RuntimeException("AI_EXTRACT provider returned malformed JSON.");
     }
     auto* root = yyjson_doc_get_root(doc);
-    auto* choices = root != nullptr && yyjson_is_obj(root) ? yyjson_obj_get(root, "choices") : nullptr;
-    auto* firstChoice = choices != nullptr && yyjson_is_arr(choices) ? yyjson_arr_get_first(choices) : nullptr;
+    auto* choices =
+        root != nullptr && yyjson_is_obj(root) ? yyjson_obj_get(root, "choices") : nullptr;
+    auto* firstChoice =
+        choices != nullptr && yyjson_is_arr(choices) ? yyjson_arr_get_first(choices) : nullptr;
     auto* message = firstChoice != nullptr && yyjson_is_obj(firstChoice) ?
                         yyjson_obj_get(firstChoice, "message") :
                         nullptr;
-    auto* content = message != nullptr && yyjson_is_obj(message) ? yyjson_obj_get(message, "content") : nullptr;
+    auto* content =
+        message != nullptr && yyjson_is_obj(message) ? yyjson_obj_get(message, "content") : nullptr;
     if (content == nullptr || !yyjson_is_str(content)) {
         yyjson_doc_free(doc);
-        throw RuntimeException("AI_EXTRACT provider response is missing choices[0].message.content.");
+        throw RuntimeException(
+            "AI_EXTRACT provider response is missing choices[0].message.content.");
     }
     const auto* resultText = yyjson_get_str(content);
     if (resultText == nullptr) {
@@ -198,15 +202,19 @@ std::string OpenAICompatibleCompletion::complete(const CompletionRequest& reques
 
     ensureCurlOption(curl_easy_setopt(curl.handle, CURLOPT_URL, url.c_str()), "URL");
     ensureCurlOption(curl_easy_setopt(curl.handle, CURLOPT_POST, 1L), "POST");
-    ensureCurlOption(curl_easy_setopt(curl.handle, CURLOPT_POSTFIELDS, payload.data()), "POSTFIELDS");
+    ensureCurlOption(curl_easy_setopt(curl.handle, CURLOPT_POSTFIELDS, payload.data()),
+        "POSTFIELDS");
     ensureCurlOption(curl_easy_setopt(curl.handle, CURLOPT_POSTFIELDSIZE_LARGE,
                          static_cast<curl_off_t>(payload.size())),
         "POSTFIELDSIZE_LARGE");
-    ensureCurlOption(curl_easy_setopt(curl.handle, CURLOPT_HTTPHEADER, headers.headers), "HTTPHEADER");
-    ensureCurlOption(curl_easy_setopt(curl.handle, CURLOPT_WRITEFUNCTION, writeResponse), "WRITEFUNCTION");
+    ensureCurlOption(curl_easy_setopt(curl.handle, CURLOPT_HTTPHEADER, headers.headers),
+        "HTTPHEADER");
+    ensureCurlOption(curl_easy_setopt(curl.handle, CURLOPT_WRITEFUNCTION, writeResponse),
+        "WRITEFUNCTION");
     ensureCurlOption(curl_easy_setopt(curl.handle, CURLOPT_WRITEDATA, &response), "WRITEDATA");
     ensureCurlOption(curl_easy_setopt(curl.handle, CURLOPT_TIMEOUT, timeout), "TIMEOUT");
-    ensureCurlOption(curl_easy_setopt(curl.handle, CURLOPT_CONNECTTIMEOUT, connectTimeout), "CONNECTTIMEOUT");
+    ensureCurlOption(curl_easy_setopt(curl.handle, CURLOPT_CONNECTTIMEOUT, connectTimeout),
+        "CONNECTTIMEOUT");
     ensureCurlOption(curl_easy_setopt(curl.handle, CURLOPT_FOLLOWLOCATION, 0L), "FOLLOWLOCATION");
     ensureCurlOption(curl_easy_setopt(curl.handle, CURLOPT_MAXREDIRS, 0L), "MAXREDIRS");
     ensureCurlOption(curl_easy_setopt(curl.handle, CURLOPT_NOSIGNAL, 1L), "NOSIGNAL");
@@ -218,16 +226,19 @@ std::string OpenAICompatibleCompletion::complete(const CompletionRequest& reques
 
     const auto curlResult = curl_easy_perform(curl.handle);
     long status = 0;
-    ensureCurlOption(curl_easy_getinfo(curl.handle, CURLINFO_RESPONSE_CODE, &status), "RESPONSE_CODE");
+    ensureCurlOption(curl_easy_getinfo(curl.handle, CURLINFO_RESPONSE_CODE, &status),
+        "RESPONSE_CODE");
 
     if (curlResult == CURLE_ABORTED_BY_CALLBACK && request.clientContext->interrupted()) {
         throw InterruptException{};
     }
     if (curlResult != CURLE_OK) {
-        throw ConnectionException(std::string("AI_EXTRACT request failed: ") + curl_easy_strerror(curlResult));
+        throw ConnectionException(
+            std::string("AI_EXTRACT request failed: ") + curl_easy_strerror(curlResult));
     }
     if (status < 200 || status >= 300) {
-        throw ConnectionException("AI_EXTRACT provider returned HTTP status " + std::to_string(status) + ".");
+        throw ConnectionException(
+            "AI_EXTRACT provider returned HTTP status " + std::to_string(status) + ".");
     }
     return parseCompletionContent(response);
 }
