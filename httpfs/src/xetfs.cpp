@@ -82,13 +82,6 @@ std::string makeAbsoluteRedirectURL(const std::string& sourceURL, const std::str
     return host + basePath + location;
 }
 
-std::unique_ptr<httplib::Client> getNoRedirectClient(const std::string& host) {
-    auto client = HTTPFileSystem::getClient(host);
-    client->set_follow_location(false);
-    client->set_url_encode(false);
-    return client;
-}
-
 std::unique_ptr<HTTPResponse> synthesizeHeadResponse(const HTTPResponse& response,
     const std::string& url, const std::string& contentLength) {
     httplib::Response res;
@@ -161,44 +154,86 @@ std::string XetFileSystem::toHuggingFaceURL(const std::string& path) {
     return buildResolveURLWithExplicitResolve("", segments);
 }
 
-std::unique_ptr<HTTPResponse> XetFileSystem::headRequest(common::FileInfo* /*fileInfo*/,
+std::unique_ptr<HTTPResponse> XetFileSystem::headRequest(common::FileInfo* fileInfo,
     const std::string& url, HeaderMap headerMap) const {
     const auto [host, hostPath] = HTTPFileSystem::parseUrl(url);
     auto headers = getHTTPHeaders(headerMap);
-    auto client = getNoRedirectClient(host);
 
-    std::function<httplib::Result(void)> request(
-        [&]() { return client->Head(hostPath.c_str(), *headers); });
-    std::function<void(void)> retry([&]() { client = getNoRedirectClient(host); });
+    // Send one request to `host` under the shared-connection lock. The lock is
+    // scoped to this block and released before any redirect recursion below,
+    // because recursing into another host's request re-enters lockHttp() and a
+    // non-recursive mutex would self-deadlock if still held.
+    std::unique_ptr<HTTPResponse> response;
+    {
+        HTTPFileSystem::lockHttp();
+        struct HttpLockGuard {
+            ~HttpLockGuard() { HTTPFileSystem::unlockHttp(); }
+        } httpLockGuard;
 
-    auto response = runRequestWithRetry(request, url, "HEAD", retry);
+        // Reuse the pooled connection for this host if one is healthy, else
+        // evict the stale one and build a fresh client.
+        httplib::Client* client = HTTPFileSystem::getSharedNoRedirectClient(host);
+
+        std::function<httplib::Result(void)> request(
+            [&]() { return client->Head(hostPath.c_str(), *headers); });
+        std::function<void(void)> retry([&]() {
+            // A persistent connection may have gone stale (rate-limited or closed
+            // by the server); evict it so the retry gets a fresh socket instead of
+            // repeatedly timing out against the same dead connection.
+            client = HTTPFileSystem::evictAndGetSharedNoRedirectClient(host);
+        });
+
+        response = runRequestWithRetry(request, url, "HEAD", retry);
+    }
+
     if (response->code >= 300 && response->code < 400 &&
         response->headers.contains("x-linked-size")) {
         return synthesizeHeadResponse(*response, url, response->headers["x-linked-size"]);
     }
     if (response->code >= 300 && response->code < 400 && response->headers.contains("Location")) {
-        return headRequest(nullptr, makeAbsoluteRedirectURL(url, response->headers["Location"]),
+        return headRequest(fileInfo, makeAbsoluteRedirectURL(url, response->headers["Location"]),
             headerMap);
     }
     return response;
 }
 
-std::unique_ptr<HTTPResponse> XetFileSystem::getRangeRequest(common::FileInfo* /*fileInfo*/,
+std::unique_ptr<HTTPResponse> XetFileSystem::getRangeRequest(common::FileInfo* fileInfo,
     const std::string& url, HeaderMap headerMap, uint64_t fileOffset, char* buffer,
     uint64_t bufferLen) const {
     const auto [host, hostPath] = HTTPFileSystem::parseUrl(url);
     auto headers = getHTTPHeaders(headerMap);
     headers->insert(std::make_pair("Range",
         std::format("bytes={}-{}", fileOffset, fileOffset + bufferLen - 1)));
-    auto client = getNoRedirectClient(host);
 
-    std::function<httplib::Result(void)> request(
-        [&]() { return client->Get(hostPath.c_str(), *headers); });
-    std::function<void(void)> retry([&]() { client = getNoRedirectClient(host); });
+    // Send one range request to `host` under the shared-connection lock. The
+    // lock is scoped to this block and released before any redirect recursion
+    // below, because recursing into another host's request re-enters lockHttp()
+    // and a non-recursive mutex would self-deadlock if still held.
+    std::unique_ptr<HTTPResponse> response;
+    {
+        HTTPFileSystem::lockHttp();
+        struct HttpLockGuard {
+            ~HttpLockGuard() { HTTPFileSystem::unlockHttp(); }
+        } httpLockGuard;
 
-    auto response = runRequestWithRetry(request, url, "GET Range", retry);
+        // Reuse the pooled connection for this host if one is healthy, else
+        // evict the stale one and build a fresh client.
+        httplib::Client* client = HTTPFileSystem::getSharedNoRedirectClient(host);
+
+        std::function<httplib::Result(void)> request(
+            [&]() { return client->Get(hostPath.c_str(), *headers); });
+        std::function<void(void)> retry([&]() {
+            // A persistent connection may have gone stale (rate-limited or closed
+            // by the server); evict it so the retry gets a fresh socket instead of
+            // repeatedly timing out against the same dead connection.
+            client = HTTPFileSystem::evictAndGetSharedNoRedirectClient(host);
+        });
+
+        response = runRequestWithRetry(request, url, "GET Range", retry);
+    }
+
     if (response->code >= 300 && response->code < 400 && response->headers.contains("Location")) {
-        return getRangeRequest(nullptr, makeAbsoluteRedirectURL(url, response->headers["Location"]),
+        return getRangeRequest(fileInfo, makeAbsoluteRedirectURL(url, response->headers["Location"]),
             headerMap, fileOffset, buffer, bufferLen);
     }
     if (response->code >= 400) {

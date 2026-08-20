@@ -6,6 +6,7 @@
 #include "httplib.h"
 #include "main/client_context.h"
 #include <list>
+#include <unordered_map>
 
 #if defined(_WIN32)
 #define O_ACCMODE 0x0003
@@ -100,6 +101,27 @@ public:
 
     void cleanUP(main::ClientContext* context) override;
 
+    // Returns a process-wide shared no-follow httplib client for `host`, creating
+    // and caching it on first use. Because each client owns one persistent
+    // keep-alive TLS socket that is reused across requests, sharing a client per
+    // host (instead of creating a fresh one per file info / per retry) is what
+    // avoids a TCP+TLS reconnect on every request. Callers must serialize access
+    // to a pooled client around a request via lockHttp()/unlockHttp().
+    static httplib::Client* getSharedNoRedirectClient(const std::string& host);
+
+    // Drops the pooled client for `host` (if present) and returns a freshly
+    // created one, so a retry after a failed/dead connection does not keep
+    // reusing the same broken socket for the rest of the run.
+    static httplib::Client* evictAndGetSharedNoRedirectClient(const std::string& host);
+
+    // Global lock guarding access to any pooled no-follow client. Requests that
+    // use a pooled client must hold this for the duration of the request. It must
+    // be released before handling a redirect (which recurses into another
+    // lockHttp() on the same thread), otherwise the non-recursive mutex
+    // self-deadlocks.
+    static void lockHttp();
+    static void unlockHttp();
+
 protected:
     void readFromFile(common::FileInfo& fileInfo, void* buffer, uint64_t numBytes,
         uint64_t position) const override;
@@ -135,6 +157,22 @@ protected:
 private:
     std::unique_ptr<CachedFileManager> cachedFileManager;
     std::mutex cachedFileManagerMtx;
+
+    // Process-wide HTTP connection pool, keyed by host. Each entry is a client
+    // with one persistent keep-alive TLS socket reused across all requests to
+    // that host. Guarded by httpPoolMtx. The single httpLockMtx serializes
+    // access to any pooled client; it must NEVER be held across a redirect
+    // recursion (which re-enters on the same thread).
+    static std::unordered_map<std::string, std::unique_ptr<httplib::Client>> sharedNoRedirectClients;
+    static std::mutex httpPoolMtx;
+    static std::mutex httpLockMtx;
+
+    // Process-wide cache of remote file sizes keyed by URL. Parquet files are
+    // immutable during a query, so the very expensive HEAD round trip used to
+    // learn a file's size only needs to happen once per URL instead of once per
+    // openFile(). Guarded by httpSizeCacheMtx.
+    static std::unordered_map<std::string, uint64_t> httpSizeCache;
+    static std::mutex httpSizeCacheMtx;
 };
 
 } // namespace httpfs_extension
