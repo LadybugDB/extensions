@@ -21,6 +21,13 @@ namespace httpfs_extension {
 
 using namespace lbug::common;
 
+std::unordered_map<std::string, std::unique_ptr<httplib::Client>>
+    HTTPFileSystem::sharedNoRedirectClients;
+std::mutex HTTPFileSystem::httpPoolMtx;
+std::mutex HTTPFileSystem::httpLockMtx;
+std::unordered_map<std::string, uint64_t> HTTPFileSystem::httpSizeCache;
+std::mutex HTTPFileSystem::httpSizeCacheMtx;
+
 HTTPResponse::HTTPResponse(httplib::Response& res, std::string url)
     : code{res.status}, error{res.reason}, url{std::move(url)}, body{res.body} {
     for (auto& [name, value] : res.headers) {
@@ -199,6 +206,19 @@ HTTPFileInfo::HTTPFileInfo(std::string path, FileSystem* fileSystem, int flags,
       httpConfig{context}, cachedFileInfo{nullptr} {}
 
 void HTTPFileInfo::initMetadata() {
+    // Remote files are immutable during a query; reuse the file size learned by
+    // an earlier openFile() for the same URL instead of paying a fresh HEAD +
+    // redirect round trip per open. This is what turns N opens of the same
+    // parquet file (~450 in a rel scan) into a single HEAD.
+    {
+        std::lock_guard<std::mutex> lck{HTTPFileSystem::httpSizeCacheMtx};
+        auto it = HTTPFileSystem::httpSizeCache.find(path);
+        if (it != HTTPFileSystem::httpSizeCache.end()) {
+            length = it->second;
+            return;
+        }
+    }
+
     auto hfs = fileSystem->ptrCast<HTTPFileSystem>();
     initializeClient();
     auto res = hfs->headRequest(this->ptrCast<HTTPFileInfo>(), path, {});
@@ -277,6 +297,10 @@ void HTTPFileInfo::initMetadata() {
                 res->headers["Content-Length"]));
             // LCOV_EXCL_STOP
         }
+    }
+    if (length > 0) {
+        std::lock_guard<std::mutex> lck{HTTPFileSystem::httpSizeCacheMtx};
+        HTTPFileSystem::httpSizeCache[path] = length;
     }
 }
 
@@ -472,6 +496,51 @@ std::unique_ptr<httplib::Client> HTTPFileSystem::getClient(const std::string& ho
     client->set_connection_timeout(HTTPParams::DEFAULT_TIMEOUT);
     client->set_decompress(false);
     return client;
+}
+
+// Build a no-follow httplib client for `host` that does not automatically
+// follow redirects. The Xet resolve endpoint returns 302 Location headers which
+// the filesystem follows itself, so redirects must be surfaced rather than
+// absorbed (which would also point the pooled connection at the wrong host).
+static httplib::Client* makeNoRedirectClient(const std::string& host) {
+    auto client = std::make_unique<httplib::Client>(host);
+    client->set_follow_location(false);
+    client->set_url_encode(false);
+    client->set_keep_alive(HTTPParams::DEFAULT_KEEP_ALIVE);
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+    client->enable_server_certificate_verification(false);
+#endif
+    client->set_write_timeout(HTTPParams::DEFAULT_TIMEOUT);
+    client->set_read_timeout(HTTPParams::DEFAULT_TIMEOUT);
+    client->set_connection_timeout(HTTPParams::DEFAULT_TIMEOUT);
+    client->set_decompress(false);
+    return client.release();
+}
+
+void HTTPFileSystem::lockHttp() {
+    httpLockMtx.lock();
+}
+
+void HTTPFileSystem::unlockHttp() {
+    httpLockMtx.unlock();
+}
+
+httplib::Client* HTTPFileSystem::getSharedNoRedirectClient(const std::string& host) {
+    std::lock_guard<std::mutex> lck{httpPoolMtx};
+    auto it = sharedNoRedirectClients.find(host);
+    if (it == sharedNoRedirectClients.end()) {
+        std::unique_ptr<httplib::Client> client{makeNoRedirectClient(host)};
+        it = sharedNoRedirectClients.emplace(host, std::move(client)).first;
+    }
+    return it->second.get();
+}
+
+httplib::Client* HTTPFileSystem::evictAndGetSharedNoRedirectClient(const std::string& host) {
+    std::lock_guard<std::mutex> lck{httpPoolMtx};
+    sharedNoRedirectClients.erase(host);
+    std::unique_ptr<httplib::Client> client{makeNoRedirectClient(host)};
+    auto it = sharedNoRedirectClients.emplace(host, std::move(client)).first;
+    return it->second.get();
 }
 
 std::unique_ptr<httplib::Headers> HTTPFileSystem::getHTTPHeaders(HeaderMap& headerMap) {
