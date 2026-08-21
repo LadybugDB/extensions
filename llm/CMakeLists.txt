@@ -1,18 +1,13 @@
 SET(CMAKE_FIND_PACKAGE_SORT_ORDER NATURAL)
 SET(CMAKE_FIND_PACKAGE_SORT_DIRECTION DEC)
-# OpenSSL is resolved by the top-level build before extensions are configured.
-# LBUG_REQUIRE_STATIC_OPENSSL must therefore be set at the top level.
-find_package(OpenSSL REQUIRED)
-# Official dynamic extension packages must set this option so their LLM artifact
-# does not acquire a host libcurl dependency. Keep developer builds opt-in: a
-# static curl is not installed by every development environment.
-option(LLM_REQUIRE_STATIC_CURL "Require static libcurl for the LLM extension" OFF)
-if (LLM_REQUIRE_STATIC_CURL)
-    set(CURL_USE_STATIC_LIBS TRUE)
-    message(STATUS "LLM curl linkage: static library required")
+# Address sanitizer may change the ABI, so we use dynamic linking
+# if it's enabled.
+if (${ENABLE_ADDRESS_SANITIZER})
+    SET(OPENSSL_USE_STATIC_LIBS FALSE)
 else ()
-    message(STATUS "LLM curl linkage: toolchain default")
+    SET(OPENSSL_USE_STATIC_LIBS TRUE)
 endif ()
+find_package(OpenSSL REQUIRED)
 find_package(CURL REQUIRED)
 message(STATUS "LLM curl library: ${CURL_LIBRARY}")
 add_compile_definitions(CPPHTTPLIB_OPENSSL_SUPPORT)
