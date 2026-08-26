@@ -30,6 +30,12 @@ add_library(httpfs_extension_source
         src/s3fs_config.cpp)
 
 if (NOT BUILD_WASM)
+    target_sources(httpfs_extension_source PRIVATE
+            src/block_cache.cpp
+            src/prefetch_pool.cpp)
+endif()
+
+if (NOT BUILD_WASM)
     target_include_directories(httpfs_extension_source PRIVATE ${OPENSSL_INCLUDE_DIR})
     target_compile_definitions(httpfs_extension_source PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
 endif ()

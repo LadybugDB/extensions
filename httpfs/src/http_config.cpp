@@ -12,6 +12,27 @@ HTTPConfig::HTTPConfig(main::ClientContext* context) {
     DASSERT(context != nullptr);
     cacheFile =
         context->getCurrentSetting(HTTPCacheFileConfig::HTTP_CACHE_FILE_OPTION).getValue<bool>();
+    cacheBlocks =
+        context->getCurrentSetting(HTTPCacheBlocksConfig::HTTP_CACHE_BLOCKS_OPTION).getValue<bool>();
+    int64_t prefetchDepthVal = context
+        ->getCurrentSetting(HTTPPrefetchDepthConfig::HTTP_PREFETCH_DEPTH_OPTION)
+        .getValue<int64_t>();
+    if (prefetchDepthVal < 0) {
+        throw common::RuntimeException{std::format("Invalid option value for {}",
+            HTTPPrefetchDepthConfig::HTTP_PREFETCH_DEPTH_OPTION)};
+    }
+    prefetchDepth = static_cast<uint64_t>(prefetchDepthVal);
+    const auto cacheBlocksMaxMBStr = main::ClientContext::getEnvVariable(
+        HTTPCacheBlocksMaxBytesConfig::HTTP_CACHE_BLOCKS_MAX_MB_ENV_VAR);
+    if (!cacheBlocksMaxMBStr.empty()) {
+        int64_t maxMB = 0;
+        function::CastString::operation(
+            common::string_t{cacheBlocksMaxMBStr.c_str(), cacheBlocksMaxMBStr.length()}, maxMB);
+        cacheBlocksMaxMB = maxMB > 0 ? static_cast<uint64_t>(maxMB)
+                                     : HTTPCacheBlocksMaxBytesConfig::DEFAULT_CACHE_BLOCKS_MAX_MB;
+    } else {
+        cacheBlocksMaxMB = HTTPCacheBlocksMaxBytesConfig::DEFAULT_CACHE_BLOCKS_MAX_MB;
+    }
     int64_t readBufferSizeVal = context
         ->getCurrentSetting(HTTPReadBufferSizeConfig::HTTP_READ_BUFFER_SIZE_OPTION)
         .getValue<int64_t>();
@@ -81,6 +102,19 @@ void HTTPConfigEnvProvider::setOptionValue(main::ClientContext* context) {
         HTTPMetadataReadBufferSizeConfig::HTTP_METADATA_READ_BUFFER_SIZE_OPTION);
     setIntOptionFromEnv(HTTPReadCacheBlocksConfig::HTTP_READ_CACHE_BLOCKS_ENV_VAR,
         HTTPReadCacheBlocksConfig::HTTP_READ_CACHE_BLOCKS_OPTION);
+
+    const auto cacheBlocksOptionStrVal =
+        main::ClientContext::getEnvVariable(HTTPCacheBlocksConfig::HTTP_CACHE_BLOCKS_ENV_VAR);
+    if (cacheBlocksOptionStrVal != "") {
+        bool enableCacheBlocks = false;
+        function::CastString::operation(
+            common::string_t{cacheBlocksOptionStrVal.c_str(), cacheBlocksOptionStrVal.length()},
+            enableCacheBlocks);
+        context->setExtensionOption(HTTPCacheBlocksConfig::HTTP_CACHE_BLOCKS_OPTION,
+            common::Value::createValue(enableCacheBlocks));
+    }
+    setIntOptionFromEnv(HTTPPrefetchDepthConfig::HTTP_PREFETCH_DEPTH_ENV_VAR,
+        HTTPPrefetchDepthConfig::HTTP_PREFETCH_DEPTH_OPTION);
 }
 
 } // namespace httpfs_extension

@@ -99,12 +99,40 @@ std::unique_ptr<HTTPResponse> synthesizeHeadResponse(const HTTPResponse& respons
 
 } // namespace
 
+std::mutex XetFileSystem::resolvedTargetsMtx;
+std::unordered_map<std::string, XetFileSystem::ResolvedTarget> XetFileSystem::resolvedTargets;
+
+bool XetFileSystem::takeMemoizedResolveTarget(const std::string& url, std::string& targetOut) {
+    std::lock_guard<std::mutex> lck{resolvedTargetsMtx};
+    if (auto it = resolvedTargets.find(url); it != resolvedTargets.end()) {
+        if (std::chrono::steady_clock::now() < it->second.expiresAt) {
+            targetOut = it->second.targetUrl;
+            return true;
+        }
+        resolvedTargets.erase(it);
+    }
+    return false;
+}
+
+void XetFileSystem::recordMemoizedResolveTarget(const std::string& url,
+    const std::string& target) {
+    std::lock_guard<std::mutex> lck{resolvedTargetsMtx};
+    resolvedTargets[url] = ResolvedTarget{target,
+        std::chrono::steady_clock::now() + RESOLVE_TARGET_TTL};
+}
+
+void XetFileSystem::evictMemoizedResolveTarget(const std::string& url) {
+    std::lock_guard<std::mutex> lck{resolvedTargetsMtx};
+    resolvedTargets.erase(url);
+}
+
 std::unique_ptr<common::FileInfo> XetFileSystem::openFile(const std::string& path,
     common::FileOpenFlags flags, main::ClientContext* context) {
     if (flags.flags & FileFlags::WRITE) {
         throw IOException{"Writing to xet:// URLs is not supported."};
     }
-    return HTTPFileSystem::openFile(toHuggingFaceURL(path), flags, context);
+    return HTTPFileSystem::openFileWithImmutability(toHuggingFaceURL(path), flags, context,
+        /*immutableContent=*/true);
 }
 
 std::vector<std::string> XetFileSystem::glob(main::ClientContext* /*context*/,
@@ -159,16 +187,17 @@ std::unique_ptr<HTTPResponse> XetFileSystem::headRequest(common::FileInfo* fileI
     const auto [host, hostPath] = HTTPFileSystem::parseUrl(url);
     auto headers = getHTTPHeaders(headerMap);
 
-    // Send one request to `host` under the shared-connection lock. The lock is
-    // scoped to this block and released before any redirect recursion below,
-    // because recursing into another host's request re-enters lockHttp() and a
+    // Send one request to `host` under that host's lock. The lock is scoped to
+    // this block and released before any redirect recursion below, because a
+    // redirect to another host re-enters that host's lockHttp() and a
     // non-recursive mutex would self-deadlock if still held.
     std::unique_ptr<HTTPResponse> response;
     {
-        HTTPFileSystem::lockHttp();
+        HTTPFileSystem::lockHttp(host);
         struct HttpLockGuard {
-            ~HttpLockGuard() { HTTPFileSystem::unlockHttp(); }
-        } httpLockGuard;
+            const std::string& host;
+            ~HttpLockGuard() { HTTPFileSystem::unlockHttp(host); }
+        } httpLockGuard{host};
 
         // Reuse the pooled connection for this host if one is healthy, else
         // evict the stale one and build a fresh client.
@@ -191,50 +220,49 @@ std::unique_ptr<HTTPResponse> XetFileSystem::headRequest(common::FileInfo* fileI
         return synthesizeHeadResponse(*response, url, response->headers["x-linked-size"]);
     }
     if (response->code >= 300 && response->code < 400 && response->headers.contains("Location")) {
-        return headRequest(fileInfo, makeAbsoluteRedirectURL(url, response->headers["Location"]),
-            headerMap);
+        auto redirectURL = makeAbsoluteRedirectURL(url, response->headers["Location"]);
+        recordMemoizedResolveTarget(url, redirectURL);
+        return headRequest(fileInfo, redirectURL, headerMap);
     }
     return response;
 }
 
-std::unique_ptr<HTTPResponse> XetFileSystem::getRangeRequest(common::FileInfo* fileInfo,
-    const std::string& url, HeaderMap headerMap, uint64_t fileOffset, char* buffer,
-    uint64_t bufferLen) const {
+std::unique_ptr<HTTPResponse> XetFileSystem::getRangeFollowingRedirects(
+    common::FileInfo* fileInfo, const std::string& url, const std::string& originalUrl,
+    HeaderMap headerMap, uint64_t fileOffset, char* buffer, uint64_t bufferLen,
+    int redirectsRemaining) const {
+    if (redirectsRemaining < 0) {
+        throw IOException(std::format("Too many redirects while fetching range of '{}'", url));
+    }
     const auto [host, hostPath] = HTTPFileSystem::parseUrl(url);
     auto headers = getHTTPHeaders(headerMap);
     headers->insert(std::make_pair("Range",
         std::format("bytes={}-{}", fileOffset, fileOffset + bufferLen - 1)));
 
-    // Send one range request to `host` under the shared-connection lock. The
-    // lock is scoped to this block and released before any redirect recursion
-    // below, because recursing into another host's request re-enters lockHttp()
-    // and a non-recursive mutex would self-deadlock if still held.
     std::unique_ptr<HTTPResponse> response;
     {
-        HTTPFileSystem::lockHttp();
+        HTTPFileSystem::lockHttp(host);
         struct HttpLockGuard {
-            ~HttpLockGuard() { HTTPFileSystem::unlockHttp(); }
-        } httpLockGuard;
+            const std::string& host;
+            ~HttpLockGuard() { HTTPFileSystem::unlockHttp(host); }
+        } httpLockGuard{host};
 
-        // Reuse the pooled connection for this host if one is healthy, else
-        // evict the stale one and build a fresh client.
         httplib::Client* client = HTTPFileSystem::getSharedNoRedirectClient(host);
-
         std::function<httplib::Result(void)> request(
             [&]() { return client->Get(hostPath.c_str(), *headers); });
         std::function<void(void)> retry([&]() {
-            // A persistent connection may have gone stale (rate-limited or closed
-            // by the server); evict it so the retry gets a fresh socket instead of
-            // repeatedly timing out against the same dead connection.
             client = HTTPFileSystem::evictAndGetSharedNoRedirectClient(host);
         });
-
         response = runRequestWithRetry(request, url, "GET Range", retry);
     }
 
     if (response->code >= 300 && response->code < 400 && response->headers.contains("Location")) {
-        return getRangeRequest(fileInfo, makeAbsoluteRedirectURL(url, response->headers["Location"]),
-            headerMap, fileOffset, buffer, bufferLen);
+        auto redirectURL = makeAbsoluteRedirectURL(url, response->headers["Location"]);
+        if (url == originalUrl) {
+            recordMemoizedResolveTarget(originalUrl, redirectURL);
+        }
+        return getRangeFollowingRedirects(fileInfo, redirectURL, originalUrl, headerMap,
+            fileOffset, buffer, bufferLen, redirectsRemaining - 1);
     }
     if (response->code >= 400) {
         throw IOException(std::format("HTTP GET error on '{}' (HTTP {})", url, response->code));
@@ -250,6 +278,29 @@ std::unique_ptr<HTTPResponse> XetFileSystem::getRangeRequest(common::FileInfo* f
         }
     }
     return response;
+}
+
+std::unique_ptr<HTTPResponse> XetFileSystem::getRangeRequest(common::FileInfo* fileInfo,
+    const std::string& url, HeaderMap headerMap, uint64_t fileOffset, char* buffer,
+    uint64_t bufferLen) const {
+    static constexpr int MAX_REDIRECTS = 4;
+
+    // Fast path: reuse the recently resolved target for this exact source URL,
+    // skipping the huggingface.co resolve hop. An expired signature surfaces as
+    // an HTTP error; evict and fall back to a fresh resolve then. Note:
+    // `fileInfo` may be null here when invoked from prefetch jobs.
+    std::string memoizedTarget;
+    if (takeMemoizedResolveTarget(url, memoizedTarget)) {
+        try {
+            return getRangeFollowingRedirects(fileInfo, memoizedTarget, url, headerMap,
+                fileOffset, buffer, bufferLen, /*redirectsRemaining=*/2);
+        } catch (const IOException&) {
+            evictMemoizedResolveTarget(url);
+            // Fall through to a fresh resolve below.
+        }
+    }
+    return getRangeFollowingRedirects(fileInfo, url, url, headerMap, fileOffset, buffer,
+        bufferLen, MAX_REDIRECTS);
 }
 
 } // namespace httpfs_extension

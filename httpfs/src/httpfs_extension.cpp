@@ -33,6 +33,12 @@ static void registerExtensionOptions(main::Database* db) {
     db->addExtensionOption(HTTPReadCacheBlocksConfig::HTTP_READ_CACHE_BLOCKS_OPTION,
         common::LogicalTypeID::INT64,
         common::Value{static_cast<int64_t>(HTTPReadCacheBlocksConfig::DEFAULT_READ_CACHE_BLOCKS)});
+    db->addExtensionOption(HTTPCacheBlocksConfig::HTTP_CACHE_BLOCKS_OPTION,
+        common::LogicalTypeID::BOOL,
+        common::Value{HTTPCacheBlocksConfig::DEFAULT_CACHE_BLOCKS});
+    db->addExtensionOption(HTTPPrefetchDepthConfig::HTTP_PREFETCH_DEPTH_OPTION,
+        common::LogicalTypeID::INT64,
+        common::Value{HTTPPrefetchDepthConfig::DEFAULT_PREFETCH_DEPTH});
 }
 
 static void registerFileSystem(main::Database* db) {
