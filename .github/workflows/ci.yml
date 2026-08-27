@@ -20,7 +20,7 @@ concurrency:
 env:
   # pg_client requires libpq (PostgreSQL) at build time and a running
   # PostgreSQL instance at test time (provided by run_pgembed_fixture.py).
-  EXTENSION_LIST: adbc;azure;delta;duckdb;fts;httpfs;iceberg;json;llm;neo4j;pg_client;postgres;sqlite;unity_catalog;vector;algo;gql
+  EXTENSION_LIST: adbc;azure;delta;duckdb;fts;httpfs;iceberg;json;llm;neo4j;pg_client;postgres;sqlite;unity_catalog;vector;algo;gql;timeseries
 
 jobs:
   # ─────────────────────────────────────────────────────────────────
