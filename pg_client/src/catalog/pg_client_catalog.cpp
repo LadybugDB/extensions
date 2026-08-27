@@ -71,11 +71,11 @@ void PgClientCatalog::init() {
         std::string tableName = row.cells[0].value;
         auto lowerName = tableName;
         common::StringUtils::toLower(lowerName);
-        if (lowerName.rfind("fkrel_", 0) == 0) {
+        if (lowerName.rfind("rel_", 0) == 0) {
             // Foreign-key-based rel table: scan-driven, optimizer generates a join.
             // No CSR columns; backed by a ForeignRelTable.
             createForeignRelTable(tableName);
-        } else if (lowerName.rfind("rel_", 0) == 0) {
+        } else if (lowerName.rfind("csr_rel_", 0) == 0) {
             // CSR-based rel table: materialized into a local on-disk CSR rel table.
             // TODO: COPY data from PostgreSQL into a local RelTable.
             createForeignRelTable(tableName);
@@ -274,7 +274,7 @@ void PgClientCatalog::createForeignRelTable(const std::string& tableName) {
     auto columnTypes = getColumnTypes(columnInfo);
 
     // Look up src/dst node tables in the attached catalog (the foreign PgClientTableCatalogEntry
-    // entries), not the main catalog shadows. fkrel_ tables join against the foreign node
+    // entries), not the main catalog shadows. rel_ tables join against the foreign node
     // entries directly, so the rel's src/dst table IDs must match the entries that
     // `testdb.node_person` (and bare `node_person` via shadow) resolve to.
     auto* srcEntry = tables->getEntry(&transaction::DUMMY_TRANSACTION, srcTableName);
@@ -316,7 +316,7 @@ void PgClientCatalog::createForeignRelTable(const std::string& tableName) {
     // and ForeignRelTable now owns the shared state and serializes offset
     // advancement with its own mutex, matching the morsel-driven model.
     // The rel group's foreignDatabaseName must be the lbug attached-database
-    // name -- NOT the schema-qualified PG name ("public.fkrel_knows") -- because
+    // name -- NOT the schema-qualified PG name ("public.rel_knows") -- because
     // the join-push-down optimizer uses it as a lookup key into
     // DatabaseManager::getAttachedDatabase().
     auto foreignDatabaseName = attachedDbName;

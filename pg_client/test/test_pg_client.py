@@ -89,10 +89,10 @@ class TestPgClientExtension(unittest.TestCase):
                     ('Initech', 500000.00)
             """))
 
-            # Create fkrel_knows table with FK columns named src_id/dst_id
+            # Create rel_knows table with FK columns named src_id/dst_id
             # Prefix rel_ + FK constraints → auto-register as relationship table
             conn.execute(sa.text("""
-                CREATE TABLE fkrel_knows (
+                CREATE TABLE rel_knows (
                     id SERIAL PRIMARY KEY,
                     src_id INTEGER NOT NULL,
                     dst_id INTEGER NOT NULL,
@@ -102,13 +102,13 @@ class TestPgClientExtension(unittest.TestCase):
 
             # Add actual FOREIGN KEY constraints so the FK query detects src/dst tables
             conn.execute(sa.text("""
-                ALTER TABLE fkrel_knows
+                ALTER TABLE rel_knows
                     ADD CONSTRAINT fk_src FOREIGN KEY (src_id) REFERENCES node_person(id),
                     ADD CONSTRAINT fk_dst FOREIGN KEY (dst_id) REFERENCES node_person(id)
             """))
 
             conn.execute(sa.text("""
-                INSERT INTO fkrel_knows (src_id, dst_id, since) VALUES
+                INSERT INTO rel_knows (src_id, dst_id, since) VALUES
                     (1, 2, '2020-01-15'),
                     (1, 3, '2021-03-20'),
                     (2, 4, '2022-06-10'),
@@ -116,9 +116,9 @@ class TestPgClientExtension(unittest.TestCase):
                     (4, 5, '2023-12-01')
             """))
 
-            # Create fkrel_works_at table with FK constraints
+            # Create rel_works_at table with FK constraints
             conn.execute(sa.text("""
-                CREATE TABLE fkrel_works_at (
+                CREATE TABLE rel_works_at (
                     id SERIAL PRIMARY KEY,
                     src_id INTEGER NOT NULL REFERENCES node_person(id),
                     dst_id INTEGER NOT NULL REFERENCES node_company(id)
@@ -126,7 +126,7 @@ class TestPgClientExtension(unittest.TestCase):
             """))
 
             conn.execute(sa.text("""
-                INSERT INTO fkrel_works_at (src_id, dst_id) VALUES
+                INSERT INTO rel_works_at (src_id, dst_id) VALUES
                     (1, 1),
                     (2, 2),
                     (3, 1),
@@ -199,7 +199,7 @@ class TestPgClientExtension(unittest.TestCase):
         script = f"""
         LOAD EXTENSION '{PG_CLIENT_EXT}';
         ATTACH '{self.conn_str}' AS testdb (DBTYPE PG_CLIENT);
-        LOAD FROM testdb.fkrel_knows RETURN src_id, dst_id, since ORDER BY id;
+        LOAD FROM testdb.rel_knows RETURN src_id, dst_id, since ORDER BY id;
         """
         stdout, stderr = run_lbug(script)
         self.assertIn("2020-01-15", stdout, f"Rel load failed: {stderr}")
@@ -226,7 +226,7 @@ class TestPgClientExtension(unittest.TestCase):
         script = f"""
         LOAD EXTENSION '{PG_CLIENT_EXT}';
         ATTACH '{self.conn_str}' AS testdb (DBTYPE PG_CLIENT);
-        MATCH (a:node_person)-[k:fkrel_knows]->(b:node_person)
+        MATCH (a:node_person)-[k:rel_knows]->(b:node_person)
         RETURN count(*);
         """
         stdout, stderr = run_lbug(script)
@@ -244,7 +244,7 @@ class TestPgClientExtension(unittest.TestCase):
         script = f"""
         LOAD EXTENSION '{PG_CLIENT_EXT}';
         ATTACH '{self.conn_str}' AS testdb (DBTYPE PG_CLIENT);
-        MATCH (a:node_person)-[k:fkrel_knows]->(b:node_person)
+        MATCH (a:node_person)-[k:rel_knows]->(b:node_person)
         RETURN count(*);
         """
         stdout, stderr = run_lbug(script)
@@ -255,7 +255,7 @@ class TestPgClientExtension(unittest.TestCase):
         script = f"""
         LOAD EXTENSION '{PG_CLIENT_EXT}';
         ATTACH '{self.conn_str}' AS testdb (DBTYPE PG_CLIENT);
-        LOAD FROM testdb.fkrel_knows WHERE src_id = 1 RETURN dst_id, since ORDER BY dst_id;
+        LOAD FROM testdb.rel_knows WHERE src_id = 1 RETURN dst_id, since ORDER BY dst_id;
         """
         stdout, stderr = run_lbug(script)
         self.assertIn("2020-01-15", stdout, f"Rel filter failed: {stderr}")
@@ -270,7 +270,7 @@ class TestPgClientExtension(unittest.TestCase):
         """
         stdout, stderr = run_lbug(script)
         self.assertIn("node_person", stdout, f"SHOW_TABLES missing node_person: {stderr}")
-        self.assertIn("fkrel_knows", stdout, f"SHOW_TABLES missing fkrel_knows: {stderr}")
+        self.assertIn("rel_knows", stdout, f"SHOW_TABLES missing rel_knows: {stderr}")
 
     def test_10_table_info(self):
         """Test TABLE_INFO on attached table."""
