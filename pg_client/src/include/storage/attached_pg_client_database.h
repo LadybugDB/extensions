@@ -22,7 +22,7 @@ public:
     std::vector<std::string> getTableColumnNames(const std::string& tableName) const override {
         // The foreign join push-down optimizer expects the first two columns
         // to be the src and dst FK columns respectively. For FK-based rel
-        // tables (fkrel_*), the FK columns may not be the first two columns
+        // tables (rel_*), the FK columns may not be the first two columns
         // in ordinal_position order (the PK often comes first).
         //
         // To satisfy this contract, query FK constraints and put any detected
