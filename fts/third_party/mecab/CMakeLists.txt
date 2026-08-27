@@ -54,9 +54,23 @@ if(WIN32)
 endif()
 
 if(NOT WIN32)
+    # The defines upstream's autoconf configure would detect on Linux/macOS.
+    # The sources guard every system header / feature behind HAVE_* checks:
+    # without them GCC falls back to MSVC-only paths (e.g. 'unsigned __int64')
+    # or misses the POSIX includes (<fcntl.h>, <unistd.h>, ...) entirely.
+    list(APPEND MECAB_DEFS
+            HAVE_STDINT_H
+            HAVE_SYS_TYPES_H
+            HAVE_SYS_STAT_H
+            HAVE_FCNTL_H
+            HAVE_STRING_H
+            HAVE_SYS_MMAN_H
+            HAVE_UNISTD_H
+            HAVE_DIRENT_H
+            HAVE_MMAP
+            HAVE_TLS_KEYWORD)
     # tagger.cpp instantiates read_write_mutex, which only compiles when
-    # HAVE_ATOMIC_OPS is defined - use the GCC/Clang __sync builtins (what
-    # upstream's autoconf configure detects on Linux).
+    # HAVE_ATOMIC_OPS is defined - use the GCC/Clang __sync builtins.
     # HAVE_ICONV: glibc provides iconv(3) in libc; mecab-dict-index needs it
     # to compile the EUC-JP ipadic CSV into UTF-8.
     list(APPEND MECAB_DEFS HAVE_GCC_ATOMIC_OPS HAVE_ICONV)
