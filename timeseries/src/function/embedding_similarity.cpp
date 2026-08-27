@@ -14,6 +14,7 @@
 // Works with embeddings of any dimension (768-dim text, 384-dim code, etc.)
 
 #include "binder/binder.h"
+#include "common/types/value/nested.h"
 #include "function/table/bind_data.h"
 #include "function/table/bind_input.h"
 #include "function/table/simple_table_function.h"
