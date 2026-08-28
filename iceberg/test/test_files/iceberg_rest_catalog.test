@@ -1,0 +1,56 @@
+-DATASET CSV empty
+
+--
+
+# Tests for the Iceberg REST catalog integration. The embedded DuckDB instance
+# attaches the REST catalog configured through the iceberg_* extension options,
+# so tables are referenced by fully qualified name (no version-hint.text needed).
+
+-CASE RestCatalogRequiresWarehouse
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/iceberg/build/libiceberg.lbug_extension"
+---- ok
+-STATEMENT CALL iceberg_endpoint='http://127.0.0.1:8181';
+---- ok
+-STATEMENT LOAD FROM '${LBUG_ROOT_DIRECTORY}/extension/iceberg/test/iceberg_tables/lineitem_iceberg' (file_format='iceberg', allow_moved_paths=true) RETURN count(*);
+---- error
+Runtime exception: Iceberg REST catalog options were set but 'iceberg_warehouse' is empty. Set 'iceberg_warehouse' to the warehouse identifier to enable Iceberg REST catalog access.
+
+# Clearing the options must restore the filesystem-path based workflow.
+-STATEMENT CALL iceberg_endpoint='';
+---- ok
+-STATEMENT LOAD FROM '${LBUG_ROOT_DIRECTORY}/extension/iceberg/test/iceberg_tables/lineitem_iceberg' (file_format='iceberg', allow_moved_paths=true) RETURN count(*);
+---- 1
+51793
+
+# Requires a running Iceberg REST catalog (e.g. Lakekeeper) at
+# http://127.0.0.1:8181 that serves the lineitem_iceberg test table as
+# default.lineitem_iceberg. Tuple counts assume the catalog's current snapshot
+# is the same as the local table's.
+-CASE RestCatalogScan
+-SKIP
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/iceberg/build/libiceberg.lbug_extension"
+---- ok
+-STATEMENT CALL iceberg_warehouse='warehouse';
+---- ok
+-STATEMENT CALL iceberg_endpoint='http://127.0.0.1:8181';
+---- ok
+-STATEMENT CALL iceberg_token='test-token';
+---- ok
+-STATEMENT LOAD FROM 'iceberg_catalog.default.lineitem_iceberg' (file_format='iceberg') RETURN count(*);
+---- 1
+60175
+-STATEMENT LOAD FROM 'default.lineitem_iceberg' (file_format='iceberg') RETURN count(*);
+---- 1
+60175
+-STATEMENT LOAD FROM '${LBUG_ROOT_DIRECTORY}/extension/iceberg/test/iceberg_tables/lineitem_iceberg' (file_format='iceberg', allow_moved_paths=true) RETURN count(*);
+---- 1
+51793
+-STATEMENT LOAD FROM 'default.lineitem_iceberg' (file_format='iceberg') RETURN l_linenumber, l_quantity, l_shipdate, l_shipinstruct ORDER BY l_quantity, l_shipdate LIMIT 1;
+---- 1
+1|6|1992-02-03|NONE
+-STATEMENT LOAD FROM 'default.lineitem_iceberg' (file_format='iceberg', snapshot_from_id=7635660646343998149) RETURN count(*);
+---- 1
+60175
+-STATEMENT LOAD FROM 'unknown_catalog.default.lineitem_iceberg' (file_format='iceberg') RETURN *;
+---- error
+Runtime exception: Unknown iceberg catalog 'unknown_catalog'. The attached Iceberg REST catalog is named 'iceberg_catalog'. Use 'iceberg_catalog.namespace.table' or 'namespace.table' to reference a REST catalog table.
