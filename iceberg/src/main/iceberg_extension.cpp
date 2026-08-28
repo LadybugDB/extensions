@@ -4,6 +4,7 @@
 #include "main/client_context.h"
 #include "main/database.h"
 #include "main/duckdb_extension.h"
+#include "options/iceberg_options.h"
 
 namespace lbug {
 namespace iceberg_extension {
@@ -16,6 +17,8 @@ void IcebergExtension::load(main::ClientContext* context) {
     ExtensionUtils::addTableFunc<IcebergMetadataFunction>(db);
     ExtensionUtils::addTableFunc<IcebergSnapshotsFunction>(db);
     duckdb_extension::DuckdbExtension::loadRemoteFSOptions(context);
+    IcebergOptions::registerExtensionOptions(&db);
+    IcebergOptions::setEnvValue(context);
 }
 
 } // namespace iceberg_extension
