@@ -30,7 +30,7 @@ std::unique_ptr<main::AttachedDatabase> attachDuckDB(std::string dbName, std::st
     connector->connect(dbPath, catalogName, schemaName, clientContext);
 
     auto duckdbCatalog = std::make_unique<DuckDBCatalog>(std::move(dbPath), std::move(catalogName),
-        schemaName, clientContext, *connector, attachOption);
+        schemaName, clientContext, *connector, attachOption, dbName);
     duckdbCatalog->init();
     return std::make_unique<AttachedDuckDBDatabase>(dbName, DuckDBStorageExtension::DB_TYPE,
         std::move(duckdbCatalog), std::move(connector));

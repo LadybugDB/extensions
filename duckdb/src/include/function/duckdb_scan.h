@@ -1,5 +1,8 @@
 #pragma once
 
+#include <optional>
+#include <utility>
+
 #include "binder/expression/expression_util.h"
 #include "common/types/types.h"
 #include "connector/duckdb_result_converter.h"
@@ -56,16 +59,33 @@ struct DuckDBScanBindData : function::TableFuncBindData {
     std::vector<std::string> columnNamesInDuckDB;
     const DuckDBConnector& connector;
     DuckDBResultConverter converter;
+    // Positions of the src/dst columns in the scan output when the scan
+    // output carries node offsets directly (csr_rel_* contract); nullopt
+    // otherwise. See TableFuncBindData::getSrcDstColumnPositions.
+    std::optional<std::pair<common::column_id_t, common::column_id_t>> srcDstColumnPositions;
 
     DuckDBScanBindData(std::string query, std::vector<std::string> columnNamesInDuckDB,
         const DuckDBConnector& connector, binder::expression_vector columns)
         : function::TableFuncBindData{std::move(columns), 0 /* numRows */}, query{std::move(query)},
           columnNamesInDuckDB{std::move(columnNamesInDuckDB)}, connector{connector},
           converter{binder::ExpressionUtil::getDataTypes(this->columns)} {}
+    DuckDBScanBindData(std::string query, std::vector<std::string> columnNamesInDuckDB,
+        const DuckDBConnector& connector, binder::expression_vector columns,
+        std::optional<std::pair<common::column_id_t, common::column_id_t>> srcDstColumnPositions)
+        : function::TableFuncBindData{std::move(columns), 0 /* numRows */}, query{std::move(query)},
+          columnNamesInDuckDB{std::move(columnNamesInDuckDB)}, connector{connector},
+          converter{binder::ExpressionUtil::getDataTypes(this->columns)},
+          srcDstColumnPositions{srcDstColumnPositions} {}
     DuckDBScanBindData(const DuckDBScanBindData& other)
         : TableFuncBindData{other}, query{other.query},
           columnNamesInDuckDB{other.columnNamesInDuckDB}, connector{other.connector},
-          converter{binder::ExpressionUtil::getDataTypes(this->columns)} {}
+          converter{binder::ExpressionUtil::getDataTypes(this->columns)},
+          srcDstColumnPositions{other.srcDstColumnPositions} {}
+
+    std::optional<std::pair<common::column_id_t, common::column_id_t>>
+    getSrcDstColumnPositions() const override {
+        return srcDstColumnPositions;
+    }
 
     std::string getColumnsToSelect() const;
     std::vector<uint32_t> getColumnIndicesToSelect() const;
