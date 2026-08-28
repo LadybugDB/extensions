@@ -1,0 +1,64 @@
+-DATASET CSV empty
+
+--
+
+-CASE DuckdbAutoDetectRelTables
+-SKIP_FSM_LEAK_CHECK
+-LOAD_DYNAMIC_EXTENSION duckdb
+-STATEMENT ATTACH '${LBUG_ROOT_DIRECTORY}/extension/duckdb/test/test_files/users_sessions.db' as g (dbtype duckdb);
+---- 1
+Attached database successfully.
+-STATEMENT LOAD FROM g.users RETURN name ORDER BY name;
+---- 3
+Alice
+Bob
+Carol
+-STATEMENT LOAD FROM g.sessions RETURN device ORDER BY device;
+---- 4
+desktop
+laptop
+mobile
+tablet
+-STATEMENT LOAD FROM g.rel_user_owns_session RETURN src_user, dst_session, since ORDER BY src_user, dst_session;
+---- 5
+0|1|2024-01-15
+0|2|2024-02-20
+1|0|2024-03-05
+2|1|2024-05-25
+2|3|2024-04-10
+-STATEMENT MATCH (u:g.users) RETURN count(*);
+---- 1
+3
+-STATEMENT MATCH (u:g.users) WHERE u.name = 'Alice' RETURN count(*);
+---- 1
+1
+-STATEMENT DETACH g;
+---- ok
+
+-CASE DuckdbCsrRelPrefixRegistersAsRelTable
+-SKIP_FSM_LEAK_CHECK
+-LOAD_DYNAMIC_EXTENSION duckdb
+-STATEMENT ATTACH '${LBUG_ROOT_DIRECTORY}/extension/duckdb/test/test_files/users_sessions.db' as g (dbtype duckdb);
+---- 1
+Attached database successfully.
+-STATEMENT LOAD FROM g.csr_rel_user_blocks_user RETURN src_user, dst_blocked ORDER BY src_user, dst_blocked;
+---- 2
+0|1
+2|1
+-STATEMENT MATCH (u:g.users) RETURN count(*);
+---- 1
+3
+-STATEMENT DETACH g;
+---- ok
+
+-CASE DuckdbCsrRelTraversal
+-SKIP_FSM_LEAK_CHECK
+-LOAD_DYNAMIC_EXTENSION duckdb
+-STATEMENT ATTACH '${LBUG_ROOT_DIRECTORY}/extension/duckdb/test/test_files/users_sessions.db' as g (dbtype duckdb);
+---- 1
+Attached database successfully.
+-STATEMENT MATCH (u:g.users)-[b:csr_rel_user_blocks_user]->(v:g.users) RETURN count(*);
+---- 1
+2
+-STATEMENT DETACH g;
+---- ok

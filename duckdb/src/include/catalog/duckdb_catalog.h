@@ -33,7 +33,7 @@ class DuckDBCatalog : public extension::CatalogExtension {
 public:
     DuckDBCatalog(std::string dbPath, std::string catalogName, std::string defaultSchemaName,
         main::ClientContext* context, const DuckDBConnector& connector,
-        const binder::AttachOption& attachOption);
+        const binder::AttachOption& attachOption, std::string attachedDbName);
 
     void init() override;
 
@@ -50,11 +50,16 @@ private:
 
 private:
     void createForeignTable(const std::string& tableName);
-    void createForeignRelTable(const std::string& tableName);
+    void createForeignRelTable(const std::string& tableName, bool internalIDContract);
 
 protected:
     std::string dbPath;
     std::string catalogName;
+    // The name this database was attached under (e.g. 'g' in ATTACH ... as g).
+    // The join-push-down optimizer uses it as a lookup key into
+    // DatabaseManager::getAttachedDatabase(), so shadow entries and rel group
+    // entries must store this name -- not the schema-qualified catalog name.
+    std::string dbName;
     std::string defaultSchemaName;
     common::ValueVector tableNamesVector;
     bool skipUnsupportedTable;
