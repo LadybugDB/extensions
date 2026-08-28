@@ -139,6 +139,13 @@ public:
     static void lockHttp(const std::string& host);
     static void unlockHttp(const std::string& host);
 
+    // Shared implementation of openFile() allowing scheme wrappers (XetFileSystem)
+    // to declare their content immutable before initialization wires caches.
+    // Available in all builds; the immutableContent flag only takes effect when
+    // HTTPFS_REMOTE_READ_OPTIMIZATIONS is enabled.
+    virtual std::unique_ptr<common::FileInfo> openFileWithImmutability(const std::string& path,
+        common::FileOpenFlags flags, main::ClientContext* context, bool immutableContent);
+
 protected:
     void readFromFile(common::FileInfo& fileInfo, void* buffer, uint64_t numBytes,
         uint64_t position) const override;
@@ -211,11 +218,6 @@ public:
     // everything relevant is already cached/in-flight.
     void submitPrefetch(const HTTPFileInfo& fileInfo, uint64_t nextOffset,
         uint64_t blockSize) const;
-
-    // Shared implementation of openFile() allowing scheme wrappers (XetFileSystem)
-    // to declare their content immutable before initialization wires caches.
-    virtual std::unique_ptr<common::FileInfo> openFileWithImmutability(const std::string& path,
-        common::FileOpenFlags flags, main::ClientContext* context, bool immutableContent);
 
 private:
     // A completed prefetched span kept for repeated consumption by multiple
