@@ -19,7 +19,8 @@ std::unique_ptr<main::AttachedDatabase> attachUnityCatalog(std::string dbName, s
     connector->connect(dbPath, dbName, UnityCatalogStorageExtension::DEFAULT_SCHEMA_NAME,
         clientContext);
     auto catalog = std::make_unique<duckdb_extension::DuckDBCatalog>(dbPath, dbPath,
-        UnityCatalogStorageExtension::DEFAULT_SCHEMA_NAME, clientContext, *connector, attachOption);
+        UnityCatalogStorageExtension::DEFAULT_SCHEMA_NAME, clientContext, *connector, attachOption,
+        dbName);
     catalog->init();
     return std::make_unique<duckdb_extension::AttachedDuckDBDatabase>(dbName,
         UnityCatalogStorageExtension::DB_TYPE, std::move(catalog), std::move(connector));
