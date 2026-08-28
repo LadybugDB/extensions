@@ -27,8 +27,9 @@ DuckDBCatalog::DuckDBCatalog(std::string dbPath, std::string catalogName,
     const binder::AttachOption& attachOption, std::string attachedDbName)
     : CatalogExtension{}, dbPath{std::move(dbPath)}, catalogName{std::move(catalogName)},
       defaultSchemaName{std::move(defaultSchemaName)},
+      dbName{std::move(attachedDbName)},
       tableNamesVector{common::LogicalType::STRING(), storage::MemoryManager::Get(*context)},
-      connector{connector}, context_{context}, dbName{std::move(attachedDbName)} {
+      connector{connector}, context_{context} {
     skipUnsupportedTable = DuckDBStorageExtension::SKIP_UNSUPPORTED_TABLE_DEFAULT_VAL;
     auto& options = attachOption.options;
     if (options.contains(DuckDBStorageExtension::SKIP_UNSUPPORTED_TABLE_KEY)) {

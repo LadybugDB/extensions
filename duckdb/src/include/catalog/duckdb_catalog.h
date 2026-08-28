@@ -59,8 +59,8 @@ protected:
     // The join-push-down optimizer uses it as a lookup key into
     // DatabaseManager::getAttachedDatabase(), so shadow entries and rel group
     // entries must store this name -- not the schema-qualified catalog name.
-    std::string dbName;
     std::string defaultSchemaName;
+    std::string dbName;
     common::ValueVector tableNamesVector;
     bool skipUnsupportedTable;
     const DuckDBConnector& connector;
