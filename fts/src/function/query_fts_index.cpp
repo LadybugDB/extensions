@@ -1,5 +1,6 @@
 #include "function/query_fts_index.h"
 
+#include <mutex>
 #include <queue>
 
 #include "binder/binder.h"
@@ -131,10 +132,18 @@ struct ScoreInfo {
 struct QFTSEdgeCompute final : EdgeCompute {
     node_id_map_t<ScoreInfo>& scores;
     const std::unordered_map<offset_t, uint64_t>& dfs;
+    // The scores map is shared by reference between copies of this edge compute (one per
+    // worker thread in a parallel frontier task), so all mutations must be serialized.
+    std::shared_ptr<std::mutex> scoresMutex;
 
     QFTSEdgeCompute(node_id_map_t<ScoreInfo>& scores,
         const std::unordered_map<offset_t, uint64_t>& dfs)
-        : scores{scores}, dfs{dfs} {}
+        : scores{scores}, dfs{dfs}, scoresMutex{std::make_shared<std::mutex>()} {}
+
+    QFTSEdgeCompute(node_id_map_t<ScoreInfo>& scores,
+        const std::unordered_map<offset_t, uint64_t>& dfs,
+        std::shared_ptr<std::mutex> scoresMutex)
+        : scores{scores}, dfs{dfs}, scoresMutex{std::move(scoresMutex)} {}
 
     std::vector<nodeID_t> edgeCompute(nodeID_t boundNodeID, graph::NbrScanState::Chunk& resultChunk,
         bool) override {
@@ -143,6 +152,7 @@ struct QFTSEdgeCompute final : EdgeCompute {
         std::vector<nodeID_t> activeNodes;
         resultChunk.forEach([&](auto neighbors, auto propertyVectors, auto i) {
             auto docNodeID = neighbors[i];
+            std::lock_guard guard{*scoresMutex};
             if (!scores.contains(docNodeID)) {
                 scores.emplace(docNodeID, ScoreInfo{});
             }
@@ -154,7 +164,7 @@ struct QFTSEdgeCompute final : EdgeCompute {
     }
 
     std::unique_ptr<EdgeCompute> copy() override {
-        return std::make_unique<QFTSEdgeCompute>(scores, dfs);
+        return std::make_unique<QFTSEdgeCompute>(scores, dfs, scoresMutex);
     }
 };
 
