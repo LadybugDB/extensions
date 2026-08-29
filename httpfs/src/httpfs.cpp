@@ -461,6 +461,7 @@ HTTPFileSystem::PrefetchZone* HTTPFileSystem::zoneFor(const std::string& url) co
     }
     return &it->second;
 }
+#endif
 
 // Number of bytes served out of a span beginning at spanStart. A request may
 // be partially covered by the tail of a cached/prefetched span; the remainder
@@ -476,6 +477,7 @@ inline uint64_t copySpanPortion(char* dest, const char* spanData, uint64_t spanS
     return len;
 }
 
+#if HTTPFS_REMOTE_READ_OPTIMIZATIONS
 void HTTPFileSystem::submitPrefetch(const HTTPFileInfo& fileInfo, uint64_t nextOffset,
     uint64_t blockSize) const {
     if (!prefetchPool || blockSize == 0 || fileInfo.httpConfig.prefetchDepth == 0) {
@@ -595,9 +597,6 @@ void HTTPFileSystem::readFromFile(common::FileInfo& fileInfo, void* buffer, uint
         // happens on open; kept here for future schemes.
         diskCache = blockCache.get();
     }
-#else
-    PersistentBlockCache* diskCache = nullptr;
-    PrefetchZone* zone = nullptr;
 #endif
     while (numBytesToRead > 0) {
         auto currentPos = position + bufferOffset;
@@ -633,6 +632,7 @@ void HTTPFileSystem::readFromFile(common::FileInfo& fileInfo, void* buffer, uint
         if (fetchLen == 0) {
             break;
         }
+#if HTTPFS_REMOTE_READ_OPTIMIZATIONS
         const bool haveRemoteOptimizations = zone != nullptr || diskCache != nullptr;
 
         if (haveRemoteOptimizations) {
@@ -676,6 +676,7 @@ void HTTPFileSystem::readFromFile(common::FileInfo& fileInfo, void* buffer, uint
                 }
             }
         }
+#endif // HTTPFS_REMOTE_READ_OPTIMIZATIONS
 
         // L4: network fetch of the aligned span into a staging buffer.
         auto blockData = std::make_unique<uint8_t[]>(fetchLen);
@@ -684,7 +685,11 @@ void HTTPFileSystem::readFromFile(common::FileInfo& fileInfo, void* buffer, uint
             std::fprintf(stderr,
                 "[httpfs] MISS pos=%llu nLeft=%llu bs=%llu zone=%d disk=%d imm=%d depth=%llu\n",
                 (unsigned long long)currentPos, (unsigned long long)numBytesToRead,
+#if HTTPFS_REMOTE_READ_OPTIMIZATIONS
                 (unsigned long long)blockSize, zone != nullptr, diskCache != nullptr,
+#else
+                (unsigned long long)blockSize, false, false,
+#endif
                 httpFileInfo.immutableContent,
                 (unsigned long long)httpFileInfo.httpConfig.prefetchDepth);
             std::fflush(stderr);
@@ -692,6 +697,7 @@ void HTTPFileSystem::readFromFile(common::FileInfo& fileInfo, void* buffer, uint
         getRangeRequest(&httpFileInfo, httpFileInfo.path, {}, fetchStart,
             reinterpret_cast<char*>(blockData.get()), fetchLen);
 
+#if HTTPFS_REMOTE_READ_OPTIMIZATIONS
         if (haveRemoteOptimizations) {
             // Write-through to the persistent cache and pipeline further reads.
             if (diskCache != nullptr && diskCache->enabled()) {
@@ -702,6 +708,7 @@ void HTTPFileSystem::readFromFile(common::FileInfo& fileInfo, void* buffer, uint
                 submitPrefetch(httpFileInfo, fetchStart + fetchLen, blockSize);
             }
         }
+#endif // HTTPFS_REMOTE_READ_OPTIMIZATIONS
 
         {
             std::lock_guard<std::mutex> lck{httpFileInfo.readCacheMtx};
