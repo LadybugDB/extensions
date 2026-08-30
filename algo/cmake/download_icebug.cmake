@@ -40,7 +40,7 @@ if (DEFINED ICEBUG_SOURCE_DIR)
     return()
 endif ()
 
-set(ICEBUG_VERSION "13.1" CACHE STRING "icebug release tag")
+set(ICEBUG_VERSION "13.2" CACHE STRING "icebug release tag")
 set(ICEBUG_VENDOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vendor")
 
 if (APPLE)
