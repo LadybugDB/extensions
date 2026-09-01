@@ -211,6 +211,12 @@ HTTPFileInfo::HTTPFileInfo(std::string path, FileSystem* fileSystem, int flags,
       httpConfig{context}, cachedFileInfo{nullptr} {}
 
 void HTTPFileInfo::initMetadata() {
+    // The HTTP client must be initialized on every open, including the fast
+    // path below: a size-cache hit skips the HEAD request, but any subsequent
+    // read still dereferences httpClient. Leaving it null here caused a
+    // SIGSEGV on the first ranged GET of every repeat open of the same URL
+    // (https://github.com/LadybugDB/ladybug/issues/880).
+    initializeClient();
     // Remote files are immutable during a query; reuse the file size learned by
     // an earlier openFile() for the same URL instead of paying a fresh HEAD +
     // redirect round trip per open. This is what turns N opens of the same
@@ -225,7 +231,6 @@ void HTTPFileInfo::initMetadata() {
     }
 
     auto hfs = fileSystem->ptrCast<HTTPFileSystem>();
-    initializeClient();
     auto res = hfs->headRequest(this->ptrCast<HTTPFileInfo>(), path, {});
     std::string rangeLength;
     if (res->code != 200) {
@@ -932,6 +937,11 @@ std::unique_ptr<HTTPResponse> HTTPFileSystem::headRequest(FileInfo* fileInfo,
     return runBrowserRequestWithRetry("HEAD", url, std::move(headerMap));
 #else
     auto httpFileInfo = dynamic_cast_checked<HTTPFileInfo*>(fileInfo);
+    // Defensive: guard against any open path that did not go through
+    // initMetadata() (e.g. a future fast-path open) leaving the client null.
+    if (!httpFileInfo->httpClient) {
+        httpFileInfo->initializeClient();
+    }
     auto parsedURL = parseUrl(url);
     auto host = parsedURL.first;
     auto hostPath = parsedURL.second;
@@ -969,6 +979,11 @@ std::unique_ptr<HTTPResponse> HTTPFileSystem::getRangeRequest(FileInfo* fileInfo
     return response;
 #else
     auto httpFileInfo = dynamic_cast_checked<HTTPFileInfo*>(fileInfo);
+    // Defensive: guard against any open path that did not go through
+    // initMetadata() (e.g. a future fast-path open) leaving the client null.
+    if (!httpFileInfo->httpClient) {
+        httpFileInfo->initializeClient();
+    }
     auto parsedURL = parseUrl(url);
     auto host = parsedURL.first;
     auto hostPath = parsedURL.second;
@@ -1049,6 +1064,9 @@ std::unique_ptr<HTTPResponse> HTTPFileSystem::postRequest(common::FileInfo* file
     return response;
 #else
     auto httpFileInfo = dynamic_cast_checked<HTTPFileInfo*>(fileInfo);
+    if (!httpFileInfo->httpClient) {
+        httpFileInfo->initializeClient();
+    }
     auto hostPath = parseUrl(url).second;
     auto headers = getHTTPHeaders(headerMap);
     uint64_t outputBufferPos = 0;
@@ -1091,6 +1109,9 @@ std::unique_ptr<HTTPResponse> HTTPFileSystem::putRequest(common::FileInfo* fileI
         inputBufferLen);
 #else
     auto httpFileInfo = dynamic_cast_checked<HTTPFileInfo*>(fileInfo);
+    if (!httpFileInfo->httpClient) {
+        httpFileInfo->initializeClient();
+    }
     auto hostPath = parseUrl(url).second;
     auto headers = getHTTPHeaders(headerMap);
     std::function<httplib::Result(void)> request([&]() {
