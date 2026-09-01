@@ -39,6 +39,18 @@ public:
             }
             return httplib::Server::HandlerResponse::Unhandled;
         });
+        // The vendored httplib enables SO_REUSEPORT by default on Linux, which
+        // allows multiple sockets to bind the same port and load-balances
+        // connections between them. When ctest runs these tests in parallel,
+        // two processes' servers then share a port and requests land on the
+        // wrong server, making request counts flaky (observed as headCount()==0
+        // under `ctest -j10`). Restrict to SO_REUSEADDR so a second bind fails
+        // and the loop below picks a genuinely free port instead.
+        server_.set_socket_options([](socket_t sock) {
+            int yes = 1;
+            setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&yes),
+                sizeof(yes));
+        });
         for (int port = 18123; port < 18153; ++port) {
             if (server_.bind_to_port("127.0.0.1", port)) {
                 port_ = port;
