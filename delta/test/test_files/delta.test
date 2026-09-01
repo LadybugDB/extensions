@@ -40,10 +40,12 @@ Alice|[52,24,31]|True|2020-05-17 00:00:00|{age: 25, gender: female}
 Bob|[15,66,72]|False|2011-03-22 00:00:00|{age: 22, gender: male}
 Carol|[29,24,11]||2001-04-15 00:00:00|{age: 33, gender: female}
 
+# Core binder passes the source through verbatim for extension-provided formats, so the
+# error for a non-existent table path now comes from the Delta scan itself.
 -LOG InvalidDeltaPath
 -STATEMENT LOAD FROM '${LBUG_ROOT_DIRECTORY}/student'(file_format='delta') RETURN *
 ---- error
-Binder exception: No file found that matches the pattern: ${LBUG_ROOT_DIRECTORY}/student.
+IO Error: Hit DeltaKernel FFI error (from: While trying to read from delta table: '${LBUG_ROOT_DIRECTORY}/student'): Hit error: 2 (Generic) with message (Not a Delta table: {})
 
 -LOG InvalidDeltaTable
 -STATEMENT LOAD FROM '${LBUG_ROOT_DIRECTORY}/src' (file_format='delta') RETURN *
