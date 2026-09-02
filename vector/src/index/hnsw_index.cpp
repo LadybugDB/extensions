@@ -804,6 +804,9 @@ std::unique_ptr<Index::UpdateState> OnDiskHNSWIndex::initUpdateState(main::Clien
 void OnDiskHNSWIndex::update(Transaction* transaction, const common::ValueVector& nodeIDVector,
     common::ValueVector& propertyVector, UpdateState& updateState) {
     auto& hnswUpdateState = updateState.cast<HNSWUpdateState>();
+    // NOTE: The node table has already been updated with the new value when we get here
+    // (NodeTable::update applies the table update before updating indexes), so any embedding
+    // scanned from the node table during re-insertion is the new value.
     commitInsert(transaction, nodeIDVector, {&propertyVector}, *hnswUpdateState.insertState);
 }
 
@@ -1427,7 +1430,11 @@ void OnDiskHNSWIndex::shrinkForNode(Transaction* transaction, common::offset_t o
     const auto approxMetricFunc = embeddings.getMetricFunction(config.metric);
     auto& embeddingScanState = *insertState.searchState.embeddingScanState;
     const auto vector = embeddings.getEmbedding(offset, embeddingScanState);
-    DASSERT(!vector.isNull());
+    if (vector.isNull()) {
+        // The node has no embedding (e.g. its embedding was updated to NULL while it is still
+        // referenced in the graph). We cannot compute distances, so we skip shrinking.
+        return;
+    }
     const auto& searchState = insertState.searchState;
     const auto& graph = isUpperLayer ? searchState.upperGraph : searchState.lowerGraph;
     const auto relTableID = isUpperLayer ? storageInfo->cast<HNSWStorageInfo>().upperRelTableID :
