@@ -188,3 +188,76 @@ Binder exception: Cannot set property id in table embeddings because it is used 
 1
 2
 3
+
+-CASE UpdateNullEmbeddingRowAtIndexBuild
+-LOAD_DYNAMIC_EXTENSION vector
+-STATEMENT CREATE NODE TABLE embeddings (id int64, vec FLOAT[8], PRIMARY KEY (id));
+---- ok
+-STATEMENT CALL threads=1;
+---- ok
+-STATEMENT UNWIND range(0, 499) AS i CREATE (:embeddings {id: i, vec: [i * 0.001, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]});
+---- ok
+-STATEMENT UNWIND range(500, 549) AS i CREATE (:embeddings {id: i});
+---- ok
+-STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'e_hnsw_index', 'vec', metric := 'l2');
+---- ok
+-STATEMENT MATCH (t:embeddings) WHERE t.id = 500 SET t.vec = [0.35, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
+---- ok
+-STATEMENT MATCH (t:embeddings) WHERE t.id = 550 SET t.vec = [0.9, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
+---- ok
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'e_hnsw_index', [0.35, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], 1, efs := 50) RETURN node.id ORDER BY distance;
+---- 1
+500
+
+-CASE UpdateNullEmbeddingToNullAndBack
+-LOAD_DYNAMIC_EXTENSION vector
+-STATEMENT CREATE NODE TABLE embeddings (id int64, vec FLOAT[8], PRIMARY KEY (id));
+---- ok
+-STATEMENT CALL threads=1;
+---- ok
+-STATEMENT UNWIND range(0, 499) AS i CREATE (:embeddings {id: i, vec: [i * 0.001, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]});
+---- ok
+-STATEMENT UNWIND range(500, 549) AS i CREATE (:embeddings {id: i, vec: [i * 0.002, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]});
+---- ok
+-STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'e_hnsw_index', 'vec', metric := 'l2');
+---- ok
+-STATEMENT MATCH (t:embeddings) WHERE t.id = 500 SET t.vec = NULL;
+---- ok
+-STATEMENT MATCH (t:embeddings) WHERE t.id = 501 SET t.vec = [1.5, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
+---- ok
+-STATEMENT MATCH (t:embeddings) WHERE t.id = 500 SET t.vec = [1.5, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
+---- ok
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'e_hnsw_index', [1.5, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], 2, efs := 50) RETURN node.id ORDER BY distance;
+-CHECK_ORDER
+---- 2
+500
+501
+
+-CASE UpdateNullEmbeddingSurvivesCheckpointReopen
+-SKIP_IN_MEM
+-LOAD_DYNAMIC_EXTENSION vector
+-STATEMENT CREATE NODE TABLE embeddings (id int64, vec FLOAT[8], PRIMARY KEY (id));
+---- ok
+-STATEMENT CALL threads=1;
+---- ok
+-STATEMENT UNWIND range(0, 499) AS i CREATE (:embeddings {id: i, vec: [i * 0.001, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]});
+---- ok
+-STATEMENT UNWIND range(500, 549) AS i CREATE (:embeddings {id: i});
+---- ok
+-STATEMENT CALL CREATE_VECTOR_INDEX('embeddings', 'e_hnsw_index', 'vec', metric := 'l2');
+---- ok
+-STATEMENT CHECKPOINT;
+---- ok
+-RELOADDB
+-LOAD_DYNAMIC_EXTENSION vector
+-STATEMENT MATCH (t:embeddings) WHERE t.id = 500 SET t.vec = [0.35, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
+---- ok
+-STATEMENT MATCH (t:embeddings) WHERE t.id = 510 SET t.vec = [0.51, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
+---- ok
+-STATEMENT CHECKPOINT;
+---- ok
+-RELOADDB
+-LOAD_DYNAMIC_EXTENSION vector
+-STATEMENT CALL QUERY_VECTOR_INDEX('embeddings', 'e_hnsw_index', [0.35, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], 1, efs := 50) RETURN node.id ORDER BY distance;
+---- 1
+500
