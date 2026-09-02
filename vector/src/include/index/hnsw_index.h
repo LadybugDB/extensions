@@ -343,6 +343,7 @@ public:
         common::column_id_t columnID, storage::visible_func isVisible) override;
     void update(transaction::Transaction* transaction, const common::ValueVector& nodeIDVector,
         common::ValueVector& propertyVector, UpdateState& updateState) override;
+    bool updateAfterTableWrite() const override { return true; }
 
     static storage::IndexType getIndexType() {
         static const storage::IndexType HNSW_INDEX_TYPE{"HNSW",
