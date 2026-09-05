@@ -87,8 +87,9 @@ catalog::TableCatalogEntry* FTSIndexAuxInfo::getTableEntryToExport(
         return nullptr;
     }
     auto transaction = transaction::Transaction::Get(*context);
+    // Stopwords tables are created as internal tables by CREATE_FTS_INDEX.
     return catalog::Catalog::Get(*context)->getTableCatalogEntry(transaction,
-        config.stopWordsTableName);
+        config.stopWordsTableName, true /* useInternal */);
 }
 
 } // namespace fts_extension
