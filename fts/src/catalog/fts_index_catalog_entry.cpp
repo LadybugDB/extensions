@@ -45,6 +45,17 @@ std::string FTSIndexAuxInfo::getStopWordsName(const common::FileScanInfo& export
     return stopWordsName;
 }
 
+// True if the stopwords were bound from a node table (rather than a file). Such tables are
+// exported as regular node tables in schema.cypher, so index.cypher can reference them by
+// name instead of the legacy per-index parquet file.
+static bool stopWordsIsTable(const FTSConfig& config, const main::ClientContext* context) {
+    if (config.stopWordsTableName == FTSUtils::getDefaultStopWordsTableName()) {
+        return false;
+    }
+    auto catalog = catalog::Catalog::Get(*context);
+    return catalog->containsTable(transaction::Transaction::Get(*context), config.stopWordsSource);
+}
+
 std::string FTSIndexAuxInfo::toCypher(const catalog::IndexCatalogEntry& indexEntry,
     const catalog::ToCypherInfo& info) const {
     auto& indexToCypherInfo = info.constCast<catalog::IndexToCypherInfo>();
@@ -64,7 +75,9 @@ std::string FTSIndexAuxInfo::toCypher(const catalog::IndexCatalogEntry& indexEnt
     cypher += std::format("CALL CREATE_FTS_INDEX('{}', '{}', [{}], stemmer := '{}', "
                           "stopWords := '{}');",
         tableName, indexEntry.getIndexName(), std::move(propertyStr), config.stemmer,
-        getStopWordsName(indexToCypherInfo.exportFileInfo));
+        stopWordsIsTable(config, indexToCypherInfo.context) ?
+            config.stopWordsSource :
+            getStopWordsName(indexToCypherInfo.exportFileInfo));
     return cypher;
 }
 
