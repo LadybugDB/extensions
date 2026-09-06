@@ -13,7 +13,8 @@ namespace fts_extension {
 
 struct FTSUtils {
 
-    static void normalizeQuery(std::string& query, const regex::RE2& ignorePattern);
+    static void normalizeQuery(std::string& query, const regex::RE2& ignorePattern,
+        bool protectWildcardChars = false);
 
     static bool hasWildcardPattern(const std::string& term);
 

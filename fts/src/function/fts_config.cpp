@@ -145,11 +145,11 @@ CreateFTSConfig::CreateFTSConfig(main::ClientContext& context, common::table_id_
         } else if (IgnorePattern::NAME == lowerCaseName) {
             value.validateType(IgnorePattern::TYPE);
             ignorePattern = common::StringUtils::getLower(value.getValue<std::string>());
+            // Wildcard characters ('*' and '?') are protected from the ignore pattern during
+            // query normalization (see FTSUtils::normalizeQuery), so the same pattern is used
+            // for indexing and for queries.
             ignorePatternQuery = ignorePattern;
-            common::StringUtils::replaceAll(ignorePatternQuery, "*", "");
-            common::StringUtils::replaceAll(ignorePatternQuery, "?", "");
             IgnorePattern::validate(ignorePattern);
-            IgnorePattern::validate(ignorePatternQuery);
         } else if (lowerCaseName == "tokenizer") {
             value.validateType(common::LogicalTypeID::STRING);
             tokenizerInfo.tokenizer = common::StringUtils::getLower(value.getValue<std::string>());
