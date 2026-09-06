@@ -47,7 +47,8 @@ std::vector<std::string> QueryFTSBindData::getQueryTerms(main::ClientContext& co
     auto queryInStr =
         ExpressionUtil::evaluateLiteral<std::string>(&context, query, LogicalType::STRING());
     auto config = entry.getAuxInfo().cast<FTSIndexAuxInfo>().config;
-    FTSUtils::normalizeQuery(queryInStr, config.ignorePatternQuery);
+    FTSUtils::normalizeQuery(queryInStr, config.ignorePatternQuery,
+        true /* protectWildcardChars */);
     auto terms = FTSUtils::tokenizeString(queryInStr, config);
     auto stopWordsTable =
         StorageManager::Get(context)

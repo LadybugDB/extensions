@@ -1,0 +1,50 @@
+-DATASET CSV fts-emails
+
+--
+
+# Tests that a custom ignore_pattern passed to CREATE_FTS_INDEX is also used when
+# normalizing the query in QUERY_FTS_INDEX (see issue #910). The custom pattern
+# preserves digits and hyphens, so tokens like `allen-p` and `102` are stored as
+# single terms in the index and must be searchable with exact queries. With the
+# default ignore pattern, `allen-p` would be split into `allen` and `p` and the
+# digits would be stripped from `102`.
+-CASE ignorePatternQuery
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CALL CREATE_FTS_INDEX('emails', 'fileIdx', ['file'], stemmer := 'none', ignore_pattern := '[^[:alnum:]-]+');
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('emails', 'fileIdx', 'allen-p') RETURN count(*);
+---- 1
+13
+-STATEMENT CALL QUERY_FTS_INDEX('emails', 'fileIdx', 'allen p') RETURN count(*);
+---- 1
+0
+-STATEMENT CALL QUERY_FTS_INDEX('emails', 'fileIdx', 'sent mail') RETURN count(*);
+---- 1
+13
+-STATEMENT CALL QUERY_FTS_INDEX('emails', 'fileIdx', '102') RETURN node.id;
+---- 1
+10
+-STATEMENT CALL QUERY_FTS_INDEX('emails', 'fileIdx', '1004') RETURN node.id;
+---- 1
+8
+-STATEMENT CALL QUERY_FTS_INDEX('emails', 'fileIdx', 'zzz') RETURN node.id;
+---- 0
+
+# Wildcard queries keep working with a custom ignore pattern.
+-STATEMENT CALL QUERY_FTS_INDEX('emails', 'fileIdx', '10??') RETURN node.id ORDER BY node.id;
+---- 5
+4
+5
+6
+7
+8
+
+# The custom ignore_pattern must also be used after the index is reloaded from disk.
+-RELOADDB
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CALL QUERY_FTS_INDEX('emails', 'fileIdx', 'allen-p') RETURN count(*);
+---- 1
+13
+-STATEMENT CALL QUERY_FTS_INDEX('emails', 'fileIdx', '102') RETURN node.id;
+---- 1
+10

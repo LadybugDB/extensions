@@ -235,8 +235,14 @@ std::string createFTSIndexQuery(ClientContext& context, const TableFuncBindData&
     properties += "]";
     std::string params;
     params += std::format("stemmer := '{}', ", ftsBindData->createFTSConfig.stemmer);
+    params += std::format("stopWords := '{}', ",
+        ftsBindData->createFTSConfig.stopWordsTableInfo.stopWords);
+    params += std::format("ignore_pattern := '{}', ",
+        formatStrInCypher(ftsBindData->createFTSConfig.ignorePattern));
     params +=
-        std::format("stopWords := '{}'", ftsBindData->createFTSConfig.stopWordsTableInfo.stopWords);
+        std::format("tokenizer := '{}', ", ftsBindData->createFTSConfig.tokenizerInfo.tokenizer);
+    params += std::format("jieba_dict_dir := '{}'",
+        formatStrInCypher(ftsBindData->createFTSConfig.tokenizerInfo.jiebaDictDir));
     query += std::format("CALL _CREATE_FTS_INDEX('{}', '{}', {}, {});", tableName, indexName,
         properties, params);
     query += std::format("RETURN 'Index {} has been created.' as result;", ftsBindData->indexName);

@@ -1,5 +1,7 @@
 #include "utils/fts_utils.h"
 
+#include <algorithm>
+#include <cctype>
 #include <optional>
 
 #include "common/string_utils.h"
@@ -18,10 +20,38 @@ using namespace lbug::storage;
 using namespace lbug::transaction;
 using namespace lbug::catalog;
 
-void FTSUtils::normalizeQuery(std::string& query, const RE2& ignorePattern) {
-    std::string replacePattern = " ";
-    RE2::GlobalReplace(&query, ignorePattern, replacePattern);
-    StringUtils::toLower(query);
+void FTSUtils::normalizeQuery(std::string& query, const RE2& ignorePattern,
+    bool protectWildcardChars) {
+    // Wildcard characters in the query must survive normalization, even if the ignore pattern
+    // would match them (e.g. a negated character class like [^[:alnum:]-]+ matches any
+    // non-alphanumeric character, including '*' and '?'). To achieve this, we normalize the
+    // query in segments between wildcard characters and re-attach the wildcard characters
+    // afterwards. Document contents are normalized without wildcard protection.
+    if (protectWildcardChars) {
+        std::string result;
+        std::string segment;
+        auto normalizeSegment = [&]() {
+            if (!segment.empty()) {
+                RE2::GlobalReplace(&segment, ignorePattern, " ");
+                result += segment;
+                segment.clear();
+            }
+        };
+        for (auto c : query) {
+            if (c == '*' || c == '?') {
+                normalizeSegment();
+                result += c;
+            } else {
+                segment += c;
+            }
+        }
+        normalizeSegment();
+        StringUtils::toLower(result);
+        query = std::move(result);
+    } else {
+        RE2::GlobalReplace(&query, ignorePattern, " ");
+        StringUtils::toLower(query);
+    }
 }
 
 struct StopWordsChecker {
@@ -115,6 +145,12 @@ std::vector<std::string> FTSUtils::tokenizeString(std::string& str, const FTSCon
             config.jiebaDictDir + "/hmm_model.utf8", config.jiebaDictDir + "/user.dict.utf8",
             config.jiebaDictDir + "/idf.utf8", config.jiebaDictDir + "/stop_words.utf8");
         jieba.CutForSearch(str, terms);
+        // CutForSearch keeps the whitespace between words as separate tokens. Whitespace is
+        // never a meaningful term, so we skip those tokens.
+        std::erase_if(terms, [](const std::string& term) {
+            return std::all_of(term.begin(), term.end(),
+                [](unsigned char c) { return std::isspace(c); });
+        });
     } else {
         terms = StringUtils::split(str, " ", true /* ignoreEmptyStringParts */);
     }
