@@ -958,6 +958,10 @@ common::offset_t OnDiskHNSWIndex::searchNNInUpperLayer(const EmbeddingHandle& qu
 
 void OnDiskHNSWIndex::initLayerSearchState(Transaction* transaction, HNSWSearchState& searchState,
     bool isUpperLayer) const {
+    // The visited bitmap is sized at query init time and may be smaller than the table at
+    // search time (e.g. concurrent inserts). Grow it proactively; VisitedState::add/contains
+    // are additionally bounds-safe so a stale size can never cause an out-of-bounds access.
+    searchState.visited.resize(nodeTable.getNumTotalRows(transaction));
     searchState.visited.reset();
     const auto& hnswStorageInfo = storageInfo->cast<HNSWStorageInfo>();
     const auto& hnswGraph = isUpperLayer ? searchState.upperGraph : searchState.lowerGraph;

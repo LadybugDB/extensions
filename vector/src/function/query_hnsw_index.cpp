@@ -369,7 +369,11 @@ static std::unique_ptr<TableFuncSharedState> initQueryHNSWSharedState(
     auto nodeTable = storage::StorageManager::Get(*context)
                          ->getTable(bindData->nodeTableEntry->getTableID())
                          ->ptrCast<storage::NodeTable>();
-    auto numNodes = nodeTable->getStats(transaction::Transaction::Get(*context)).getTableCard();
+    // NB: TableStats::getTableCard() is an estimated (possibly stale) cardinality and must not
+    // be used to size the visited bitmap. Use the exact row count instead. VisitedState is
+    // additionally bounds-checked and auto-growing, so a stale size cannot overflow.
+    auto numNodes =
+        nodeTable->getNumTotalRows(transaction::Transaction::Get(*context));
     return std::make_unique<QueryHNSWIndexSharedState>(nodeTable, numNodes);
 }
 
