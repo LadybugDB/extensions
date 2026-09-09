@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstring>
 #include <memory>
 #include <queue>
 
@@ -55,9 +56,42 @@ struct VisitedState {
 
     // NOLINTNEXTLINE(readability-make-member-function-const): Semantically non-const.
     void reset() { memset(visited.get(), 0, size); }
+    // Grow the bitmap so that `offset` is addressable. Preserves existing marks.
+    void ensureCapacity(common::offset_t offset) {
+        if (offset < size) {
+            return;
+        }
+        // Grow geometrically to amortize repeated growth when the table grows
+        // between sizing and search (e.g. stale cardinality estimates).
+        common::offset_t newSize = size == 0 ? offset + 1 : size;
+        while (newSize <= offset) {
+            newSize *= 2;
+        }
+        auto newVisited = std::make_unique<uint8_t[]>(newSize);
+        memset(newVisited.get(), 0, newSize);
+        if (size > 0) {
+            memcpy(newVisited.get(), visited.get(), size);
+        }
+        visited = std::move(newVisited);
+        size = newSize;
+    }
+    void resize(common::offset_t newSize) {
+        if (newSize <= size) {
+            return;
+        }
+        ensureCapacity(newSize - 1);
+    }
     // NOLINTNEXTLINE(readability-make-member-function-const): Semantically non-const.
-    void add(common::offset_t offset) { visited[offset] = 1; }
-    bool contains(common::offset_t offset) const { return visited[offset]; }
+    void add(common::offset_t offset) {
+        ensureCapacity(offset);
+        visited[offset] = 1;
+    }
+    bool contains(common::offset_t offset) const {
+        if (offset >= size) {
+            return false;
+        }
+        return visited[offset];
+    }
 };
 
 struct HNSWStorageInfo final : storage::IndexStorageInfo {
