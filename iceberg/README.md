@@ -61,7 +61,11 @@ MATCH (e:ice.events) WHERE e.ts > timestamp('2026-01-01 00:00:00') RETURN count(
 ```
 
 The ATTACH path is the warehouse identifier; connection and authentication
-options come from the `iceberg_*` options above. Tables are enumerated from
+options come from the `iceberg_*` options above. If the path is empty, the
+`iceberg_warehouse` option is used as the warehouse instead, so
+`ATTACH '' AS ice (DBTYPE ICEBERG)` attaches the globally configured warehouse.
+Attaching without a warehouse from either source fails with an error.
+Tables are enumerated from
 the `default` namespace unless overridden with the `SCHEMA` attach option
 (e.g. `ATTACH 'warehouse' AS ice (DBTYPE ICEBERG, SCHEMA = 'analytics')`), and
 tables with unsupported column types can be skipped with

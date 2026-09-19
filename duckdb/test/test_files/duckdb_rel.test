@@ -62,3 +62,31 @@ Attached database successfully.
 2
 -STATEMENT DETACH g;
 ---- ok
+
+# Exercises the shared attached-database machinery (catalog init under an alias,
+# column-name resolution and the foreign join push-down optimizer) without any
+# external server: the results are only correct if the pushed-down SQL join
+# resolves the rel endpoint columns and the node ID columns.
+-CASE DuckDBAttachAliasJoinPushdown
+-SKIP_FSM_LEAK_CHECK
+-LOAD_DYNAMIC_EXTENSION duckdb
+-STATEMENT ATTACH '${LBUG_ROOT_DIRECTORY}/extension/duckdb/test/test_files/users_sessions.db' as adel (dbtype duckdb);
+---- 1
+Attached database successfully.
+-STATEMENT CREATE REL TABLE owns_rel (FROM adel.users TO adel.sessions) WITH (storage = 'adel.rel_user_owns_session');
+---- 1
+Table owns_rel has been created.
+-STATEMENT EXPLAIN MATCH (u:adel.users)-[b:owns_rel]->(s:adel.sessions) RETURN count(*);
+---- ok
+-STATEMENT MATCH (u:adel.users)-[b:owns_rel]->(s:adel.sessions) RETURN count(*);
+---- 1
+5
+-STATEMENT MATCH (u:adel.users)-[b:owns_rel]->(s:adel.sessions) RETURN u.name, s.device ORDER BY u.name, s.device;
+---- 5
+Alice|laptop
+Alice|mobile
+Bob|desktop
+Carol|mobile
+Carol|tablet
+-STATEMENT DETACH adel;
+---- ok
