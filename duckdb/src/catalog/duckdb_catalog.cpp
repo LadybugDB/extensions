@@ -14,7 +14,6 @@
 #include "common/string_utils.h"
 #include "connector/duckdb_type_converter.h"
 #include "function/duckdb_scan.h"
-#include "storage/buffer_manager/memory_manager.h"
 #include "storage/duckdb_storage.h"
 #include "storage/storage_manager.h"
 #include <format>
@@ -26,9 +25,7 @@ DuckDBCatalog::DuckDBCatalog(std::string dbPath, std::string catalogName,
     std::string defaultSchemaName, main::ClientContext* context, const DuckDBConnector& connector,
     const binder::AttachOption& attachOption, std::string attachedDbName)
     : CatalogExtension{}, dbPath{std::move(dbPath)}, catalogName{std::move(catalogName)},
-      defaultSchemaName{std::move(defaultSchemaName)},
-      dbName{std::move(attachedDbName)},
-      tableNamesVector{common::LogicalType::STRING(), storage::MemoryManager::Get(*context)},
+      defaultSchemaName{std::move(defaultSchemaName)}, dbName{std::move(attachedDbName)},
       connector{connector}, context_{context} {
     skipUnsupportedTable = DuckDBStorageExtension::SKIP_UNSUPPORTED_TABLE_DEFAULT_VAL;
     auto& options = attachOption.options;
@@ -48,26 +45,32 @@ void DuckDBCatalog::init() {
         "table_schema = '{}' order by table_name;",
         catalogName, defaultSchemaName);
     auto result = connector.executeQuery(query);
-    std::unique_ptr<duckdb::DataChunk> resultChunk;
-    try {
-        resultChunk = result->Fetch();
-    } catch (std::exception& e) {
-        throw common::BinderException(e.what());
+    // Collect every table name across all result chunks: catalogs with more
+    // tables than fit a single DuckDB data chunk must not lose tables.
+    std::vector<std::string> tableNames;
+    while (true) {
+        std::unique_ptr<duckdb::DataChunk> resultChunk;
+        try {
+            resultChunk = result->Fetch();
+        } catch (std::exception& e) {
+            throw common::BinderException(e.what());
+        }
+        if (resultChunk == nullptr || resultChunk->size() == 0) {
+            break;
+        }
+        for (auto i = 0u; i < resultChunk->size(); i++) {
+            tableNames.push_back(resultChunk->GetValue(0, i).GetValue<std::string>());
+        }
     }
-    if (resultChunk == nullptr || resultChunk->size() == 0) {
+    if (tableNames.empty()) {
         return;
     }
-    duckdb_conversion_func_t conversionFunc;
-    DuckDBResultConverter::getDuckDBVectorConversionFunc(common::PhysicalTypeID::STRING,
-        conversionFunc);
-    conversionFunc(resultChunk->data[0], tableNamesVector, resultChunk->size());
     // Two-pass initialization: node tables must be registered before rel tables
     // so that rel tables can resolve their src/dst node table IDs. The table
     // enumeration order is alphabetical, which can put rel_* tables before the
     // node tables they reference.
     // First pass: register node tables (everything that is not a rel table).
-    for (auto i = 0u; i < resultChunk->size(); i++) {
-        auto tableName = tableNamesVector.getValue<common::string_t>(i).getAsString();
+    for (auto& tableName : tableNames) {
         auto lowerName = tableName;
         common::StringUtils::toLower(lowerName);
         if (lowerName.rfind("rel_", 0) == 0 || lowerName.rfind("csr_rel_", 0) == 0) {
@@ -76,8 +79,7 @@ void DuckDBCatalog::init() {
         createForeignTable(tableName);
     }
     // Second pass: register rel tables.
-    for (auto i = 0u; i < resultChunk->size(); i++) {
-        auto tableName = tableNamesVector.getValue<common::string_t>(i).getAsString();
+    for (auto& tableName : tableNames) {
         auto lowerName = tableName;
         common::StringUtils::toLower(lowerName);
         if (lowerName.rfind("rel_", 0) == 0) {

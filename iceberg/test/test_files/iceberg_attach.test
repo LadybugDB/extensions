@@ -1,0 +1,75 @@
+-DATASET CSV empty
+
+--
+
+# ATTACH validation that does not require a running Iceberg REST catalog.
+
+-CASE AttachValidation
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/iceberg/build/libiceberg.lbug_extension";
+---- ok
+-LOG AttachWithoutEndpoint
+-STATEMENT ATTACH 'my_warehouse' AS ice (DBTYPE ICEBERG);
+---- error
+Runtime exception: Cannot attach an Iceberg REST catalog without an endpoint. Set the 'iceberg_endpoint' option to the REST catalog URL before attaching.
+-LOG AttachWithoutWarehouse
+-STATEMENT CALL iceberg_endpoint='http://127.0.0.1:8181';
+---- ok
+-STATEMENT ATTACH '' AS ice (DBTYPE ICEBERG);
+---- error
+Runtime exception: Cannot attach an Iceberg catalog without a warehouse. Give the warehouse identifier as the ATTACH path (ATTACH '<warehouse>' AS <alias> (DBTYPE ICEBERG)) or set the 'iceberg_warehouse' option.
+-LOG AttachWithInvalidOptions
+-STATEMENT ATTACH 'my_warehouse' AS ice (DBTYPE ICEBERG, SKIP_UNSUPPORTED_TABLE = 'yes');
+---- error
+Runtime exception: Invalid option value for SKIP_UNSUPPORTED_TABLE
+-STATEMENT ATTACH 'my_warehouse' AS ice (DBTYPE ICEBERG, SCHEMA = 5);
+---- error
+Runtime exception: Invalid option value for SCHEMA
+-STATEMENT CALL iceberg_endpoint='';
+---- ok
+-STATEMENT LOAD FROM '${LBUG_ROOT_DIRECTORY}/extension/iceberg/test/iceberg_tables/person_table' (file_format='iceberg', allow_moved_paths=true) RETURN count(*);
+---- 1
+5
+
+# Requires a running Iceberg REST catalog (e.g. Lakekeeper) at
+# http://127.0.0.1:8181 that serves the lineitem_iceberg test table as
+# default.lineitem_iceberg. Tuple counts assume the catalog's current snapshot
+# is the same as the local table's.
+-CASE AttachRestCatalog
+-SKIP
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/iceberg/build/libiceberg.lbug_extension";
+---- ok
+-STATEMENT CALL iceberg_warehouse='warehouse';
+---- ok
+-STATEMENT CALL iceberg_endpoint='http://127.0.0.1:8181';
+---- ok
+-STATEMENT CALL iceberg_token='test-token';
+---- ok
+-LOG AttachIcebergCatalog
+-STATEMENT ATTACH 'warehouse' AS ice (DBTYPE ICEBERG);
+---- 1
+Attached database successfully.
+-STATEMENT LOAD FROM ice.lineitem_iceberg RETURN count(*);
+---- 1
+60175
+-STATEMENT MATCH (l:ice.lineitem_iceberg) RETURN count(*);
+---- 1
+60175
+-STATEMENT CALL TABLE_INFO('ice.lineitem_iceberg') RETURN *;
+---- ok
+-STATEMENT CALL SHOW_TABLES() RETURN *;
+---- ok
+-LOG JoinPushdownOverAttachedCatalog
+-STATEMENT CREATE REL TABLE lineitem_rel (FROM ice.lineitem_iceberg TO ice.lineitem_iceberg) WITH (storage = 'ice.lineitem_iceberg');
+---- 1
+Table lineitem_rel has been created.
+-STATEMENT EXPLAIN MATCH (a:ice.lineitem_iceberg)-[b:lineitem_rel]->(c:ice.lineitem_iceberg) RETURN count(*);
+---- ok
+-STATEMENT DETACH ice;
+---- 1
+Detached database successfully.
+-STATEMENT CALL iceberg_warehouse='';
+---- ok
+-STATEMENT CALL iceberg_endpoint='';
+---- ok
+-STATEMENT CALL iceberg_token='';
+---- ok

@@ -61,7 +61,6 @@ protected:
     // entries must store this name -- not the schema-qualified catalog name.
     std::string defaultSchemaName;
     std::string dbName;
-    common::ValueVector tableNamesVector;
     bool skipUnsupportedTable;
     const DuckDBConnector& connector;
     main::ClientContext* context_;

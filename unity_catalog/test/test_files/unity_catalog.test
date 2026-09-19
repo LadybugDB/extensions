@@ -21,3 +21,31 @@ Dan|False|9|20|19|7.700000|9.200000
 # Duckdb has an issue when scanning this table, enable after duckdb fixes it.
 #-STATEMENT LOAD FROM university.person RETURN *;
 #---- 1
+
+# Requires a running Unity Catalog server at http://127.0.0.1:8080 serving the
+# university catalog (see test/setup/create.bash). Exercises ATTACH under an
+# alias different from the catalog name, MATCH scans, and SQL pushdown.
+-CASE AttachWithAliasAndPushdown
+-SKIP
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/unity_catalog/build/libunity_catalog.lbug_extension";
+---- ok
+-LOG AttachUnderAlias
+-STATEMENT ATTACH 'university' AS u (DBTYPE UC_CATALOG);
+---- ok
+-STATEMENT LOAD FROM u.grades RETURN count(*);
+---- 1
+4
+-STATEMENT MATCH (g:u.grades) RETURN count(*);
+---- 1
+4
+-STATEMENT CALL TABLE_INFO('u.grades') RETURN *;
+---- ok
+-LOG JoinPushdownOverAttachedCatalog
+-STATEMENT CREATE REL TABLE grade_rel (FROM u.grades TO u.grades) WITH (storage = 'u.grades');
+---- 1
+Table grade_rel has been created.
+-STATEMENT EXPLAIN MATCH (a:u.grades)-[b:grade_rel]->(c:u.grades) RETURN count(*);
+---- ok
+-STATEMENT DETACH u;
+---- 1
+Detached database successfully.
