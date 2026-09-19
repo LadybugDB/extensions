@@ -12,7 +12,13 @@ namespace duckdb_extension {
 // Splits a possibly qualified SQL table reference into its parts, honouring
 // double-quoted identifiers: `"catalog".schema.table` -> [catalog, schema,
 // table]. Surrounding quotes are stripped from each part.
-static std::vector<std::string> splitQualifiedTableName(const std::string& tableName) {
+//
+// Callers treat a 2-part reference as `schema.table` and a 3-part reference as
+// `catalog.schema.table`, matching the convention used by the SQL push-down
+// optimizer (foreign table scans are described as `"catalog".schema.table`).
+// References with more than 3 parts have no defined meaning and are looked up
+// by their unqualified table name.
+inline std::vector<std::string> splitQualifiedTableName(const std::string& tableName) {
     std::vector<std::string> parts;
     std::string current;
     bool inQuotes = false;
@@ -32,7 +38,7 @@ static std::vector<std::string> splitQualifiedTableName(const std::string& table
     return parts;
 }
 
-static std::string escapeSingleQuotes(const std::string& value) {
+inline std::string escapeSingleQuotes(const std::string& value) {
     std::string result;
     result.reserve(value.size());
     for (auto c : value) {
@@ -67,35 +73,40 @@ public:
         // in different schemas or catalogs of one attached database apart.
         auto parts = splitQualifiedTableName(tableName);
         auto unqualified = parts.back();
-        std::string filters;
+        // Candidate filters from most to least specific. Some engines report
+        // the catalog name differently than the attached alias, so a fully
+        // qualified lookup may miss while a schema-scoped one hits. The
+        // unqualified lookup is the last resort: it keeps attached databases
+        // from older extension builds (which only match bare names) working,
+        // but it can match a same-named table in another schema when the
+        // qualification is wrong, so it must stay last.
+        std::vector<std::string> filterCandidates;
         if (parts.size() == 3) {
-            filters = std::format(" AND table_catalog = '{}' AND table_schema = '{}'",
-                escapeSingleQuotes(parts[0]), escapeSingleQuotes(parts[1]));
+            filterCandidates.push_back(std::format(" AND table_catalog = '{}' AND table_schema "
+                                                   "= '{}'",
+                escapeSingleQuotes(parts[0]), escapeSingleQuotes(parts[1])));
+            filterCandidates.push_back(
+                std::format(" AND table_schema = '{}'", escapeSingleQuotes(parts[1])));
         } else if (parts.size() == 2) {
-            filters = std::format(" AND table_schema = '{}'", escapeSingleQuotes(parts[0]));
+            filterCandidates.push_back(
+                std::format(" AND table_schema = '{}'", escapeSingleQuotes(parts[0])));
         }
-        std::string query = std::format("SELECT column_name FROM information_schema.columns WHERE "
-                                        "table_name = '{}'{} ORDER BY ordinal_position",
-            escapeSingleQuotes(unqualified), filters);
-
-        auto result = connector->executeQuery(query);
-        if ((!result || result->RowCount() == 0) && !filters.empty()) {
-            // Fall back to the unqualified lookup: some engines report
-            // catalog/schema names differently than the attached alias.
-            query = std::format("SELECT column_name FROM information_schema.columns WHERE "
-                                "table_name = '{}' ORDER BY ordinal_position",
-                escapeSingleQuotes(unqualified));
-            result = connector->executeQuery(query);
+        filterCandidates.emplace_back("");
+        for (auto& filters : filterCandidates) {
+            std::string query =
+                std::format("SELECT column_name FROM information_schema.columns WHERE table_name "
+                            "= '{}'{} ORDER BY ordinal_position",
+                    escapeSingleQuotes(unqualified), filters);
+            auto result = connector->executeQuery(query);
+            if (result && result->RowCount() != 0) {
+                std::vector<std::string> columnNames;
+                for (auto i = 0u; i < result->RowCount(); i++) {
+                    columnNames.push_back(result->GetValue(0, i).GetValue<std::string>());
+                }
+                return columnNames;
+            }
         }
-        if (!result || result->RowCount() == 0) {
-            return {};
-        }
-
-        std::vector<std::string> columnNames;
-        for (auto i = 0u; i < result->RowCount(); i++) {
-            columnNames.push_back(result->GetValue(0, i).GetValue<std::string>());
-        }
-        return columnNames;
+        return {};
     }
 
 protected:

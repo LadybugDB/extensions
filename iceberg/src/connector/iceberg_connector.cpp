@@ -18,6 +18,8 @@ void IcebergConnector::connect(const std::string& dbPath, const std::string& cat
     }
     const auto catalogAlias =
         catalogName.empty() ? IcebergSecretManager::CATALOG_ALIAS : catalogName;
+    // Validate the configuration before creating the embedded DuckDB instance,
+    // so misconfiguration fails without any setup side effects.
     if (config.warehouse.empty()) {
         if (attaching) {
             throw common::RuntimeException{
@@ -32,18 +34,7 @@ void IcebergConnector::connect(const std::string& dbPath, const std::string& cat
                 "identifier to enable Iceberg REST catalog access.",
                 IcebergWarehouse::NAME, IcebergWarehouse::NAME)};
         }
-        // Creates an in-memory duckdb instance, then install iceberg and httpfs.
-        instance = std::make_unique<duckdb::DuckDB>(nullptr);
-        connection = std::make_unique<duckdb::Connection>(*instance);
-        // Install the Desired Extension on DuckDB
-        executeQuery("install iceberg;");
-        executeQuery("load iceberg;");
-        executeQuery("install httpfs;");
-        executeQuery("load httpfs;");
-        initRemoteFSSecrets(context);
-        return;
-    }
-    if (attaching && config.endpoint.empty()) {
+    } else if (attaching && config.endpoint.empty()) {
         throw common::RuntimeException{
             "Cannot attach an Iceberg REST catalog without an endpoint. Set the "
             "'iceberg_endpoint' option to the REST catalog URL before attaching."};
@@ -57,6 +48,11 @@ void IcebergConnector::connect(const std::string& dbPath, const std::string& cat
     executeQuery("install httpfs;");
     executeQuery("load httpfs;");
     initRemoteFSSecrets(context);
+    if (config.warehouse.empty()) {
+        // No REST catalog is configured: the table functions scan iceberg
+        // files directly from the filesystem instead.
+        return;
+    }
     // If the Iceberg REST catalog is configured, attach it inside the embedded
     // DuckDB instance, so iceberg tables can be referenced by fully qualified
     // name (e.g. iceberg_catalog.default.events) instead of a filesystem path.
