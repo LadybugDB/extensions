@@ -18,6 +18,7 @@ include_directories(
 add_subdirectory(src/function)
 add_subdirectory(src/connector)
 add_subdirectory(src/options)
+add_subdirectory(src/storage)
 add_subdirectory(src/installer)
 add_subdirectory(src/main)
 

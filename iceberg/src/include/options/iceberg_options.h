@@ -106,7 +106,8 @@ struct IcebergSecretManager {
     static constexpr const char* SECRET_NAME = "iceberg_rest_secret";
 
     static std::string getSecret(const IcebergRestCatalogConfig& config);
-    static std::string getAttachQuery(const IcebergRestCatalogConfig& config);
+    static std::string getAttachQuery(const IcebergRestCatalogConfig& config,
+        const std::string& catalogAlias);
 };
 
 } // namespace iceberg_extension

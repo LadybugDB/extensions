@@ -96,7 +96,8 @@ std::string IcebergSecretManager::getSecret(const IcebergRestCatalogConfig& conf
     return std::format("CREATE SECRET {} ({} TYPE ICEBERG);", SECRET_NAME, options);
 }
 
-std::string IcebergSecretManager::getAttachQuery(const IcebergRestCatalogConfig& config) {
+std::string IcebergSecretManager::getAttachQuery(const IcebergRestCatalogConfig& config,
+    const std::string& catalogAlias) {
     std::string options = "TYPE ICEBERG";
     if (config.hasAuth()) {
         options += std::format(", SECRET {}", SECRET_NAME);
@@ -112,7 +113,7 @@ std::string IcebergSecretManager::getAttachQuery(const IcebergRestCatalogConfig&
             std::format(", AUTHORIZATION_TYPE '{}'", escapeSingleQuotes(config.authorizationType));
     }
     return std::format("ATTACH '{}' AS {} ({});", escapeSingleQuotes(config.warehouse),
-        CATALOG_ALIAS, options);
+        catalogAlias, options);
 }
 
 } // namespace iceberg_extension

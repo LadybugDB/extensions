@@ -43,6 +43,30 @@ alias `iceberg_catalog`. Table references can use either
 `iceberg_catalog.namespace.table` (3-part) or `namespace.table` (2-part, which
 is prefixed with the alias automatically). Any other 3-part name is rejected.
 
+## Attaching a REST catalog as a database
+
+An Iceberg REST catalog is a SQL engine, so besides `LOAD FROM` it can be
+attached as a database and queried with graph patterns. Attached tables behave
+like any other foreign tables: `MATCH` scans push filters, projections,
+limits and ordering down to the catalog, and multi-hop patterns over
+relationship tables are rewritten into a single SQL join (see the foreign join
+push-down optimizer).
+
+```cypher
+CALL iceberg_endpoint='https://rest-catalog.example.com';
+CALL iceberg_token='<bearer-token>';
+ATTACH 'warehouse' AS ice (DBTYPE ICEBERG);
+LOAD FROM ice.events RETURN count(*);
+MATCH (e:ice.events) WHERE e.ts > timestamp('2026-01-01 00:00:00') RETURN count(*);
+```
+
+The ATTACH path is the warehouse identifier; connection and authentication
+options come from the `iceberg_*` options above. Tables are enumerated from
+the `default` namespace unless overridden with the `SCHEMA` attach option
+(e.g. `ATTACH 'warehouse' AS ice (DBTYPE ICEBERG, SCHEMA = 'analytics')`), and
+tables with unsupported column types can be skipped with
+`SKIP_UNSUPPORTED_TABLE = true`.
+
 ### Options
 
 | Option | Description |

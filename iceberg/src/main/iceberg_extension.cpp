@@ -5,6 +5,7 @@
 #include "main/database.h"
 #include "main/duckdb_extension.h"
 #include "options/iceberg_options.h"
+#include "storage/iceberg_storage.h"
 
 namespace lbug {
 namespace iceberg_extension {
@@ -13,6 +14,7 @@ using namespace lbug::extension;
 
 void IcebergExtension::load(main::ClientContext* context) {
     auto& db = *context->getDatabase();
+    db.registerStorageExtension(EXTENSION_NAME, std::make_unique<IcebergStorageExtension>(db));
     ExtensionUtils::addTableFunc<IcebergScanFunction>(db);
     ExtensionUtils::addTableFunc<IcebergMetadataFunction>(db);
     ExtensionUtils::addTableFunc<IcebergSnapshotsFunction>(db);
