@@ -1,0 +1,130 @@
+-DATASET CSV empty
+
+# SQL pushdown over attached DuckDB graph tables (fixture: pushdown_graph.db).
+#
+# node_person(id, name, age): Alice/35, Bob/25, Carol/45, Dave/28
+# node_city(id, name): NYC(10), SF(11)
+# rel_knows(src_id, dst_id, since, weight): Alice->Bob/2020, Bob->Carol/2021,
+#     Alice->Carol/2019, Carol->Dave/2022
+# rel_likes(src_id, dst_id, score): Alice->Bob/5, Bob->Carol/8, Carol->Dave/3
+# rel_livesin(src_id, dst_id, since): Alice->NYC, Bob->SF, Carol->NYC
+#
+# All MATCH traversals below run over `rel_*` tables. Local (non-pushed)
+# traversal over such tables errors out ("foreign keys cannot be interpreted
+# as node offsets"), so every passing result here proves the pattern was
+# pushed down to SQL.
+
+--
+
+-CASE OneHopPushdownBaseline
+-SKIP_FSM_LEAK_CHECK
+-LOAD_DYNAMIC_EXTENSION duckdb
+-STATEMENT ATTACH '${LBUG_ROOT_DIRECTORY}/extension/duckdb/test/test_files/pushdown_graph.db' AS g (DBTYPE DUCKDB);
+---- 1
+Attached database successfully.
+-STATEMENT USE g;
+---- ok
+-STATEMENT MATCH (a:node_person)-[r:rel_knows]->(b:node_person) RETURN a.name, b.name ORDER BY a.name, b.name;
+---- 4
+Alice|Bob
+Alice|Carol
+Bob|Carol
+Carol|Dave
+-STATEMENT DETACH g;
+---- ok
+
+-CASE TwoHopNodeFilterPushdown
+-SKIP_FSM_LEAK_CHECK
+-LOAD_DYNAMIC_EXTENSION duckdb
+-STATEMENT ATTACH '${LBUG_ROOT_DIRECTORY}/extension/duckdb/test/test_files/pushdown_graph.db' AS g (DBTYPE DUCKDB);
+---- 1
+Attached database successfully.
+-STATEMENT USE g;
+---- ok
+-STATEMENT MATCH (a:node_person)-[r1:rel_knows]->(b:node_person)-[r2:rel_likes]->(c:node_person) WHERE a.age > 30 RETURN a.name, b.name, c.name ORDER BY a.name, b.name, c.name;
+---- 2
+Alice|Bob|Carol
+Alice|Carol|Dave
+-STATEMENT DETACH g;
+---- ok
+
+-CASE TwoHopEdgeFilterPushdown
+-SKIP_FSM_LEAK_CHECK
+-LOAD_DYNAMIC_EXTENSION duckdb
+-STATEMENT ATTACH '${LBUG_ROOT_DIRECTORY}/extension/duckdb/test/test_files/pushdown_graph.db' AS g (DBTYPE DUCKDB);
+---- 1
+Attached database successfully.
+-STATEMENT USE g;
+---- ok
+-STATEMENT MATCH (a:node_person)-[r1:rel_knows]->(b:node_person)-[r2:rel_likes]->(c:node_person) WHERE r1.since >= 2020 AND r2.score > 4 RETURN a.name, c.name;
+---- 1
+Alice|Carol
+-STATEMENT DETACH g;
+---- ok
+
+-CASE TwoHopMixedNodeLabelsPushdown
+-SKIP_FSM_LEAK_CHECK
+-LOAD_DYNAMIC_EXTENSION duckdb
+-STATEMENT ATTACH '${LBUG_ROOT_DIRECTORY}/extension/duckdb/test/test_files/pushdown_graph.db' AS g (DBTYPE DUCKDB);
+---- 1
+Attached database successfully.
+-STATEMENT USE g;
+---- ok
+-STATEMENT MATCH (a:node_person)-[r1:rel_knows]->(b:node_person)-[r2:rel_livesin]->(c:node_city) RETURN a.name, c.name ORDER BY a.name, c.name;
+---- 3
+Alice|NYC
+Alice|SF
+Bob|NYC
+-STATEMENT DETACH g;
+---- ok
+
+-CASE AggregationOrderByPushdown
+-SKIP_FSM_LEAK_CHECK
+-LOAD_DYNAMIC_EXTENSION duckdb
+-STATEMENT ATTACH '${LBUG_ROOT_DIRECTORY}/extension/duckdb/test/test_files/pushdown_graph.db' AS g (DBTYPE DUCKDB);
+---- 1
+Attached database successfully.
+-STATEMENT USE g;
+---- ok
+-STATEMENT MATCH (a:node_person)-[r:rel_knows]->(b:node_person) RETURN a.name, count(*) AS cnt ORDER BY cnt DESC, a.name;
+---- 3
+Alice|2
+Bob|1
+Carol|1
+-STATEMENT DETACH g;
+---- ok
+
+-CASE RecursiveCTEPushdown
+-SKIP_FSM_LEAK_CHECK
+-LOAD_DYNAMIC_EXTENSION duckdb
+-STATEMENT ATTACH '${LBUG_ROOT_DIRECTORY}/extension/duckdb/test/test_files/pushdown_graph.db' AS g (DBTYPE DUCKDB);
+---- 1
+Attached database successfully.
+-STATEMENT USE g;
+---- ok
+-STATEMENT MATCH (a:node_person)-[e:rel_knows*1..3]->(b:node_person) RETURN b.name ORDER BY b.name;
+---- 8
+Bob
+Carol
+Carol
+Carol
+Dave
+Dave
+Dave
+Dave
+-STATEMENT DETACH g;
+---- ok
+
+-CASE RecursiveEdgeFilterPushdown
+-SKIP_FSM_LEAK_CHECK
+-LOAD_DYNAMIC_EXTENSION duckdb
+-STATEMENT ATTACH '${LBUG_ROOT_DIRECTORY}/extension/duckdb/test/test_files/pushdown_graph.db' AS g (DBTYPE DUCKDB);
+---- 1
+Attached database successfully.
+-STATEMENT USE g;
+---- ok
+-STATEMENT MATCH (a:node_person)-[e:rel_knows*1..2 {since: 2020}]->(b:node_person) RETURN b.name ORDER BY b.name;
+---- 1
+Bob
+-STATEMENT DETACH g;
+---- ok
