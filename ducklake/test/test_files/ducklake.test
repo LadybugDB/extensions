@@ -1,0 +1,61 @@
+-DATASET CSV empty
+
+--
+
+-CASE DuckLakeScan
+-SKIP_FSM_LEAK_CHECK
+-LOAD_DYNAMIC_EXTENSION ducklake
+# Data files are referenced by relative paths, so the checked-in catalog is
+# relocatable as long as users.ducklake.files/ sits next to users.ducklake.
+# Setting ducklake_data_path exercises the override plumbing (it is forwarded
+# as DATA_PATH + OVERRIDE_DATA_PATH to the embedded DuckDB ATTACH).
+-STATEMENT CALL ducklake_data_path='${LBUG_ROOT_DIRECTORY}/extension/ducklake/test/test_files/users.ducklake.files/';
+---- ok
+-STATEMENT ATTACH '${LBUG_ROOT_DIRECTORY}/extension/ducklake/test/test_files/users.ducklake' as dl (dbtype ducklake);
+---- 1
+Attached database successfully.
+-STATEMENT LOAD FROM dl.person RETURN name ORDER BY name;
+---- 3
+Alice
+Bob
+Carol
+-STATEMENT LOAD FROM dl.knows RETURN src_id, dst_id ORDER BY src_id, dst_id;
+---- 4
+0|1
+0|2
+1|0
+2|1
+-STATEMENT MATCH (p:dl.person) RETURN count(*);
+---- 1
+3
+-STATEMENT MATCH (p:dl.person) WHERE p.name = 'Alice' RETURN count(*);
+---- 1
+1
+-STATEMENT CALL TABLE_INFO('dl.person') RETURN *;
+---- ok
+-STATEMENT DETACH dl;
+---- ok
+
+# DuckLake stores no PRIMARY KEY / FOREIGN KEY constraints, so rel tables are
+# not auto-detected from duckdb_constraints(). Declare the rel explicitly with
+# storage pointing at the DuckLake table; the src/dst column convention then
+# lets the foreign join pushdown fire (same as SQL catalogs without FKs).
+-CASE DuckLakeJoinPushdown
+-SKIP_FSM_LEAK_CHECK
+-LOAD_DYNAMIC_EXTENSION ducklake
+-STATEMENT CALL ducklake_data_path='${LBUG_ROOT_DIRECTORY}/extension/ducklake/test/test_files/users.ducklake.files/';
+---- ok
+-STATEMENT ATTACH '${LBUG_ROOT_DIRECTORY}/extension/ducklake/test/test_files/users.ducklake' as dl (dbtype ducklake);
+---- 1
+Attached database successfully.
+-STATEMENT CREATE REL TABLE knows_rel (FROM dl.person TO dl.person) WITH (storage = 'dl.knows');
+---- 1
+Table knows_rel has been created.
+-LOG JoinPushdownOverDuckLake
+-STATEMENT MATCH (a:dl.person)-[b:knows_rel]->(c:dl.person) RETURN count(*);
+---- 1
+4
+-STATEMENT EXPLAIN MATCH (a:dl.person)-[b:knows_rel]->(c:dl.person) RETURN count(*);
+---- ok
+-STATEMENT DETACH dl;
+---- ok
