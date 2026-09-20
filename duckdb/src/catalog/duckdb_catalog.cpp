@@ -137,8 +137,12 @@ void DuckDBCatalog::createForeignTable(const std::string& tableName) {
     for (auto& definition : extraInfo->propertyDefinitions) {
         tableEntry->addProperty(definition);
     }
+    // NB: capture the raw pointer before moving: the catalog takes ownership of the
+    // entry, so the pointer stays valid, while the moved-from unique_ptr is null.
+    // (Reading it after the move wired a null referencedEntry, which silently disabled
+    // scan-function planning and therefore all SQL pushdown over attached node tables.)
+    auto* attachedEntry = tableEntry.get();
     tables->createEntry(&transaction::DUMMY_TRANSACTION, std::move(tableEntry));
-    auto attachedEntry = tableEntry.get();
     // Create another for main catalog for traversal support
     auto primaryKeyName = extraInfo->propertyDefinitions[0].getName();
 
