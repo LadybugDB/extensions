@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 
+#include "catalog/duckdb_schema_utils.h"
 #include "connector/duckdb_connector.h"
 #include "main/attached_database.h"
 #include <format>
@@ -22,8 +23,14 @@ inline std::vector<std::string> splitQualifiedTableName(const std::string& table
     std::vector<std::string> parts;
     std::string current;
     bool inQuotes = false;
-    for (auto c : tableName) {
+    for (auto i = 0u; i < tableName.size(); i++) {
+        auto c = tableName[i];
         if (c == '"') {
+            if (inQuotes && i + 1 < tableName.size() && tableName[i + 1] == '"') {
+                current += '"';
+                i++;
+                continue;
+            }
             inQuotes = !inQuotes;
             continue;
         }
@@ -36,19 +43,6 @@ inline std::vector<std::string> splitQualifiedTableName(const std::string& table
     }
     parts.push_back(current);
     return parts;
-}
-
-inline std::string escapeSingleQuotes(const std::string& value) {
-    std::string result;
-    result.reserve(value.size());
-    for (auto c : value) {
-        if (c == '\'') {
-            result += "''";
-        } else {
-            result += c;
-        }
-    }
-    return result;
 }
 
 class AttachedDuckDBDatabase : public main::AttachedDatabase {
@@ -94,11 +88,27 @@ public:
         filterCandidates.emplace_back("");
         for (auto& filters : filterCandidates) {
             std::string query =
-                std::format("SELECT column_name FROM information_schema.columns WHERE table_name "
+                std::format("SELECT column_name, data_type, table_catalog, table_schema "
+                            "FROM information_schema.columns WHERE table_name "
                             "= '{}'{} ORDER BY ordinal_position",
                     escapeSingleQuotes(unqualified), filters);
             auto result = connector->executeQuery(query);
             if (result && result->RowCount() != 0) {
+                if (isPlaceholderSchema(*result)) {
+                    // Use the catalog and schema of the matched table, including
+                    // for two-part references outside DuckDB's search path.
+                    const auto qualifiedName = std::format("{}.{}.{}",
+                        quoteDuckDBIdentifier(result->GetValue(2, 0).GetValue<std::string>()),
+                        quoteDuckDBIdentifier(result->GetValue(3, 0).GetValue<std::string>()),
+                        quoteDuckDBIdentifier(unqualified));
+                    try {
+                        return connector
+                            ->executeQuery(std::format("SELECT * FROM {} LIMIT 0", qualifiedName))
+                            ->names;
+                    } catch (const common::Exception&) {
+                        return {};
+                    }
+                }
                 std::vector<std::string> columnNames;
                 for (auto i = 0u; i < result->RowCount(); i++) {
                     columnNames.push_back(result->GetValue(0, i).GetValue<std::string>());
