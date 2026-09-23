@@ -45,8 +45,9 @@ is prefixed with the alias automatically). Any other 3-part name is rejected.
 
 ## Attaching a REST catalog as a database
 
-An Iceberg REST catalog is a SQL engine, so besides `LOAD FROM` it can be
-attached as a database and queried with graph patterns. Attached tables behave
+The REST catalog resolves Iceberg metadata; the embedded DuckDB instance executes
+SQL against the tables. Besides `LOAD FROM`, the catalog can be attached as a
+database and queried with graph patterns. Attached tables behave
 like any other foreign tables: `MATCH` scans push filters, projections,
 limits and ordering down to the catalog, and multi-hop patterns over
 relationship tables are rewritten into a single SQL join (see the foreign join
@@ -89,7 +90,9 @@ keeping credentials out of scripts.
 
 Authentication is optional: catalogs reachable without credentials (e.g.
 `s3_tables`/`glue` combined with S3 environment credentials) can be attached
-with just `iceberg_warehouse` and `iceberg_endpoint(_type)`. Data files on S3
+without a token. For an unauthenticated REST endpoint, set
+`CALL iceberg_authorization_type='none';` before attaching; DuckDB otherwise
+defaults to OAuth2 and requires credentials. Data files on S3
 are read with the usual `s3_*` options of the httpfs integration.
 
 ### Time travel

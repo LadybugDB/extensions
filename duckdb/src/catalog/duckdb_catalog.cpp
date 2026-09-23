@@ -8,6 +8,7 @@
 #include "binder/expression/variable_expression.h"
 #include "catalog/catalog_entry/node_table_catalog_entry.h"
 #include "catalog/catalog_entry/rel_group_catalog_entry.h"
+#include "catalog/duckdb_schema_utils.h"
 #include "catalog/duckdb_table_catalog_entry.h"
 #include "common/exception/binder.h"
 #include "common/exception/runtime.h"
@@ -43,7 +44,7 @@ void DuckDBCatalog::init() {
     auto query = std::format(
         "select table_name from information_schema.tables where table_catalog = '{}' and "
         "table_schema = '{}' order by table_name;",
-        catalogName, defaultSchemaName);
+        escapeSingleQuotes(catalogName), escapeSingleQuotes(defaultSchemaName));
     auto result = connector.executeQuery(query);
     // Collect every table name across all result chunks: catalogs with more
     // tables than fit a single DuckDB data chunk must not lose tables.
@@ -113,8 +114,9 @@ std::string DuckDBCatalog::bindSchemaName(const binder::AttachOption& options,
 
 static std::string getQuery(const binder::BoundCreateTableInfo& info) {
     auto extraInfo = info.extraInfo->constPtrCast<BoundExtraCreateDuckDBTableInfo>();
-    return "SELECT {} " + std::format("FROM \"{}\".{}.{}", extraInfo->catalogName,
-                              extraInfo->schemaName, info.tableName);
+    return "SELECT {} " +
+           std::format("FROM {}.{}.{}", quoteDuckDBIdentifier(extraInfo->catalogName),
+               quoteDuckDBIdentifier(extraInfo->schemaName), quoteDuckDBIdentifier(info.tableName));
 }
 
 void DuckDBCatalog::createForeignTable(const std::string& tableName) {
@@ -175,7 +177,7 @@ void DuckDBCatalog::createForeignRelTable(const std::string& tableName, bool int
                                "referenced_table FROM duckdb_constraints() "
                                "WHERE constraint_type = 'FOREIGN KEY' "
                                "AND referenced_table IS NOT NULL AND table_name = '{}'",
-        tableName);
+        escapeSingleQuotes(tableName));
     auto fkResult = connector.executeQuery(fkQuery);
 
     std::string srcTableName, dstTableName;
@@ -202,7 +204,9 @@ void DuckDBCatalog::createForeignRelTable(const std::string& tableName, bool int
 
     // Build property definitions
     std::vector<binder::PropertyDefinition> propertyDefinitions;
-    bindPropertyDefinitions(tableName, propertyDefinitions);
+    if (!bindPropertyDefinitions(tableName, propertyDefinitions)) {
+        return;
+    }
 
     // Determine the node table IDs from the main catalog. containsTable() must
     // be checked first: getTableCatalogEntry() throws when the table is
@@ -238,8 +242,8 @@ void DuckDBCatalog::createForeignRelTable(const std::string& tableName, bool int
     }
 
     // Build query and scan info
-    auto queryStr =
-        std::format("SELECT * FROM \"{}\".{}.{}", catalogName, defaultSchemaName, tableName);
+    auto queryStr = std::format("SELECT * FROM {}.{}.{}", quoteDuckDBIdentifier(catalogName),
+        quoteDuckDBIdentifier(defaultSchemaName), quoteDuckDBIdentifier(tableName));
     auto duckdbTableInfo = std::make_shared<DuckDBTableScanInfo>(queryStr, std::move(columnTypes),
         columnNames, connector);
     auto scanFunc = getScanFunction(duckdbTableInfo);
@@ -280,7 +284,6 @@ void DuckDBCatalog::createForeignRelTable(const std::string& tableName, bool int
     auto foreignDatabaseName = dbName;
 
     std::vector<catalog::RelTableCatalogInfo> relTableInfos;
-    auto info = bindCreateTableInfo(tableName);
     common::oid_t relOID = tables->getNextOID();
     relTableInfos.emplace_back(catalog::NodeTableIDPair{srcTableID, dstTableID}, relOID,
         common::RelMultiplicity::MANY, common::RelMultiplicity::MANY);
@@ -313,10 +316,37 @@ static bool getTableInfo(const DuckDBConnector& connector, const std::string& ta
     auto query = std::format("select data_type,column_name from information_schema.columns where "
                              "table_name = '{}' and table_schema = '{}' and table_catalog = '{}' "
                              "order by ordinal_position;",
-        tableName, schemaName, catalogName);
+        escapeSingleQuotes(tableName), escapeSingleQuotes(schemaName),
+        escapeSingleQuotes(catalogName));
     auto result = connector.executeQuery(query);
     if (result->RowCount() == 0) {
         return false;
+    }
+    if (isPlaceholderSchema(*result)) {
+        std::unique_ptr<duckdb::MaterializedQueryResult> schemaResult;
+        try {
+            schemaResult = connector.executeQuery(
+                std::format("SELECT * FROM {}.{}.{} LIMIT 0", quoteDuckDBIdentifier(catalogName),
+                    quoteDuckDBIdentifier(schemaName), quoteDuckDBIdentifier(tableName)));
+        } catch (const common::Exception&) {
+            if (skipUnsupportedTable) {
+                return false;
+            }
+            throw;
+        }
+        columnTypes.reserve(schemaResult->types.size());
+        columnNames = schemaResult->names;
+        for (auto& type : schemaResult->types) {
+            try {
+                columnTypes.push_back(DuckDBTypeConverter::convertDuckDBType(type.ToString()));
+            } catch (common::BinderException&) {
+                if (skipUnsupportedTable) {
+                    return false;
+                }
+                throw;
+            }
+        }
+        return true;
     }
     columnTypes.reserve(result->RowCount());
     columnNames.reserve(result->RowCount());
