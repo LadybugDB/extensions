@@ -348,7 +348,7 @@ public:
         HNSWInsertState(main::ClientContext* context, catalog::TableCatalogEntry* nodeTableEntry,
             catalog::TableCatalogEntry* upperRelTableEntry,
             catalog::TableCatalogEntry* lowerRelTableEntry, storage::NodeTable& nodeTable,
-            common::column_id_t columnID, uint64_t degree);
+            common::column_id_t columnID, uint64_t degree, const HNSWIndexConfig& indexConfig);
     };
 
     struct HNSWUpdateState final : UpdateState {
