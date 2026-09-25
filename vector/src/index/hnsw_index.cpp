@@ -482,13 +482,19 @@ HNSWSearchState::HNSWSearchState(main::ClientContext* context,
     upperGraph = std::make_unique<graph::OnDiskGraph>(context, std::move(upperGraphEntry));
 }
 
+static QueryHNSWConfig getInsertQueryConfig(const HNSWIndexConfig& indexConfig) {
+    QueryHNSWConfig queryConfig;
+    queryConfig.efs = indexConfig.efc;
+    return queryConfig;
+}
+
 OnDiskHNSWIndex::HNSWInsertState::HNSWInsertState(main::ClientContext* context,
     catalog::TableCatalogEntry* nodeTableEntry, catalog::TableCatalogEntry* upperRelTableEntry,
     catalog::TableCatalogEntry* lowerRelTableEntry, NodeTable& nodeTable,
-    common::column_id_t columnID, uint64_t degree)
+    common::column_id_t columnID, uint64_t degree, const HNSWIndexConfig& indexConfig)
     : searchState{context, nodeTableEntry, upperRelTableEntry, lowerRelTableEntry, nodeTable,
           columnID, nodeTable.getNumTotalRows(Transaction::Get(*context)), degree,
-          QueryHNSWConfig{}, HNSWIndexConfig{}, false} {
+          getInsertQueryConfig(indexConfig), indexConfig, false} {
     std::vector<common::LogicalType> insertTypes;
     insertTypes.push_back(common::LogicalType::INTERNAL_ID());
     insertTypes.push_back(common::LogicalType::INTERNAL_ID());
@@ -722,7 +728,7 @@ std::unique_ptr<Index::InsertState> OnDiskHNSWIndex::initInsertState(main::Clien
     auto [nodeTableEntry, upperRelTableEntry, lowerRelTableEntry] =
         getIndexTableCatalogEntries(catalog::Catalog::Get(*context), transaction, indexInfo);
     return std::make_unique<HNSWInsertState>(context, nodeTableEntry, upperRelTableEntry,
-        lowerRelTableEntry, nodeTable, indexInfo.columnIDs[0], config.ml);
+        lowerRelTableEntry, nodeTable, indexInfo.columnIDs[0], config.ml, config);
 }
 
 class CommitInsertEmbeddingScanState final : public GetEmbeddingsScanState {
@@ -823,8 +829,9 @@ void OnDiskHNSWIndex::finalize(main::ClientContext* context) {
     const auto embeddingDim = typeInfo.constPtrCast<common::ArrayTypeInfo>()->getNumElements();
     const auto scanState = std::make_unique<OnDiskEmbeddingScanState>(transaction, mm, nodeTable,
         indexInfo.columnIDs[0], embeddingDim);
-    const auto insertState = std::make_unique<HNSWInsertState>(context, nodeTableEntry,
-        upperRelTableEntry, lowerRelTableEntry, nodeTable, indexInfo.columnIDs[0], config.ml);
+    const auto insertState =
+        std::make_unique<HNSWInsertState>(context, nodeTableEntry, upperRelTableEntry,
+            lowerRelTableEntry, nodeTable, indexInfo.columnIDs[0], config.ml, config);
     std::unique_ptr<TableBackedQuantizedEmbeddings> quantizedEmbeddings;
     if (config.quantization != QuantizationType::NONE) {
         DASSERT(quantizedEmbeddingsTable != nullptr);
