@@ -12,6 +12,7 @@ using namespace common;
 namespace {
 
 static constexpr std::string_view XET_PREFIX = "xet://";
+static constexpr std::string_view HF_PREFIX = "hf://";
 static constexpr std::string_view HF_BASE_URL = "https://huggingface.co/";
 
 std::vector<std::string> splitPath(std::string_view path) {
@@ -129,7 +130,7 @@ void XetFileSystem::evictMemoizedResolveTarget(const std::string& url) {
 std::unique_ptr<common::FileInfo> XetFileSystem::openFile(const std::string& path,
     common::FileOpenFlags flags, main::ClientContext* context) {
     if (flags.flags & FileFlags::WRITE) {
-        throw IOException{"Writing to xet:// URLs is not supported."};
+        throw IOException{"Writing to xet:// or hf:// URLs is not supported."};
     }
     return HTTPFileSystem::openFileWithImmutability(toHuggingFaceURL(path), flags, context,
         /*immutableContent=*/true);
@@ -137,12 +138,13 @@ std::unique_ptr<common::FileInfo> XetFileSystem::openFile(const std::string& pat
 
 std::vector<std::string> XetFileSystem::glob(main::ClientContext* /*context*/,
     const std::string& path) const {
-    // Keep xet:// paths routed to XetFileSystem after bind-time glob expansion.
+    // Keep xet:// and hf:// paths routed to XetFileSystem after bind-time glob
+    // expansion.
     return {path};
 }
 
 bool XetFileSystem::canHandleFile(const std::string_view path) const {
-    return path.rfind(XET_PREFIX, 0) == 0;
+    return path.rfind(XET_PREFIX, 0) == 0 || path.rfind(HF_PREFIX, 0) == 0;
 }
 
 bool XetFileSystem::fileOrPathExists(const std::string& path, main::ClientContext* context) {
@@ -150,11 +152,14 @@ bool XetFileSystem::fileOrPathExists(const std::string& path, main::ClientContex
 }
 
 std::string XetFileSystem::toHuggingFaceURL(const std::string& path) {
-    if (path.rfind(XET_PREFIX, 0) != 0) {
-        throw IOException{"Xet URL needs to start with xet://"};
+    std::string_view suffix;
+    if (path.rfind(XET_PREFIX, 0) == 0) {
+        suffix = std::string_view{path}.substr(XET_PREFIX.size());
+    } else if (path.rfind(HF_PREFIX, 0) == 0) {
+        suffix = std::string_view{path}.substr(HF_PREFIX.size());
+    } else {
+        throw IOException{"Xet URL needs to start with xet:// or hf://"};
     }
-
-    auto suffix = std::string_view{path}.substr(XET_PREFIX.size());
     if (suffix.rfind("huggingface.co/", 0) == 0) {
         return std::format("{}{}", HF_BASE_URL,
             suffix.substr(std::string_view{"huggingface.co/"}.size()));
