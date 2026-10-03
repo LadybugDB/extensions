@@ -26,22 +26,34 @@ static std::string quoteIdentifier(const std::string& value) {
     return result;
 }
 
-static std::string joinColumns(const std::vector<std::string>& columnNames) {
+static std::string quoteBacktick(const std::string& value) {
+    std::string result = "`";
+    for (auto ch : value) {
+        result += ch;
+        if (ch == '`') {
+            result += ch;
+        }
+    }
+    result += "`";
+    return result;
+}
+
+static std::string joinColumns(const std::vector<std::string>& columnNames, bool backtickIds) {
     std::string result;
     bool first = true;
     for (auto& columnName : columnNames) {
         if (!first) {
             result += ", ";
         }
-        result += quoteIdentifier(columnName);
+        result += backtickIds ? quoteBacktick(columnName) : quoteIdentifier(columnName);
         first = false;
     }
     return result.empty() ? "*" : result;
 }
 
 std::string ADBCScanBindData::getSQL() const {
-    auto sql = std::format("SELECT {} FROM {}", joinColumns(scanInfo->columnNames),
-        quoteIdentifier(scanInfo->tableName));
+    auto sql = std::format("SELECT {} FROM {}",
+        joinColumns(scanInfo->columnNames, scanInfo->backtickIds), scanInfo->fromClause);
     if (getLimitNum() != common::INVALID_ROW_IDX) {
         sql += std::format(" LIMIT {}", getLimitNum());
     }
@@ -126,7 +138,8 @@ std::unique_ptr<function::TableFuncBindData> ADBCScanFunction::bindFunc(
     }
     auto columns = input->binder->createVariables(columnNames, columnTypes);
     auto selectedScanInfo = std::make_shared<ADBCTableScanInfo>(scanInfo->tableName,
-        std::move(columnNames), std::move(columnTypes), scanInfo->connector);
+        scanInfo->fromClause, scanInfo->backtickIds, std::move(columnNames), std::move(columnTypes),
+        scanInfo->connector);
     return std::make_unique<ADBCScanBindData>(std::move(selectedScanInfo), std::move(columns));
 }
 

@@ -23,9 +23,21 @@ std::unique_ptr<main::AttachedDatabase> attachADBC(std::string dbName, std::stri
         }
         schemaName = val.getValue<std::string>();
     }
+    // Optional catalog for 3-level namespaces (e.g. Databricks UC). Enables
+    // the statement-probe schema discovery and qualifies scan SQL. Empty =
+    // legacy behavior (bare table, driver-resolved namespace).
+    std::string catalogName;
+    if (attachOption.options.contains("CATALOG")) {
+        auto val = attachOption.options.at("CATALOG");
+        if (val.getDataType().getLogicalTypeID() != common::LogicalTypeID::STRING) {
+            throw common::RuntimeException{"Invalid option value for CATALOG"};
+        }
+        catalogName = val.getValue<std::string>();
+    }
     auto connector = std::make_unique<ADBCConnector>(attachOption);
     connector->connect(dbPath);
-    auto catalog = std::make_unique<ADBCCatalog>(schemaName, clientContext, *connector);
+    auto catalog =
+        std::make_unique<ADBCCatalog>(catalogName, schemaName, clientContext, *connector);
     catalog->init();
     return std::make_unique<AttachedADBCDatabase>(dbName, ADBCStorageExtension::DB_TYPE,
         std::move(catalog), std::move(connector));

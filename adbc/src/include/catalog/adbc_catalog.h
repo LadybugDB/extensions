@@ -9,9 +9,10 @@ namespace adbc_extension {
 
 class ADBCCatalog final : public extension::CatalogExtension {
 public:
-    ADBCCatalog(std::string schemaName, main::ClientContext* context,
+    ADBCCatalog(std::string catalogName, std::string schemaName, main::ClientContext* context,
         const ADBCConnector& connector)
-        : schemaName{std::move(schemaName)}, context{context}, connector{connector} {}
+        : catalogName{std::move(catalogName)}, schemaName{std::move(schemaName)}, context{context},
+          connector{connector} {}
 
     void init() override;
 
@@ -19,6 +20,7 @@ private:
     void createForeignTable(const std::string& tableName);
 
 private:
+    std::string catalogName;
     std::string schemaName;
     main::ClientContext* context;
     const ADBCConnector& connector;
