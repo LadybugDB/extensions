@@ -13,6 +13,39 @@ namespace adbc_extension {
 static constexpr const char* DRIVER_OPTION = "DRIVER";
 static constexpr const char* TABLES_OPTION = "TABLES";
 static constexpr const char* SCHEMA_OPTION = "SCHEMA";
+static constexpr const char* CATALOG_OPTION = "CATALOG";
+
+// Backtick-quote one SQL identifier part (internal backticks are doubled).
+// Parts are quoted separately so catalog.schema.table keeps its structure.
+// Backticks (not double quotes) because the qualified path targets lakehouse
+// engines (Spark/Databricks): with ANSI mode off, "x" is a string literal
+// and SELECT * FROM "catalog"."schema"."table" fails with
+// PARSE_SYNTAX_ERROR. DuckDB accepts backticks as well.
+static std::string quoteSQLPart(const std::string& part) {
+    std::string out = "`";
+    for (const char c : part) {
+        out += c;
+        if (c == '`') {
+            out += c;
+        }
+    }
+    out += '`';
+    return out;
+}
+
+// Legacy double-quote for the unqualified path (byte-identical to the old
+// quoteIdentifier behavior in adbc_scan.cpp).
+static std::string quoteLegacy(const std::string& part) {
+    std::string out = "\"";
+    for (const char c : part) {
+        out += c;
+        if (c == '"') {
+            out += c;
+        }
+    }
+    out += "\"";
+    return out;
+}
 
 static std::vector<std::string> splitCommaSeparated(const std::string& input) {
     std::vector<std::string> result;
@@ -116,7 +149,8 @@ void ADBCConnector::connect(const std::string& uri) {
     }
     for (auto& [key, value] : attachOption.options) {
         auto upperKey = common::StringUtils::getUpper(key);
-        if (upperKey == DRIVER_OPTION || upperKey == TABLES_OPTION || upperKey == SCHEMA_OPTION) {
+        if (upperKey == DRIVER_OPTION || upperKey == TABLES_OPTION || upperKey == SCHEMA_OPTION ||
+            upperKey == CATALOG_OPTION) {
             continue;
         }
         if (value.getDataType().getLogicalTypeID() != common::LogicalTypeID::STRING) {
@@ -141,9 +175,34 @@ std::vector<std::string> ADBCConnector::getTableNames() const {
     return splitCommaSeparated(tables);
 }
 
+std::string ADBCConnector::getCatalogName() const {
+    return getStringOption(CATALOG_OPTION);
+}
+
+std::string ADBCConnector::qualifiedTableRef(const std::string& catalog, const std::string& schema,
+    const std::string& table) const {
+    if (catalog.empty()) {
+        // Legacy behavior: bare quoted table (schema resolved by the driver).
+        return quoteLegacy(table);
+    }
+    std::string ref;
+    bool first = true;
+    for (const auto* part : {&catalog, &schema, &table}) {
+        if (part->empty()) {
+            continue;
+        }
+        if (!first) {
+            ref += ".";
+        }
+        ref += quoteSQLPart(*part);
+        first = false;
+    }
+    return ref.empty() ? quoteSQLPart(table) : ref;
+}
+
 std::vector<std::pair<std::string, common::LogicalType>> ADBCConnector::getTableSchema(
     const std::string& schemaName, const std::string& tableName) const {
-    std::lock_guard<std::mutex> lock{mtx};
+    std::lock_guard<std::recursive_mutex> lock{mtx};
     if (schemaCache.contains(tableName)) {
         std::vector<std::pair<std::string, common::LogicalType>> cachedResult;
         cachedResult.reserve(schemaCache.at(tableName).size());
@@ -152,17 +211,37 @@ std::vector<std::pair<std::string, common::LogicalType>> ADBCConnector::getTable
         }
         return cachedResult;
     }
-    ArrowSchemaWrapper schema;
-    checkStatus(AdbcConnectionGetTableSchema(&connection, nullptr,
-                    schemaName.empty() ? nullptr : schemaName.c_str(), tableName.c_str(), &schema,
-                    &error),
-        std::format("AdbcConnectionGetTableSchema({})", tableName));
     std::vector<std::pair<std::string, common::LogicalType>> result;
-    result.reserve(schema.n_children);
-    for (auto i = 0; i < schema.n_children; i++) {
-        auto child = schema.children[i];
-        result.emplace_back(child->name == nullptr ? std::format("column{}", i) : child->name,
-            common::ArrowConverter::fromArrowSchema(child));
+    bool haveSchema = false;
+    try {
+        ArrowSchemaWrapper schema;
+        checkStatus(AdbcConnectionGetTableSchema(&connection, nullptr,
+                        schemaName.empty() ? nullptr : schemaName.c_str(), tableName.c_str(),
+                        &schema, &error),
+            std::format("AdbcConnectionGetTableSchema({})", tableName));
+        result.reserve(schema.n_children);
+        for (auto i = 0; i < schema.n_children; i++) {
+            auto child = schema.children[i];
+            result.emplace_back(child->name == nullptr ? std::format("column{}", i) : child->name,
+                common::ArrowConverter::fromArrowSchema(child));
+        }
+        haveSchema = true;
+    } catch (const common::Exception&) {
+        // Drivers without AdbcConnectionGetTableSchema (e.g. Databricks)
+        // fall through to the statement probe below.
+    }
+    if (!haveSchema) {
+        // Schema-on-first-scan: run an empty result query and read the
+        // Arrow stream schema. Needs no driver metadata API.
+        auto probe = executeQuery(std::format("SELECT * FROM {} WHERE 1=0",
+                                      qualifiedTableRef(getCatalogName(), schemaName, tableName)),
+            {} /*columnNames*/, {} /*columnTypes*/);
+        result.reserve(probe->schema.n_children);
+        for (auto i = 0; i < probe->schema.n_children; i++) {
+            auto child = probe->schema.children[i];
+            result.emplace_back(child->name == nullptr ? std::format("column{}", i) : child->name,
+                common::ArrowConverter::fromArrowSchema(child));
+        }
     }
     std::vector<std::pair<std::string, common::LogicalType>> cachedResult;
     cachedResult.reserve(result.size());
@@ -190,7 +269,7 @@ std::unique_ptr<ADBCQueryResult> ADBCConnector::executeQuery(const std::string& 
         throw common::RuntimeException{std::format("{} failed: {}", operation, message)};
     };
     {
-        std::lock_guard<std::mutex> lock{mtx};
+        std::lock_guard<std::recursive_mutex> lock{mtx};
         checkQueryStatus(AdbcConnectionNew(&result->connection, &queryError), "AdbcConnectionNew");
         result->connectionInitialized = true;
         checkQueryStatus(AdbcConnectionInit(&result->connection,

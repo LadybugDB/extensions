@@ -25,8 +25,9 @@ void ADBCCatalog::createForeignTable(const std::string& tableName) {
         columnNames.push_back(name);
         columnTypes.push_back(type.copy());
     }
-    auto scanInfo = std::make_shared<ADBCTableScanInfo>(tableName, columnNames,
-        copyVector(columnTypes), connector);
+    auto scanInfo = std::make_shared<ADBCTableScanInfo>(tableName,
+        connector.qualifiedTableRef(catalogName, schemaName, tableName),
+        !catalogName.empty() /*backtickIds*/, columnNames, copyVector(columnTypes), connector);
     auto attachedEntry = std::make_unique<catalog::ADBCTableCatalogEntry>(tableName,
         getADBCScanFunction(scanInfo), scanInfo);
     for (auto i = 0u; i < columnNames.size(); i++) {

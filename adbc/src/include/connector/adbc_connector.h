@@ -1,6 +1,7 @@
 #pragma once
 
 #include <mutex>
+#include <string>
 #include <unordered_map>
 
 #include "binder/bound_attach_info.h"
@@ -55,6 +56,9 @@ public:
     std::vector<std::string> getTableNames() const;
     std::vector<std::pair<std::string, common::LogicalType>> getTableSchema(
         const std::string& schemaName, const std::string& tableName) const;
+    std::string getCatalogName() const;
+    std::string qualifiedTableRef(const std::string& catalog, const std::string& schema,
+        const std::string& table) const;
     std::unique_ptr<ADBCQueryResult> executeQuery(const std::string& query,
         const std::vector<std::string>& columnNames,
         const std::vector<common::LogicalType>& columnTypes) const;
@@ -66,7 +70,9 @@ private:
 
 private:
     const binder::AttachOption& attachOption;
-    mutable std::mutex mtx;
+    // Recursive: getTableSchema() may fall back to a statement probe that
+    // re-enters through the same locking as executeQuery().
+    mutable std::recursive_mutex mtx;
     mutable AdbcError error{};
     AdbcDatabase database{};
     mutable AdbcConnection connection{};
