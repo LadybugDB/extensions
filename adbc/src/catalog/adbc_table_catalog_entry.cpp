@@ -38,7 +38,8 @@ std::unique_ptr<binder::BoundTableScanInfo> ADBCTableCatalogEntry::getBoundScanI
         scanColumnTypes.push_back(scanInfo->columnTypes[i].copy());
     }
     auto boundScanInfo = std::make_shared<adbc_extension::ADBCTableScanInfo>(scanInfo->tableName,
-        std::move(scanColumnNames), std::move(scanColumnTypes), scanInfo->connector);
+        scanInfo->fromClause, scanInfo->backtickIds, std::move(scanColumnNames),
+        std::move(scanColumnTypes), scanInfo->connector);
     auto bindData = std::make_unique<adbc_extension::ADBCScanBindData>(std::move(boundScanInfo),
         std::move(columns));
     return std::make_unique<binder::BoundTableScanInfo>(scanFunction, std::move(bindData));

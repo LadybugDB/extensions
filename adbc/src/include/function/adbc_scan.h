@@ -10,13 +10,23 @@ namespace adbc_extension {
 
 struct ADBCTableScanInfo {
     std::string tableName;
+    // Prebuilt FROM clause (catalog/schema-qualified when the ATTACH
+    // specified CATALOG, else the bare quoted table). Built once so the
+    // quoting is not applied twice.
+    std::string fromClause;
+    // Lakehouse-quoting for identifiers: with ANSI mode off (Spark/
+    // Databricks), "x" is a string literal, so columns must use backticks.
+    // Legacy drivers keep double quotes.
+    bool backtickIds = false;
     std::vector<std::string> columnNames;
     std::vector<common::LogicalType> columnTypes;
     const ADBCConnector& connector;
 
-    ADBCTableScanInfo(std::string tableName, std::vector<std::string> columnNames,
-        std::vector<common::LogicalType> columnTypes, const ADBCConnector& connector)
-        : tableName{std::move(tableName)}, columnNames{std::move(columnNames)},
+    ADBCTableScanInfo(std::string tableName, std::string fromClause, bool backtickIds,
+        std::vector<std::string> columnNames, std::vector<common::LogicalType> columnTypes,
+        const ADBCConnector& connector)
+        : tableName{std::move(tableName)}, fromClause{std::move(fromClause)},
+          backtickIds{backtickIds}, columnNames{std::move(columnNames)},
           columnTypes{std::move(columnTypes)}, connector{connector} {}
 };
 
