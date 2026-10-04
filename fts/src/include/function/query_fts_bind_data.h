@@ -1,7 +1,7 @@
 #pragma once
 
 #include "binder/expression/node_expression.h"
-#include "catalog/catalog_entry/index_catalog_entry.h"
+#include "catalog/fts_index_catalog_entry.h"
 #include "function/fts_config.h"
 #include "function/gds/gds.h"
 
@@ -31,18 +31,22 @@ struct QueryFTSOptionalParams : public function::OptionalParams {
 
 struct QueryFTSBindData final : public function::GDSBindData {
     std::shared_ptr<binder::Expression> query;
-    const catalog::IndexCatalogEntry& entry;
+    // Owned copy of the FTS aux info. This must NOT be a reference/pointer into the
+    // catalog: bind data outlives the bind transaction (prepared-plan cache reuses it
+    // across executions on the same connection), so a catalog reference dangles on the
+    // second execution and segfaults (see issue #1082).
+    FTSIndexAuxInfo auxInfo;
     common::table_id_t outputTableID;
     common::idx_t numDocs;
     double avgDocLen;
 
     QueryFTSBindData(binder::expression_vector columns, graph::NativeGraphEntry graphEntry,
         std::shared_ptr<binder::Expression> docs, std::shared_ptr<binder::Expression> query,
-        const catalog::IndexCatalogEntry& entry,
+        const FTSIndexAuxInfo& auxInfo,
         std::unique_ptr<QueryFTSOptionalParams> optionalParams, common::idx_t numDocs,
         double avgDocLen)
         : GDSBindData{std::move(columns), std::move(graphEntry), binder::expression_vector{docs}},
-          query{std::move(query)}, entry{entry},
+          query{std::move(query)}, auxInfo{auxInfo},
           outputTableID{output[0]->constCast<binder::NodeExpression>().getTableIDs()[0]},
           numDocs{numDocs}, avgDocLen{avgDocLen} {
         auto& nodeExpr = output[0]->constCast<binder::NodeExpression>();
@@ -51,7 +55,7 @@ struct QueryFTSBindData final : public function::GDSBindData {
         this->optionalParams = std::move(optionalParams);
     }
     QueryFTSBindData(const QueryFTSBindData& other)
-        : GDSBindData{other}, query{other.query}, entry{other.entry},
+        : GDSBindData{other}, query{other.query}, auxInfo{other.auxInfo},
           outputTableID{other.outputTableID}, numDocs{other.numDocs}, avgDocLen{other.avgDocLen} {}
 
     std::vector<std::string> getQueryTerms(main::ClientContext& context) const;

@@ -212,7 +212,7 @@ void QFTSOutputWriter::write(processor::FactorizedTable& scoreFT, nodeID_t docNo
         scoreInfo.scoreData.size() != numUniqueTerms) {
         return;
     }
-    auto auxInfo = bindData.entry.getAuxInfo().cast<FTSIndexAuxInfo>();
+    auto auxInfo = bindData.auxInfo;
     for (auto& scoreData : scoreInfo.scoreData) {
         auto numDocs = bindData.numDocs;
         auto avgDocLen = bindData.avgDocLen;
@@ -492,7 +492,8 @@ static std::unique_ptr<TableFuncBindData> bindFunc(main::ClientContext* context,
     auto& ftsIndex = index.value()->cast<FTSIndex>();
     auto [numDocs, avgDocLen] = ftsIndex.getStats(transaction);
     auto bindData = std::make_unique<QueryFTSBindData>(std::move(columns), std::move(graphEntry),
-        nodeOutput, std::move(query), *ftsIndexEntry,
+        nodeOutput, std::move(query),
+        ftsIndexEntry->getAuxInfo().cast<FTSIndexAuxInfo>(),
         std::make_unique<QueryFTSOptionalParams>(input->optionalParamsLegacy), numDocs, avgDocLen);
     context->setUseInternalCatalogEntry(false /* useInternalCatalogEntry */);
     return bindData;
