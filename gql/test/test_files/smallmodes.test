@@ -1,0 +1,412 @@
+-DATASET CSV empty
+-BUFFER_POOL_SIZE 1024000000
+
+--
+
+# Q5-2 small semantics package: SIMPLE path mode (closed cycles allowed,
+# endpoint-repeats excluded), DIFFERENT EDGES over a single pattern (= TRAIL),
+# REPEATABLE ELEMENTS no-op, IS [NOT] LABELED and the `%` label wildcard.
+# Dual-run parity: every GQL case is paired with the equivalent Cypher
+# asserting the same expected result. ANY-graph fixtures are built with plain
+# Cypher edges (property key `tag`, never `id`).
+
+
+-CASE SimpleClosedTriangleParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE GRAPH tmpg ANY
+---- ok
+
+-STATEMENT USE GRAPH tmpg
+---- ok
+
+# Closed triangle 0 -> 1 -> 2 -> 0; the closing edge is a second statement so
+# both endpoints are the same node.
+-STATEMENT CREATE (n0 {tag:0})-[:E]->(n1 {tag:1})-[:E]->(n2 {tag:2})
+---- ok
+
+-STATEMENT MATCH (a {tag:2}), (b {tag:0}) CREATE (a)-[:E]->(b)
+---- ok
+
+# The engine's *ACYCLIC slot prefilter alone admits the cycle (endpoints are
+# free there) ...
+-STATEMENT MATCH (a {tag:0})-[e*ACYCLIC 3..3]->(b {tag:0}) RETURN a.tag
+---- 1
+0
+
+# ... IS_ACYCLIC rejects it (first = last is a repeat), ...
+-STATEMENT MATCH p = (a {tag:0})-[e*3..3]->(b {tag:0}) WHERE IS_ACYCLIC(p) RETURN a.tag
+---- 0
+
+# ... but ISO GQL SIMPLE allows first = last: GQL hits, ...
+-STATEMENT CALL GQL("MATCH SIMPLE (a {tag:0})-[e]->{3,3}(b {tag:0}) RETURN a.tag")
+---- 1
+0
+
+# ... and so does the _gql_is_simple dual.
+-STATEMENT MATCH p = (a {tag:0})-[e*3..3]->(b {tag:0}) WHERE _gql_is_simple(p) RETURN a.tag
+---- 1
+0
+
+# Multi-hop fixed pattern form (no var-length slot, whole-pattern wrap only).
+-STATEMENT CALL GQL("MATCH SIMPLE (a {tag:0})-[]->(b)-[]->(c)-[]->(d {tag:0}) RETURN a.tag")
+---- 1
+0
+
+-STATEMENT MATCH p = (a {tag:0})-[]->(b)-[]->(c)-[]->(d {tag:0}) WHERE _gql_is_simple(p) RETURN a.tag
+---- 1
+0
+
+
+-CASE SimpleEndpointRepeatExcludedParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE GRAPH tmpg ANY
+---- ok
+
+-STATEMENT USE GRAPH tmpg
+---- ok
+
+# m0 -> m1 -> m0 -> m2: the endpoint m2 is reached through a walk whose start
+# node repeats in the interior.
+-STATEMENT CREATE (m0 {tag:10})-[:E]->(m1 {tag:11})
+---- ok
+
+-STATEMENT CREATE (m2 {tag:12})
+---- ok
+
+-STATEMENT MATCH (a {tag:11}), (b {tag:10}) CREATE (a)-[:E]->(b)
+---- ok
+
+-STATEMENT MATCH (a {tag:10}), (b {tag:12}) CREATE (a)-[:E]->(b)
+---- ok
+
+# RED LINE PIN: the only 3-hop 10 -> 12 walk is 10->11->10->12. The engine's
+# *ACYCLIC prefilter admits it (intermediates 11, 10 are pairwise distinct, the
+# endpoint may collide) ...
+-STATEMENT MATCH (a {tag:10})-[e*ACYCLIC 3..3]->(b {tag:12}) RETURN b.tag
+---- 1
+12
+
+# ... so a bare-prefilter emission would silently return this row. ISO SIMPLE
+# excludes it: 0 rows in GQL and in the _gql_is_simple dual.
+-STATEMENT CALL GQL("MATCH SIMPLE (a {tag:10})-[e]->{3,3}(b {tag:12}) RETURN b.tag")
+---- 0
+
+-STATEMENT MATCH p = (a {tag:10})-[e*3..3]->(b {tag:12}) WHERE _gql_is_simple(p) RETURN b.tag
+---- 0
+
+# Multi-hop fixed pattern form: same exclusion via the whole-pattern wrap.
+-STATEMENT CALL GQL("MATCH SIMPLE (a {tag:10})-[]->(b)-[]->(c)-[]->(d {tag:12}) RETURN d.tag")
+---- 0
+
+-STATEMENT MATCH p = (a {tag:10})-[]->(b)-[]->(c)-[]->(d {tag:12}) WHERE _gql_is_simple(p) RETURN d.tag
+---- 0
+
+# The path exists under default WALK (both spellings) — the 0 rows above are
+# SIMPLE's filter, not missing data.
+-STATEMENT CALL GQL("MATCH (a {tag:10})-[e]->{3,3}(b {tag:12}) RETURN b.tag")
+---- 1
+12
+
+-STATEMENT MATCH (a {tag:10})-[e*3..3]->(b {tag:12}) RETURN b.tag
+---- 1
+12
+
+# Open paths with pairwise-distinct nodes hit: 10->11, 10->12 and the closed
+# 10->11->10 (first = last allowed) all qualify.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH SIMPLE (a {tag:10})-[e]->{1,2}(b) RETURN b.tag ORDER BY b.tag")
+---- 3
+10
+11
+12
+
+-CHECK_ORDER
+-STATEMENT MATCH p = (a {tag:10})-[e*1..2]->(b) WHERE _gql_is_simple(p) RETURN b.tag ORDER BY b.tag
+---- 3
+10
+11
+12
+
+
+-CASE IsLabeledWildcardAnyGraph
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE GRAPH tmpg ANY
+---- ok
+
+-STATEMENT USE GRAPH tmpg
+---- ok
+
+-STATEMENT CALL GQL("INSERT (a:A {v:1}), (b:B {v:2})")
+---- ok
+
+# `v IS LABELED %` — every labeled node matches on an ANY graph.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n) WHERE n IS LABELED % RETURN n.v ORDER BY n.v")
+---- 2
+1
+2
+
+-CHECK_ORDER
+-STATEMENT MATCH (n) WHERE size(labels(n)) > 0 RETURN n.v ORDER BY n.v
+---- 2
+1
+2
+
+# `%` as the pattern's own label expression.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n:%) RETURN n.v ORDER BY n.v")
+---- 2
+1
+2
+
+# `%` through the colon predicate spelling (labeledPredicate `n:%`).
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n) WHERE n:% RETURN n.v ORDER BY n.v")
+---- 2
+1
+2
+
+
+-CASE DifferentEdgesSinglePatternParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE GRAPH de ANY
+---- ok
+
+-STATEMENT USE GRAPH de
+---- ok
+
+-STATEMENT CREATE (s {tag:20})
+---- ok
+
+-STATEMENT CREATE (m {tag:21})
+---- ok
+
+# Self-loop 20 -> 20 (one edge L) and 20 -> 21 (edge P).
+-STATEMENT MATCH (x {tag:20}) CREATE (x)-[:E]->(x)
+---- ok
+
+-STATEMENT MATCH (x {tag:20}), (y {tag:21}) CREATE (x)-[:E]->(y)
+---- ok
+
+# Two 2-hop walks out of 20: 20->20->20 reuses the loop edge, 20->20->21 uses
+# two distinct edges. Default WALK sees both ...
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (a {tag:20})-[]->(b)-[]->(c) RETURN c.tag ORDER BY c.tag")
+---- 2
+20
+21
+
+# ... DIFFERENT EDGES keeps only the edge-distinct one (single pattern → the
+# TRAIL machine: whole-pattern IS_TRAIL dual) ...
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH DIFFERENT EDGES (a {tag:20})-[]->(b)-[]->(c) RETURN c.tag ORDER BY c.tag")
+---- 1
+21
+
+-CHECK_ORDER
+-STATEMENT MATCH p = (a {tag:20})-[]->(b)-[]->(c) WHERE IS_TRAIL(p) RETURN c.tag ORDER BY c.tag
+---- 1
+21
+
+# ... and on a single var-length slot the mode lands on the slot as *TRAIL,
+# which is exact by itself (no whole-pattern wrap).
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH DIFFERENT EDGES (a {tag:20})-[e]->{2,2}(c) RETURN c.tag ORDER BY c.tag")
+---- 1
+21
+
+-CHECK_ORDER
+-STATEMENT MATCH (a {tag:20})-[e*TRAIL 2..2]->(c) RETURN c.tag ORDER BY c.tag
+---- 1
+21
+
+
+-CASE DifferentEdgesMultiPatternRejected
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(v INT64, PRIMARY KEY(v))
+---- ok
+
+# Single-pattern DIFFERENT EDGES is TRAIL (above); across a comma-separated
+# path pattern list edge distinctness is unexpressible — loud rejection.
+-STATEMENT CALL GQL("MATCH DIFFERENT EDGES (a:T)-[r]->(b:T), (c:T)-[s]->(d:T) RETURN a.v")
+---- error
+Runtime exception: GQL feature not supported: DIFFERENT EDGES over multiple path patterns
+
+
+-CASE RepeatableElementsNoOp
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE GRAPH re ANY
+---- ok
+
+-STATEMENT USE GRAPH re
+---- ok
+
+-STATEMENT CREATE (s {tag:20})
+---- ok
+
+-STATEMENT CREATE (m {tag:21})
+---- ok
+
+-STATEMENT MATCH (x {tag:20}) CREATE (x)-[:E]->(x)
+---- ok
+
+-STATEMENT MATCH (x {tag:20}), (y {tag:21}) CREATE (x)-[:E]->(y)
+---- ok
+
+# REPEATABLE ELEMENTS is LadybugDB's default MATCH (edge repetition allowed):
+# identical rows as the mode-less GQL form and plain Cypher — a no-op pin.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (a {tag:20})-[]->(b)-[]->(c) RETURN c.tag ORDER BY c.tag")
+---- 2
+20
+21
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH REPEATABLE ELEMENTS (a {tag:20})-[]->(b)-[]->(c) RETURN c.tag ORDER BY c.tag")
+---- 2
+20
+21
+
+-CHECK_ORDER
+-STATEMENT MATCH (a {tag:20})-[]->(b)-[]->(c) RETURN c.tag ORDER BY c.tag
+---- 2
+20
+21
+
+
+-CASE IsLabeledTypedParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE P(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE NODE TABLE Q(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE (:P {v:1}), (:Q {v:2}), (:P {v:3})
+---- ok
+
+# IS LABELED / IS NOT LABELED on a typed graph (labels(v) = 'P' form).
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n) WHERE n IS LABELED P RETURN n.v ORDER BY n.v")
+---- 2
+1
+3
+
+-CHECK_ORDER
+-STATEMENT MATCH (n) WHERE labels(n) = 'P' RETURN n.v ORDER BY n.v
+---- 2
+1
+3
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n) WHERE n IS NOT LABELED P RETURN n.v ORDER BY n.v")
+---- 1
+2
+
+-CHECK_ORDER
+-STATEMENT MATCH (n) WHERE NOT labels(n) = 'P' RETURN n.v ORDER BY n.v
+---- 1
+2
+
+# Compound label expression inside IS LABELED: a typed-graph node never has
+# two labels -> no rows.
+-STATEMENT CALL GQL("MATCH (n) WHERE n IS LABELED P&Q RETURN n.v")
+---- 0
+
+-STATEMENT MATCH (n) WHERE labels(n) = 'P' AND labels(n) = 'Q' RETURN n.v
+---- 0
+
+# `%` on a typed graph: every node carries exactly its one table label -> TRUE.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n:%) RETURN n.v ORDER BY n.v")
+---- 3
+1
+2
+3
+
+-CHECK_ORDER
+-STATEMENT MATCH (n) WHERE true RETURN n.v ORDER BY n.v
+---- 3
+1
+2
+3
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n) WHERE n IS LABELED % RETURN n.v ORDER BY n.v")
+---- 3
+1
+2
+3
+
+
+-CASE IsLabeledCompoundAnyGraph
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE GRAPH tmpg ANY
+---- ok
+
+-STATEMENT USE GRAPH tmpg
+---- ok
+
+-STATEMENT CALL GQL("INSERT (a:A&B {v:1}), (b:A {v:2}), (c:B {v:3})")
+---- ok
+
+# Conjunction inside IS LABELED (ANY graph list_contains form).
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n) WHERE n IS LABELED A&B RETURN n.v ORDER BY n.v")
+---- 1
+1
+
+-CHECK_ORDER
+-STATEMENT MATCH (n) WHERE list_contains(labels(n), 'A') AND list_contains(labels(n), 'B') RETURN n.v ORDER BY n.v
+---- 1
+1
+
+# IS NOT LABELED negates the whole predicate.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n) WHERE n IS NOT LABELED A RETURN n.v ORDER BY n.v")
+---- 1
+3
+
+-CHECK_ORDER
+-STATEMENT MATCH (n) WHERE NOT list_contains(labels(n), 'A') RETURN n.v ORDER BY n.v
+---- 1
+3
+
+# Disjunction.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n) WHERE n IS LABELED A|B RETURN n.v ORDER BY n.v")
+---- 3
+1
+2
+3
+
+-CHECK_ORDER
+-STATEMENT MATCH (n) WHERE list_contains(labels(n), 'A') OR list_contains(labels(n), 'B') RETURN n.v ORDER BY n.v
+---- 3
+1
+2
+3

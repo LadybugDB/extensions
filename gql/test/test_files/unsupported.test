@@ -1,0 +1,387 @@
+-DATASET CSV empty
+-BUFFER_POOL_SIZE 1024000000
+
+--
+
+# Explicit "GQL feature not supported" errors — unmapped GQL constructs must
+# fail at translation time with a clear message, never with a misleading Cypher
+# error from silent pass-through.
+
+-CASE UnsupportedLetStatement
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("LET x = 1 RETURN x")
+---- error
+Runtime exception: GQL feature not supported: LET statement
+
+
+-CASE UnsupportedCreateOrReplaceGraph
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("CREATE OR REPLACE GRAPH g1 ANY")
+---- error
+Runtime exception: GQL feature not supported: CREATE OR REPLACE GRAPH
+
+
+-CASE UnsupportedUndirectedEdgeType
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("CREATE GRAPH TYPE utGt1 { (:A), (:A)~[:E]~(:A) }")
+---- error
+Runtime exception: GQL feature not supported: undirected edge type (LadybugDB rel tables are directed)
+
+
+-CASE UnsupportedMultiLabelNodeType
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("CREATE GRAPH TYPE mlGt1 { (:A&B) }")
+---- error
+Runtime exception: [22G0P] GQL feature not supported: multi-label label set (LadybugDB nodes have a single label)
+
+
+-CASE UnsupportedTimePropertyType
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("CREATE GRAPH TYPE ttGt1 { (:A {t LOCAL TIME}) }")
+---- error
+Runtime exception: GQL feature not supported: TIME type (LadybugDB has no TIME type)
+
+
+-CASE UnsupportedAnonymousNodeType
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("CREATE GRAPH TYPE anGt1 { ({x INT64}) }")
+---- error
+Runtime exception: [22G0N] GQL feature not supported: anonymous node type in a graph type
+
+
+-CASE UnsupportedCreateGraphLike
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("CREATE GRAPH gg1 LIKE gg2")
+---- error
+Runtime exception: GQL feature not supported: CREATE GRAPH ... LIKE <graph>
+
+
+-CASE UnsupportedCreateGraphTypeLike
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("CREATE GRAPH TYPE tlGt1 LIKE gg2")
+---- error
+Runtime exception: GQL feature not supported: CREATE GRAPH TYPE ... LIKE <graph>
+
+
+-CASE UnsupportedUndefinedGraphTypeReference
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("CREATE GRAPH ug1 notDefinedGt")
+---- error
+Runtime exception: Graph type notDefinedGt is not defined
+
+
+-CASE UnsupportedSetLabel
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CALL GQL("MATCH (n:T) SET n:Extra")
+---- error
+Runtime exception: GQL feature not supported: SET label (labels are table types in LadybugDB)
+
+
+-CASE UnsupportedRemoveLabel
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CALL GQL("MATCH (n:T) REMOVE n:T")
+---- error
+Runtime exception: GQL feature not supported: REMOVE label (labels are table types in LadybugDB)
+
+
+-CASE UnsupportedNextComposition
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("MATCH (n:T) RETURN n NEXT RETURN 1")
+---- error
+Runtime exception: GQL feature not supported: NEXT statement composition
+
+
+-CASE UnsupportedSessionSetSchema
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("SESSION SET SCHEMA /main")
+---- error
+Runtime exception: GQL feature not supported: SESSION SET SCHEMA
+
+
+-CASE UnsupportedLabelExpressionOperator
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(v INT64, PRIMARY KEY(v))
+---- ok
+
+# Compound label expressions and IS [NOT] LABELED predicates on nodes are
+# translated (see labels.test / smallmodes.test); what remains explicitly
+# unsupported is a label expression on an *edge* pattern and multi-label
+# INSERT sets on typed graphs.
+-STATEMENT CALL GQL("MATCH (a)-[e:X&Y]->(b) RETURN a.v")
+---- error
+Runtime exception: GQL feature not supported: label expression operator (&, !, |, parentheses)
+
+-STATEMENT CALL GQL("INSERT (n:T&S {v:1})")
+---- error
+Runtime exception: GQL feature not supported: multi-label insert on a typed graph
+
+
+# Interior node bindings are expanded as lists (see qpibind.test), but a list
+# has no properties: `a.v` on the quantified binding a is loud-rejected (this
+# CASE previously pinned "quantified path pattern" wholesale — its surviving
+# rejection is the property access, pinned exactly now).
+-CASE UnsupportedQuantifiedBindingPropertyAccess
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CALL GQL("MATCH ((a:T)-[r]->(b:T)){2} RETURN a.v")
+---- error
+Runtime exception: GQL feature not supported: quantified path pattern interior binding property access
+
+
+# The fixed-count form {2} is now expanded in place (moved to
+# multihop.test.MultiHopFixedCountParity); the unbounded form still rejects.
+-CASE UnsupportedQuantifiedMultiHop
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CALL GQL("MATCH (()-[]->()-[]->()){2,} RETURN count(*)")
+---- error
+Runtime exception: GQL feature not supported: unbounded quantified path pattern over a multi-edge interior
+
+
+-CASE UnsupportedQuantifiedNodePattern
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CALL GQL("MATCH (n:T){2} RETURN n.v")
+---- error(regex)
+Runtime exception: GQL feature not supported: quantified path pattern .+
+
+
+-CASE UnsupportedCountedShortestSearch
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CALL GQL("MATCH SHORTEST 2 (n:T)-[r]->(m:T) RETURN n.v")
+---- error
+Runtime exception: GQL feature not supported: SHORTEST <k>/GROUP(S) search prefix
+
+
+-CASE UnsupportedAnyKPathsSearch
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CALL GQL("MATCH ANY 2 PATHS (n:T)-[r]->(m:T) RETURN n.v")
+---- error
+Runtime exception: GQL feature not supported: ANY <k> PATHS search prefix
+
+
+-CASE UnsupportedSearchPrefixOnMultiHop
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CALL GQL("MATCH ANY SHORTEST (a:T)-[r]->(b:T)-[s]->(c:T) RETURN a.v")
+---- error
+Runtime exception: GQL feature not supported: path mode/search prefix on multi-hop pattern
+
+
+-CASE UnsupportedDifferentEdgesMultiplePatterns
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(v INT64, PRIMARY KEY(v))
+---- ok
+
+# Single-pattern DIFFERENT EDGES is TRAIL (pinned in smallmodes.test); across
+# a comma-separated path pattern list edge distinctness is unexpressible.
+-STATEMENT CALL GQL("MATCH DIFFERENT EDGES (a:T)-[r]->(b:T), (c:T)-[s]->(d:T) RETURN a.v")
+---- error
+Runtime exception: GQL feature not supported: DIFFERENT EDGES over multiple path patterns
+
+
+-CASE UnsupportedSelectDistinctWithAggregation
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CALL GQL("SELECT DISTINCT n.v AS v, count(*) AS c FROM main MATCH (n:T)")
+---- error
+Runtime exception: GQL feature not supported: SELECT DISTINCT with aggregation
+
+
+-CASE UnsupportedMergeIsNotGql
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(v INT64, PRIMARY KEY(v))
+---- ok
+
+# MERGE is a Cypher extension, not ISO GQL — a GQL parser rejects it.
+-STATEMENT CALL GQL("MERGE (n:T {v: 1})")
+---- error(regex)
+Runtime exception: Failed to parse GQL query: MERGE .+
+
+
+-CASE UnsupportedTransactionWrappedProgram
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CALL GQL("START TRANSACTION MATCH (n:T) RETURN n COMMIT")
+---- error
+Runtime exception: GQL feature not supported: transaction-wrapped program in a single CALL GQL (issue BEGIN/COMMIT as separate CALL GQL statements)
+
+
+-CASE UnsupportedMapValue
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+# GQL record/map values have no LadybugDB expression counterpart.
+-STATEMENT CALL GQL("RETURN {} AND true")
+---- error
+Runtime exception: GQL feature not supported: map value
+
+-STATEMENT CALL GQL("RETURN {x: 1}")
+---- error
+Runtime exception: GQL feature not supported: map value
+
+
+-CASE UnsupportedHeterogeneousListLiteral
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+# LadybugDB homogenizes mixed list literals (types erased, STRING sink) which
+# silently changes max()/min() results; GQL preserves element types.
+-STATEMENT CALL GQL("RETURN [1, 'a']")
+---- error
+Runtime exception: GQL feature not supported: heterogeneous list literal
+
+# INT and DOUBLE count as different classes: LadybugDB would promote 1 to 1.0.
+-STATEMENT CALL GQL("RETURN [1, 2.0]")
+---- error
+Runtime exception: GQL feature not supported: heterogeneous list literal
+
+-STATEMENT CALL GQL("RETURN [1, [2]]")
+---- error
+Runtime exception: GQL feature not supported: heterogeneous list literal
+
+# Homogeneous lists still work.
+-STATEMENT CALL GQL("RETURN [1, 2] AS xs")
+---- 1
+[1,2]
+
+
+-CASE UnsupportedStarProjectionWithGeneratedBindings
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE GRAPH tmpg ANY
+---- ok
+
+-STATEMENT USE GRAPH tmpg
+---- ok
+
+-STATEMENT CALL GQL("INSERT (:A&B {v:1})")
+---- ok
+
+# An anonymous node carrying a compound label expression is translated under
+# a generated name (_gql_nl0); a bare star would leak it as a result column
+# where GQL declares no binding at all.
+-STATEMENT CALL GQL("MATCH (:A&B) RETURN *")
+---- error
+Runtime exception: GQL feature not supported: star projection with generated pattern bindings
+
+
+-CASE UnsupportedStarProjectionWithPathModeWrap
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1})-[:KNOWS]->(:Person {v:2})-[:KNOWS]->(:Person {v:3})
+---- ok
+
+# Multi-hop TRAIL wraps the chain in a generated path variable (_gql_pp0) for
+# the IS_TRAIL predicate; a bare star would leak that path as a sixth column.
+-STATEMENT CALL GQL("MATCH TRAIL (a:Person)-[r1:KNOWS]->(b:Person)-[r2:KNOWS]->(c:Person) RETURN *")
+---- error
+Runtime exception: GQL feature not supported: star projection with generated pattern bindings

@@ -2,6 +2,7 @@ include_directories(
         ${PROJECT_SOURCE_DIR}/src/include
         ${CMAKE_BINARY_DIR}/src/include
         ${PROJECT_SOURCE_DIR}/third_party/antlr4_runtime/src
+        ${PROJECT_SOURCE_DIR}/third_party/yyjson/src  # For _GQL_TO_JSON/_GQL_MAX/_GQL_MIN (json_utils.h pulls in yyjson.h)
         src/include
         src/parser
         ${PROJECT_SOURCE_DIR}/src/include/parser/antlr_parser)  # For GQL parser includes

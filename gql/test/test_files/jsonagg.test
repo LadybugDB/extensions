@@ -1,0 +1,340 @@
+-DATASET CSV empty
+-BUFFER_POOL_SIZE 1024000000
+
+--
+
+# Q2 JSON/typed aggregate parity (sum/avg) — dual-run: every GQL statement
+# via CALL GQL("...") is paired with equivalent Cypher over the same inputs,
+# and both must produce the same rows. Cypher twins call the extension
+# aggregates _gql_sum/_gql_avg directly, pinning that the GQL call-position
+# splice (sum( -> _gql_sum( and the direct call run the same code;
+# TypedSumNativeParity instead pairs against native sum/avg to pin display
+# and semantics parity with the engine's own aggregates. Display forms: JSON
+# (ANY-graph) results are yyjson-preserved text — all-int SUM prints the
+# bare integer ("75", never "75.0"), a mixed SUM prints real text ("6.5"),
+# AVG always prints real text ("37.5", "10.0"); typed results print exactly
+# like native SUM/AVG (int stays int "75", DOUBLE is %.6f "3.750000").
+# NULL aggregates (empty group / all-NULL input) print an empty cell — the
+# engine's Value::toString form (value.cpp:604-606 returns ""; same
+# convention as run_tck.py "empty cell for NULL" and the empty expected rows
+# in test/test_files/function/utility/constant_or_null.test:8-9; a trailing
+# NULL cell prints "z|" as in test/test_files/agg/hash.test:13).
+
+-CASE AnyGraphSumParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE GRAPH g ANY
+---- ok
+
+-STATEMENT USE GRAPH g
+---- ok
+
+# TCK Aggregation3 [1] shape: three Persons named 'a' with ages 33, (none),
+# 42 — sum skips the missing age -> 75. Unaliased GQL projection columns
+# take the GQL source text (p.name | sum(p.age)); pinned here with
+# -CHECK_COLUMN_NAMES. The Cypher twin's engine names differ
+# (p.name | _gql_sum(p.age)), so only its rows are checked.
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'a', age: 33}), (m:Person {name: 'a'}), (o:Person {name: 'a', age: 42})")
+---- ok
+
+-CHECK_ORDER
+-CHECK_COLUMN_NAMES
+-STATEMENT CALL GQL("MATCH (p) RETURN p.name, sum(p.age)")
+---- 2
+p.name|sum(p.age)
+a|75
+
+-CHECK_ORDER
+-STATEMENT MATCH (p) RETURN p.name, _gql_sum(p.age)
+---- 1
+a|75
+
+
+-CASE AnyGraphAvgParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE GRAPH g ANY
+---- ok
+
+-STATEMENT USE GRAPH g
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'a', age: 33}), (m:Person {name: 'a', age: 42})")
+---- ok
+
+# AVG over JSON ints is always real text: (33 + 42) / 2 -> 37.5.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (p) RETURN avg(p.age)")
+---- 1
+37.5
+
+-CHECK_ORDER
+-STATEMENT MATCH (p) RETURN _gql_avg(p.age)
+---- 1
+37.5
+
+
+-CASE AnyGraphMixedSumParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE GRAPH g ANY
+---- ok
+
+-STATEMENT USE GRAPH g
+---- ok
+
+# Group 'm' has a real (1 + 2.5 + 3 = 6.5 -> real text); group 'i' is
+# all-int (1 + 2 = 3 -> integer text "3", never "3.0"). Rows are emitted in
+# sorted order (no -CHECK_ORDER): the harness sorts both sides.
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'm', age: 1}), (m:Person {name: 'm', age: 2.5}), (o:Person {name: 'm', age: 3}), (i:Person {name: 'i', age: 1}), (j:Person {name: 'i', age: 2})")
+---- ok
+
+-STATEMENT CALL GQL("MATCH (p) RETURN p.name, sum(p.age)")
+---- 2
+i|3
+m|6.5
+
+-STATEMENT MATCH (p) RETURN p.name, _gql_sum(p.age)
+---- 2
+i|3
+m|6.5
+
+
+-CASE SumNullSemanticsParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE GRAPH g ANY
+---- ok
+
+-STATEMENT USE GRAPH g
+---- ok
+
+# Group 'z' has no age at all -> sum and avg are NULL (empty cell after the
+# pipe), not 0; group 'y' (age 10) shows int sum 10 and real avg 10.0 next
+# to it, pinning int-vs-real text per aggregate.
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'y', age: 10}), (m:Person {name: 'z'}), (o:Person {name: 'z'})")
+---- ok
+
+-STATEMENT CALL GQL("MATCH (p) RETURN p.name, sum(p.age)")
+---- 2
+y|10
+z|
+
+-STATEMENT MATCH (p) RETURN p.name, _gql_sum(p.age)
+---- 2
+y|10
+z|
+
+-STATEMENT CALL GQL("MATCH (p) RETURN p.name, avg(p.age)")
+---- 2
+y|10.0
+z|
+
+-STATEMENT MATCH (p) RETURN p.name, _gql_avg(p.age)
+---- 2
+y|10.0
+z|
+
+
+-CASE SumDistinctParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE GRAPH g ANY
+---- ok
+
+-STATEMENT USE GRAPH g
+---- ok
+
+# 33 + 42 + 33 = 108; DISTINCT collapses the duplicate 33 -> 75. All-int
+# JSON input, so both stay integer text.
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'a', age: 33}), (m:Person {name: 'a', age: 42}), (o:Person {name: 'a', age: 33})")
+---- ok
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (p) RETURN sum(p.age), sum(DISTINCT p.age)")
+---- 1
+108|75
+
+-CHECK_ORDER
+-STATEMENT MATCH (p) RETURN _gql_sum(p.age), _gql_sum(DISTINCT p.age)
+---- 1
+108|75
+
+
+# Typed (table graph) regression pin: GQL aggregates on native columns must
+# match engine SUM/AVG display exactly — bare int for INT64 sum, %.6f for
+# DOUBLE sum and for any AVG, empty cell (NULL) for all-NULL input. The
+# Cypher side here is deliberately NATIVE sum/avg (not _gql_sum): this
+# anchors the rewrite to the engine's own display, not to itself.
+-CASE TypedSumNativeParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(x INT64, y DOUBLE, z INT64, PRIMARY KEY(x))
+---- ok
+
+-STATEMENT CREATE (:T {x: 30, y: 1.5}), (:T {x: 45, y: 2.25})
+---- ok
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n:T) RETURN sum(n.x)")
+---- 1
+75
+
+-CHECK_ORDER
+-STATEMENT MATCH (n:T) RETURN sum(n.x)
+---- 1
+75
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n:T) RETURN sum(n.y)")
+---- 1
+3.750000
+
+-CHECK_ORDER
+-STATEMENT MATCH (n:T) RETURN sum(n.y)
+---- 1
+3.750000
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n:T) RETURN avg(n.x)")
+---- 1
+37.500000
+
+-CHECK_ORDER
+-STATEMENT MATCH (n:T) RETURN avg(n.x)
+---- 1
+37.500000
+
+# z is never set: all-NULL column -> sum and avg are NULL (empty row), on
+# both the GQL side and the native side.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n:T) RETURN sum(n.z)")
+---- 1
+
+-CHECK_ORDER
+-STATEMENT MATCH (n:T) RETURN sum(n.z)
+---- 1
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n:T) RETURN avg(n.z)")
+---- 1
+
+-CHECK_ORDER
+-STATEMENT MATCH (n:T) RETURN avg(n.z)
+---- 1
+
+
+# Phase 8 max/min regression kept green alongside the new sum: mixed JSON
+# ages 9 (int), 100 (int), 33.5 (real) -> max 100 and min 9 print as int
+# text (winner keeps its type), sum 142.5 as real text — one row.
+-CASE SumMinMaxRegressionParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE GRAPH g ANY
+---- ok
+
+-STATEMENT USE GRAPH g
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:Person {v: 1, age: 9}), (m:Person {v: 2, age: 100}), (o:Person {v: 3, age: 33.5})")
+---- ok
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (p) RETURN max(p.age), min(p.age), sum(p.age)")
+---- 1
+100|9|142.5
+
+-CHECK_ORDER
+-STATEMENT MATCH (p) RETURN _gql_max(p.age), _gql_min(p.age), _gql_sum(p.age)
+---- 1
+100|9|142.5
+
+
+# SumFunction multiplicity: the cartesian product (2 Persons x 3 Others)
+# feeds each Person's age to the aggregate 3 times -> (33 + 42) * 3 = 225.
+-CASE SumMultiplicityParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE GRAPH g ANY
+---- ok
+
+-STATEMENT USE GRAPH g
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:Person {v: 1, age: 33}), (m:Person {v: 2, age: 42}), (o:Other {v: 1}), (q:Other {v: 2}), (r:Other {v: 3})")
+---- ok
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (p:Person), (q:Other) RETURN sum(p.age)")
+---- 1
+225
+
+-CHECK_ORDER
+-STATEMENT MATCH (p:Person), (q:Other) RETURN _gql_sum(p.age)
+---- 1
+225
+
+
+# Non-numeric input must be rejected LOUDLY on both paths: a typed STRING
+# column (bind-stage rejection, GQL rewrite and native sum alike) and an
+# ANY-graph JSON string property (runtime rejection inside _gql_sum/_gql_avg).
+# error(regex) with [\s\S]+ asserts some error is raised, whatever its text.
+-CASE NonNumericSumRejected
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE S(w STRING, PRIMARY KEY(w))
+---- ok
+
+-STATEMENT CREATE (:S {w: 'x'})
+---- ok
+
+-STATEMENT CALL GQL("MATCH (n:S) RETURN sum(n.w)")
+---- error(regex)
+[\s\S]+
+
+-STATEMENT MATCH (n:S) RETURN _gql_sum(n.w)
+---- error(regex)
+[\s\S]+
+
+-STATEMENT CREATE GRAPH g ANY
+---- ok
+
+-STATEMENT USE GRAPH g
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'a', age: 'x'})")
+---- ok
+
+-STATEMENT CALL GQL("MATCH (p) RETURN sum(p.age)")
+---- error(regex)
+[\s\S]+
+
+-STATEMENT MATCH (p) RETURN _gql_sum(p.age)
+---- error(regex)
+[\s\S]+
+
+-STATEMENT CALL GQL("MATCH (p) RETURN avg(p.age)")
+---- error(regex)
+[\s\S]+
+
+-STATEMENT MATCH (p) RETURN _gql_avg(p.age)
+---- error(regex)
+[\s\S]+

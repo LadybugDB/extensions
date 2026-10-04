@@ -1,0 +1,160 @@
+-DATASET CSV empty
+-BUFFER_POOL_SIZE 1024000000
+
+--
+
+# Label expressions (GQL feature G074): `:A&B` = has both, `:A|B` = has
+# either, `:!A` = lacks A. Compound expressions translate to WHERE predicates
+# over labels(v) whose form follows the graph kind — ANY graphs (labels in a
+# STRING[] column) use list_contains; typed graphs (one label = table name)
+# use scalar equality. Dual-run parity: GQL vs the equivalent Cypher.
+
+-CASE LabelExpressionAnyGraphParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE GRAPH g ANY
+---- ok
+
+-STATEMENT USE GRAPH g
+---- ok
+
+# INSERT takes a definite label set: n gets labels A and B.
+-STATEMENT CALL GQL("INSERT (n:A&B {v:1}), (m:A {v:2}), (o:B {v:3})")
+---- ok
+
+# Conjunction :A&B — only the multi-label node.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n:A&B) RETURN n.v AS v ORDER BY v")
+---- 1
+1
+
+-CHECK_ORDER
+-STATEMENT MATCH (n) WHERE list_contains(labels(n), 'A') AND list_contains(labels(n), 'B') RETURN n.v AS v ORDER BY v
+---- 1
+1
+
+# Disjunction :A|B — all three nodes.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n:A|B) RETURN n.v AS v ORDER BY v")
+---- 3
+1
+2
+3
+
+-CHECK_ORDER
+-STATEMENT MATCH (n) WHERE list_contains(labels(n), 'A') OR list_contains(labels(n), 'B') RETURN n.v AS v ORDER BY v
+---- 3
+1
+2
+3
+
+# Negation :!A — only the B node.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n:!A) RETURN n.v AS v ORDER BY v")
+---- 1
+3
+
+-CHECK_ORDER
+-STATEMENT MATCH (n) WHERE NOT list_contains(labels(n), 'A') RETURN n.v AS v ORDER BY v
+---- 1
+3
+
+# Parenthesised mix :(!A|(A&B)) — B-only or both: v = 1, 3.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n:(!A|(A&B))) RETURN n.v AS v ORDER BY v")
+---- 2
+1
+3
+
+-CHECK_ORDER
+-STATEMENT MATCH (n) WHERE (NOT list_contains(labels(n), 'A')) OR (list_contains(labels(n), 'A') AND list_contains(labels(n), 'B')) RETURN n.v AS v ORDER BY v
+---- 2
+1
+3
+
+# Compound labels combine with property maps.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n:A&B {v:1}) RETURN n.v AS v")
+---- 1
+1
+
+
+-CASE LabelExpressionTypedGraphParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE A(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE NODE TABLE B(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE (:A {v:1}), (:B {v:2})
+---- ok
+
+# Conjunction of distinct labels is unsatisfiable on single-label nodes.
+-STATEMENT CALL GQL("MATCH (n:A&B) RETURN n.v AS v")
+---- 0
+
+-STATEMENT MATCH (n) WHERE labels(n) = 'A' AND labels(n) = 'B' RETURN n.v AS v
+---- 0
+
+# Disjunction is the union of both tables.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n:A|B) RETURN n.v AS v ORDER BY v")
+---- 2
+1
+2
+
+-CHECK_ORDER
+-STATEMENT MATCH (n) WHERE labels(n) = 'A' OR labels(n) = 'B' RETURN n.v AS v ORDER BY v
+---- 2
+1
+2
+
+# Negation keeps the other table only.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n:!A) RETURN n.v AS v")
+---- 1
+2
+
+-CHECK_ORDER
+-STATEMENT MATCH (n) WHERE NOT labels(n) = 'A' RETURN n.v AS v
+---- 1
+2
+
+# Same-label conjunction reduces to that label.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n:A&A) RETURN n.v AS v")
+---- 1
+1
+
+-CHECK_ORDER
+-STATEMENT MATCH (n) WHERE labels(n) = 'A' AND labels(n) = 'A' RETURN n.v AS v
+---- 1
+1
+
+
+# The colon chain `:A:B` is not GQL label-expression syntax: ISO GQL's
+# <label conjunction> is `<label term> <ampersand> <label factor>` only, and
+# an element pattern filler holds exactly one <is label expression> slot (the
+# vendored GQL.g4 mirrors both). Such input dies at the GQL parser — loudly,
+# long before any target-dialect reading of the spelling can apply (Cypher 25
+# colon = AND; LadybugDB's engine: AND on ANY graphs, table union on typed).
+# Correct spellings are `:A&B` / `:A|B`.
+
+-CASE ColonLabelChainNotGqlSyntax
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("MATCH (n:A:B) RETURN 1")
+---- error(regex)
+Runtime exception: Failed to parse GQL query: MATCH .+
+
+-STATEMENT CALL GQL("INSERT (n:A:B {v:1})")
+---- error(regex)
+Runtime exception: Failed to parse GQL query: INSERT .+

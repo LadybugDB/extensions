@@ -1,0 +1,348 @@
+-DATASET CSV empty
+-BUFFER_POOL_SIZE 1024000000
+
+--
+
+# Phase 4 — schema bridge: CREATE GRAPH TYPE / typed CREATE GRAPH expanded to
+# CREATE NODE TABLE / CREATE REL TABLE DDL. Dual-run parity: each GQL case is
+# followed by the equivalent Cypher schema + data asserting the same rows.
+# Node tables carry the synthetic "_gql_id SERIAL PRIMARY KEY" the bridge adds
+# (GQL node types have no key property; LadybugDB node tables require one).
+
+-CASE CreateGraphTypePatternParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+# Graph type in the TCK-canonical pattern form: named node type + pattern edge.
+-CHECK_ORDER
+-STATEMENT CALL GQL("CREATE GRAPH TYPE socialPat1 { (Person :Person {name STRING, age INT64}), (Person)-[:KNOWS {since INT64}]->(Person) }")
+---- 0
+
+-STATEMENT CALL GQL("CREATE GRAPH socialPat1_g socialPat1")
+---- ok
+
+-STATEMENT CALL GQL("INSERT (a:Person {name: 'Alice', age: 30}), (b:Person {name: 'Bob', age: 25})")
+---- 0
+
+-STATEMENT CALL GQL("MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) INSERT (a)-[:KNOWS {since: 2020}]->(b)")
+---- 0
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n:Person) RETURN n.name AS name, n.age AS age ORDER BY n.name")
+---- 2
+Alice|30
+Bob|25
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (a:Person)-[e:KNOWS]->(b:Person) RETURN a.name AS a, e.since AS since, b.name AS b")
+---- 1
+Alice|2020|Bob
+
+# Equivalent Cypher: the very DDL the bridge emits, on a twin graph.
+-STATEMENT CREATE GRAPH socialPat1_c
+---- ok
+
+-STATEMENT USE GRAPH socialPat1_c
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(_gql_id SERIAL PRIMARY KEY, name STRING, age INT64)
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person, since INT64)
+---- ok
+
+-STATEMENT CREATE (a:Person {name: 'Alice', age: 30}), (b:Person {name: 'Bob', age: 25})
+---- ok
+
+-STATEMENT MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS {since: 2020}]->(b)
+---- ok
+
+-CHECK_ORDER
+-STATEMENT MATCH (n:Person) RETURN n.name AS name, n.age AS age ORDER BY n.name
+---- 2
+Alice|30
+Bob|25
+
+-CHECK_ORDER
+-STATEMENT MATCH (a:Person)-[e:KNOWS]->(b:Person) RETURN a.name AS a, e.since AS since, b.name AS b
+---- 1
+Alice|2020|Bob
+
+-STATEMENT USE GRAPH main
+---- ok
+
+-STATEMENT DROP GRAPH socialPat1_c
+---- ok
+
+
+-CASE CreateGraphTypePhraseParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+# Phrase form: named node/edge types with CONNECTING endpoints.
+-CHECK_ORDER
+-STATEMENT CALL GQL("CREATE GRAPH TYPE socialPhr1 AS { NODE Person {name STRING}, NODE Post {content STRING}, DIRECTED EDGE KNOWS CONNECTING (Person TO Person), DIRECTED EDGE POSTED {ts INT64} CONNECTING (Person TO Post) }")
+---- 0
+
+-STATEMENT CALL GQL("CREATE GRAPH socialPhr1_g socialPhr1")
+---- ok
+
+-STATEMENT CALL GQL("INSERT (a:Person {name: 'Alice'}), (p:Post {content: 'Hello'})")
+---- 0
+
+-STATEMENT CALL GQL("MATCH (a:Person {name: 'Alice'}), (p:Post) INSERT (a)-[:POSTED {ts: 2026}]->(p)")
+---- 0
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (a:Person)-[e:POSTED]->(p:Post) RETURN a.name AS who, e.ts AS ts, p.content AS what")
+---- 1
+Alice|2026|Hello
+
+-STATEMENT CREATE GRAPH socialPhr1_c
+---- ok
+
+-STATEMENT USE GRAPH socialPhr1_c
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(_gql_id SERIAL PRIMARY KEY, name STRING)
+---- ok
+
+-STATEMENT CREATE NODE TABLE Post(_gql_id SERIAL PRIMARY KEY, content STRING)
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE REL TABLE POSTED(FROM Person TO Post, ts INT64)
+---- ok
+
+-STATEMENT CREATE (a:Person {name: 'Alice'}), (p:Post {content: 'Hello'})
+---- ok
+
+-STATEMENT MATCH (a:Person {name: 'Alice'}), (p:Post) CREATE (a)-[:POSTED {ts: 2026}]->(p)
+---- ok
+
+-CHECK_ORDER
+-STATEMENT MATCH (a:Person)-[e:POSTED]->(p:Post) RETURN a.name AS who, e.ts AS ts, p.content AS what
+---- 1
+Alice|2026|Hello
+
+-STATEMENT USE GRAPH main
+---- ok
+
+-STATEMENT DROP GRAPH socialPhr1_c
+---- ok
+
+
+-CASE CreateGraphInlineTypeParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+# Inline nested graph type on CREATE GRAPH — no CREATE GRAPH TYPE needed.
+-STATEMENT CALL GQL("CREATE GRAPH inline_g { (Item :Item {sku STRING, qty INT64}), (Item)-[:BOUGHT]->(Item) }")
+---- ok
+
+-STATEMENT CALL GQL("INSERT (x:Item {sku: 'A1', qty: 3}), (y:Item {sku: 'B2', qty: 9})")
+---- 0
+
+-STATEMENT CALL GQL("MATCH (x:Item {sku: 'A1'}), (y:Item {sku: 'B2'}) INSERT (x)-[:BOUGHT]->(y)")
+---- 0
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (x:Item)-[:BOUGHT]->(y:Item) RETURN x.sku AS x, y.sku AS y")
+---- 1
+A1|B2
+
+-STATEMENT CREATE GRAPH inline_c
+---- ok
+
+-STATEMENT USE GRAPH inline_c
+---- ok
+
+-STATEMENT CREATE NODE TABLE Item(_gql_id SERIAL PRIMARY KEY, sku STRING, qty INT64)
+---- ok
+
+-STATEMENT CREATE REL TABLE BOUGHT(FROM Item TO Item)
+---- ok
+
+-STATEMENT CREATE (x:Item {sku: 'A1', qty: 3}), (y:Item {sku: 'B2', qty: 9})
+---- ok
+
+-STATEMENT MATCH (x:Item {sku: 'A1'}), (y:Item {sku: 'B2'}) CREATE (x)-[:BOUGHT]->(y)
+---- ok
+
+-CHECK_ORDER
+-STATEMENT MATCH (x:Item)-[:BOUGHT]->(y:Item) RETURN x.sku AS x, y.sku AS y
+---- 1
+A1|B2
+
+-STATEMENT USE GRAPH main
+---- ok
+
+-STATEMENT DROP GRAPH inline_c
+---- ok
+
+
+-CASE GraphTypeRegistryLifecycle
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("CREATE GRAPH TYPE lifeGt1 AS { NODE A {x INT64} }")
+---- 0
+
+-STATEMENT CALL GQL("CREATE GRAPH TYPE lifeGt1 AS { NODE B {x INT64} }")
+---- error
+Runtime exception: Graph type lifeGt1 already exists
+
+-STATEMENT CALL GQL("CREATE GRAPH TYPE IF NOT EXISTS lifeGt1 AS { NODE B {x INT64} }")
+---- 0
+
+# IF NOT EXISTS keeps the original definition (node type A).
+-STATEMENT CALL GQL("CREATE GRAPH life_g1 lifeGt1")
+---- ok
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n:A) RETURN count(*) AS c")
+---- 1
+0
+
+# OR REPLACE swaps in the new definition (node type B).
+-CHECK_ORDER
+-STATEMENT CALL GQL("CREATE OR REPLACE GRAPH TYPE lifeGt1 AS { NODE B {x INT64} }")
+---- 0
+
+-STATEMENT CALL GQL("CREATE GRAPH life_g2 lifeGt1")
+---- ok
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n:B) RETURN count(*) AS c")
+---- 1
+0
+
+# COPY OF duplicates a registered type.
+-CHECK_ORDER
+-STATEMENT CALL GQL("CREATE GRAPH TYPE lifeGt2 AS COPY OF lifeGt1")
+---- 0
+
+-STATEMENT CALL GQL("CREATE GRAPH life_g3 lifeGt2")
+---- ok
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n:B) RETURN count(*) AS c")
+---- 1
+0
+
+-STATEMENT CALL GQL("DROP GRAPH TYPE lifeGt2")
+---- 0
+
+-STATEMENT CALL GQL("CREATE GRAPH life_g4 lifeGt2")
+---- error
+Runtime exception: Graph type lifeGt2 is not defined
+
+-STATEMENT CALL GQL("DROP GRAPH TYPE IF EXISTS lifeGtGone")
+---- 0
+
+-STATEMENT CALL GQL("DROP GRAPH TYPE lifeGtGone")
+---- error
+Runtime exception: Graph type lifeGtGone does not exist
+
+
+-CASE TypedGraphSetDeleteParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("CREATE GRAPH TYPE tdGt1 AS { (P :P {v INT64}), (P)-[:REL]->(P) }")
+---- 0
+
+-STATEMENT CALL GQL("CREATE GRAPH td_g tdGt1")
+---- ok
+
+-STATEMENT CALL GQL("INSERT (a:P {v: 1}), (b:P {v: 2})")
+---- 0
+
+-STATEMENT CALL GQL("MATCH (a:P {v: 1}), (b:P {v: 2}) INSERT (a)-[:REL]->(b)")
+---- 0
+
+-STATEMENT CALL GQL("MATCH (n:P {v: 1}) SET n.v = 10")
+---- 0
+
+-STATEMENT CALL GQL("MATCH (n:P {v: 2}) DETACH DELETE n")
+---- 0
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n:P) RETURN n.v AS v ORDER BY n.v")
+---- 1
+10
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH ()-[r:REL]->() RETURN count(*) AS c")
+---- 1
+0
+
+# Same operations in equivalent Cypher on the twin graph.
+-STATEMENT CREATE GRAPH td_c
+---- ok
+
+-STATEMENT USE GRAPH td_c
+---- ok
+
+-STATEMENT CREATE NODE TABLE P(_gql_id SERIAL PRIMARY KEY, v INT64)
+---- ok
+
+-STATEMENT CREATE REL TABLE REL(FROM P TO P)
+---- ok
+
+-STATEMENT CREATE (a:P {v: 1}), (b:P {v: 2})
+---- ok
+
+-STATEMENT MATCH (a:P {v: 1}), (b:P {v: 2}) CREATE (a)-[:REL]->(b)
+---- ok
+
+-STATEMENT MATCH (n:P {v: 1}) SET n.v = 10
+---- ok
+
+-STATEMENT MATCH (n:P {v: 2}) DETACH DELETE n
+---- ok
+
+-CHECK_ORDER
+-STATEMENT MATCH (n:P) RETURN n.v AS v ORDER BY n.v
+---- 1
+10
+
+-CHECK_ORDER
+-STATEMENT MATCH ()-[r:REL]->() RETURN count(*) AS c
+---- 1
+0
+
+-STATEMENT USE GRAPH main
+---- ok
+
+-STATEMENT DROP GRAPH td_c
+---- ok
+
+
+-CASE CreateGraphTypeKeywordLeniency
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("CREATE GRAPH TYPE glGt1 AS { NODE A {x INT64} }")
+---- 0
+
+# Tools often write "CREATE GRAPH g TYPE t"; ISO GQL spells it "CREATE GRAPH g t".
+# The pre-parse normalization drops that one keyword (same leniency as FROM GRAPH).
+-STATEMENT CALL GQL("CREATE GRAPH gl_g TYPE glGt1")
+---- ok
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n:A) RETURN count(*) AS c")
+---- 1
+0

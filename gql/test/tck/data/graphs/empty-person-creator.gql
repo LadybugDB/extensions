@@ -1,0 +1,4 @@
+CREATE GRAPH mygraph {
+    (Person :Person {name STRING, age INT}),
+    (Person)-[:KNOWS]->(Person)
+}

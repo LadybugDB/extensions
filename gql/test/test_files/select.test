@@ -1,0 +1,198 @@
+-DATASET CSV empty
+-BUFFER_POOL_SIZE 1024000000
+
+--
+
+# SELECT ... FROM GRAPH ... MATCH ... — dual-run parity: every GQL case is
+# followed by the equivalent Cypher asserting the same expected result.
+
+-CASE SelectSimpleParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(name STRING, age INT64, PRIMARY KEY(name))
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'Alice', age: 30})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'Bob', age: 25})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'Carol', age: 35})")
+---- 0
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("SELECT n.name AS name, n.age AS age FROM GRAPH main MATCH (n:Person) WHERE n.age > 26 ORDER BY n.name")
+---- 2
+Alice|30
+Carol|35
+
+-CHECK_ORDER
+-STATEMENT MATCH (n:Person) WHERE n.age > 26 RETURN n.name AS name, n.age AS age ORDER BY n.name
+---- 2
+Alice|30
+Carol|35
+
+
+-CASE SelectDistinctParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(name STRING, age INT64, PRIMARY KEY(name))
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'Alice', age: 30})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'Bob', age: 25})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'Carol', age: 30})")
+---- 0
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("SELECT DISTINCT n.age AS age FROM main MATCH (n:Person) ORDER BY n.age")
+---- 2
+25
+30
+
+-CHECK_ORDER
+-STATEMENT MATCH (n:Person) RETURN DISTINCT n.age AS age ORDER BY age
+---- 2
+25
+30
+
+
+-CASE SelectSkipLimitParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(name STRING, age INT64, PRIMARY KEY(name))
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'Alice', age: 30})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'Bob', age: 25})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'Carol', age: 35})")
+---- 0
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("SELECT n.name AS name FROM main MATCH (n:Person) ORDER BY n.name SKIP 1 LIMIT 1")
+---- 1
+Bob
+
+-CHECK_ORDER
+-STATEMENT MATCH (n:Person) RETURN n.name AS name ORDER BY n.name SKIP 1 LIMIT 1
+---- 1
+Bob
+
+
+-CASE SelectWhereParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(name STRING, age INT64, PRIMARY KEY(name))
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'Alice', age: 30})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'Bob', age: 25})")
+---- 0
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("SELECT n.name AS name FROM main MATCH (n:Person) WHERE n.age >= 30 ORDER BY n.name")
+---- 1
+Alice
+
+-CHECK_ORDER
+-STATEMENT MATCH (n:Person) WHERE n.age >= 30 RETURN n.name AS name ORDER BY n.name
+---- 1
+Alice
+
+
+-CASE SelectConcatOperatorParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(name STRING, age INT64, PRIMARY KEY(name))
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'Alice', age: 30})")
+---- 0
+
+-STATEMENT CALL GQL("SELECT n.name || '!' AS greeting FROM main MATCH (n:Person)")
+---- 1
+Alice!
+
+-STATEMENT MATCH (n:Person) RETURN n.name + '!' AS greeting
+---- 1
+Alice!
+
+
+-CASE SelectFromCurrentGraph
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(name STRING, age INT64, PRIMARY KEY(name))
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'Alice', age: 30})")
+---- 0
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("SELECT n.name AS name FROM CURRENT_GRAPH MATCH (n:Person)")
+---- 1
+Alice
+
+-CHECK_ORDER
+-STATEMENT MATCH (n:Person) RETURN n.name AS name
+---- 1
+Alice
+
+
+# PROPERTY_EXISTS (G115) -> (v.prop IS NOT NULL), the fixed-schema model of
+# "property present" (consistent with REMOVE -> SET n.prop = NULL).
+-CASE PropertyExistsParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(name STRING, email STRING, PRIMARY KEY(name))
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'Alice', email: 'alice@example.com'})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'Bob'})")
+---- 0
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("SELECT n.name AS name FROM GRAPH main MATCH (n:Person) WHERE PROPERTY_EXISTS(n, email) ORDER BY n.name")
+---- 1
+Alice
+
+-CHECK_ORDER
+-STATEMENT MATCH (n:Person) WHERE (n.email IS NOT NULL) RETURN n.name AS name ORDER BY n.name
+---- 1
+Alice
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("SELECT n.name AS name FROM GRAPH main MATCH (n:Person) WHERE NOT PROPERTY_EXISTS(n, email) ORDER BY n.name")
+---- 1
+Bob
+
+-CHECK_ORDER
+-STATEMENT MATCH (n:Person) WHERE NOT (n.email IS NOT NULL) RETURN n.name AS name ORDER BY n.name
+---- 1
+Bob
