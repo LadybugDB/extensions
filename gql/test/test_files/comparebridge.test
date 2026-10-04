@@ -1,0 +1,429 @@
+-DATASET CSV empty
+-BUFFER_POOL_SIZE 1024000000
+
+--
+
+# Q2-A comparison-bridge parity (B1+B2: all six comparators plus the ORDER BY
+# sortkey). Dual-run: every GQL statement via CALL GQL("...") is paired with
+# an equivalent Cypher twin calling _gql_lt/_gql_le/_gql_gt/_gql_ge/_gql_eq/
+# _gql_ne (or ordering by _gql_sortkey) directly; both must return the same
+# rows. Equality (B2) splices too, since the corpus divergence list was clean
+# (see EqualityBridgeParity).
+#
+# Pinned semantics (TCK-pinned global rank: null < bool < array < string <
+# number < object): 'x' < 30 is TRUE and every number > 'x'; false < true;
+# arrays compare element-wise, shorter prefix smaller; numbers compare
+# exactly across representations (33 = 33.0) and int64 beyond 2^53 does not
+# fall back to double. A missing property is SQL NULL; comparisons with NULL
+# yield NULL and WHERE drops the row (NOT(NULL) stays NULL); _gql_sortkey
+# maps SQL NULL to SQL NULL — last in ASC and first in DESC (see the DESC
+# twin in SortKeyOrderParity).
+#
+# Display: JSON values print as stored text (the e2e canonicalizer strips
+# fractional trailing zeros, so expected "33.5" matches a stored real while
+# int 33 and real 33.0 stay distinct); booleans print true/false; SQL NULL
+# is an empty cell (g|); WHERE results carry no -CHECK_ORDER; ORDER BY cases
+# pin the exact order. Case 5 follows the rank, so 'x' sorts BEFORE the
+# numbers (the consult doc's example listing contradicts its own rank
+# table). Map values and heterogeneous list literals are rejected by the
+# translator; an object is reached via CAST in SortKeyObjectRejected.
+-CASE OrderOpsSentinelParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+-STATEMENT CREATE GRAPH g ANY
+---- ok
+-STATEMENT USE GRAPH g
+---- ok
+
+# Sentinel set: a=9 b=30 c=33 d=100 e='x' f=33.5; g has no age. INSERT node
+# variables must differ — GQL merges a repeated variable into one node.
+-STATEMENT CALL GQL("INSERT (a:Person {name: 'a', age: 9}), (b:Person {name: 'b', age: 30}), (c:Person {name: 'c', age: 33}), (d:Person {name: 'd', age: 100}), (e:Person {name: 'e', age: 'x'}), (f:Person {name: 'f', age: 33.5}), (g:Person {name: 'g'})")
+---- ok
+
+# p.age > 30: 33, 100, 33.5; 'x' (string) is below every number.
+-STATEMENT CALL GQL("MATCH (p) WHERE p.age > 30 RETURN p.name, p.age")
+---- 3
+c|33
+d|100
+f|33.5
+-STATEMENT MATCH (p) WHERE _gql_gt(p.age, 30) RETURN p.name, p.age
+---- 3
+c|33
+d|100
+f|33.5
+
+# p.age < 30: 9 and 'x' (string < number).
+-STATEMENT CALL GQL("MATCH (p) WHERE p.age < 30 RETURN p.name, p.age")
+---- 2
+a|9
+e|x
+-STATEMENT MATCH (p) WHERE _gql_lt(p.age, 30) RETURN p.name, p.age
+---- 2
+a|9
+e|x
+
+# p.age >= 100: only the int 100.
+-STATEMENT CALL GQL("MATCH (p) WHERE p.age >= 100 RETURN p.name, p.age")
+---- 1
+d|100
+-STATEMENT MATCH (p) WHERE _gql_ge(p.age, 100) RETURN p.name, p.age
+---- 1
+d|100
+
+# p.age <= 33: 9, 30, 33 and 'x' (all strings compare below numbers).
+-STATEMENT CALL GQL("MATCH (p) WHERE p.age <= 33 RETURN p.name, p.age")
+---- 4
+a|9
+b|30
+c|33
+e|x
+-STATEMENT MATCH (p) WHERE _gql_le(p.age, 33) RETURN p.name, p.age
+---- 4
+a|9
+b|30
+c|33
+e|x
+
+-CASE CrossClassOrderParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+-STATEMENT CREATE GRAPH g ANY
+---- ok
+-STATEMENT USE GRAPH g
+---- ok
+
+-STATEMENT CALL GQL("INSERT (a:Person {name: 'a', age: 9}), (b:Person {name: 'b', age: 30}), (c:Person {name: 'c', age: 33}), (d:Person {name: 'd', age: 100}), (e:Person {name: 'e', age: 'x'}), (f:Person {name: 'f', age: 33.5}), (g:Person {name: 'g'})")
+---- ok
+
+# 'x' < 30 was proved above; here p.age > 'x' is TRUE for every numeric row
+# (number > string) and false only for e itself and the NULL g.
+-STATEMENT CALL GQL("MATCH (p) WHERE p.age > 'x' RETURN p.name, p.age")
+---- 5
+a|9
+b|30
+c|33
+d|100
+f|33.5
+-STATEMENT MATCH (p) WHERE _gql_gt(p.age, 'x') RETURN p.name, p.age
+---- 5
+a|9
+b|30
+c|33
+d|100
+f|33.5
+
+-CASE ThreeValuedLogicParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+-STATEMENT CREATE GRAPH g ANY
+---- ok
+-STATEMENT USE GRAPH g
+---- ok
+
+-STATEMENT CALL GQL("INSERT (a:Person {name: 'a', age: 9}), (b:Person {name: 'b', age: 30}), (c:Person {name: 'c', age: 33}), (d:Person {name: 'd', age: 100}), (e:Person {name: 'e', age: 'x'}), (f:Person {name: 'f', age: 33.5}), (g:Person {name: 'g'})")
+---- ok
+
+# p.age > 1: numeric rows pass; 'x' is below every number (false) and g's
+# NULL is UNKNOWN — both are filtered by WHERE.
+-STATEMENT CALL GQL("MATCH (p) WHERE p.age > 1 RETURN p.name, p.age")
+---- 5
+a|9
+b|30
+c|33
+d|100
+f|33.5
+-STATEMENT MATCH (p) WHERE _gql_gt(p.age, 1) RETURN p.name, p.age
+---- 5
+a|9
+b|30
+c|33
+d|100
+f|33.5
+
+# NOT(...) flips the numeric rows to false and 'x' to true, but NOT(UNKNOWN)
+# is still UNKNOWN, so g stays dropped: only e survives.
+-STATEMENT CALL GQL("MATCH (p) WHERE NOT (p.age > 1) RETURN p.name, p.age")
+---- 1
+e|x
+-STATEMENT MATCH (p) WHERE NOT _gql_gt(p.age, 1) RETURN p.name, p.age
+---- 1
+e|x
+
+-CASE TypedOperandsParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+-STATEMENT CREATE GRAPH g ANY
+---- ok
+-STATEMENT USE GRAPH g
+---- ok
+
+-STATEMENT CALL GQL("INSERT (a:Person {name: 'a', age: 9}), (b:Person {name: 'b', age: 30}), (c:Person {name: 'c', age: 33}), (d:Person {name: 'd', age: 100}), (e:Person {name: 'e', age: 'x'}), (f:Person {name: 'f', age: 33.5}), (g:Person {name: 'g'})")
+---- ok
+
+# Literal-vs-literal on the ANY graph goes through the same splice.
+-STATEMENT CALL GQL("MATCH (p) WHERE 2 > 1 RETURN p.name")
+---- 7
+a
+b
+c
+d
+e
+f
+g
+-STATEMENT MATCH (p) WHERE _gql_gt(2, 1) RETURN p.name
+---- 7
+a
+b
+c
+d
+e
+f
+g
+
+# Direct pins: 33.0 = 33 across representations, and int64s above 2^53 keep
+# exact order (a double fallback would round both and return False).
+-STATEMENT RETURN _gql_ge(33.0, 33)
+---- 1
+True
+-STATEMENT RETURN _gql_gt(9007199254740993, 9007199254740992)
+---- 1
+True
+
+-CASE SortKeyOrderParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+-STATEMENT CREATE GRAPH g ANY
+---- ok
+-STATEMENT USE GRAPH g
+---- ok
+
+-STATEMENT CALL GQL("INSERT (a:Person {name: 'a', age: 9}), (b:Person {name: 'b', age: 30}), (c:Person {name: 'c', age: 33}), (d:Person {name: 'd', age: 100}), (e:Person {name: 'e', age: 'x'}), (f:Person {name: 'f', age: 33.5}), (g:Person {name: 'g'})")
+---- ok
+
+# Ascending: strings rank below numbers, so e|x leads the numeric block;
+# SQL NULL (g) sorts last under the engine's ascending order.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (p) RETURN p.name, p.age ORDER BY p.age")
+---- 7
+e|x
+a|9
+b|30
+c|33
+f|33.5
+d|100
+g|
+-CHECK_ORDER
+-STATEMENT MATCH (p) RETURN p.name, p.age ORDER BY _gql_sortkey(p.age)
+---- 7
+e|x
+a|9
+b|30
+c|33
+f|33.5
+d|100
+g|
+
+# Descending is the exact reverse, and the SQL NULL key moves to the FRONT:
+# the engine flips the null sentinel in descending order (same as native
+# ORDER BY ... DESC). The GQL DESC form can be pinned once the splice lands.
+-CHECK_ORDER
+-STATEMENT MATCH (p) RETURN p.name, p.age ORDER BY _gql_sortkey(p.age) DESC
+---- 7
+g|
+d|100
+f|33.5
+c|33
+b|30
+a|9
+e|x
+
+-CASE SortKeyMultiKeyParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+-STATEMENT CREATE GRAPH g ANY
+---- ok
+-STATEMENT USE GRAPH g
+---- ok
+
+-STATEMENT CALL GQL("INSERT (u:Person {name: 'u', age: 5}), (v:Person {name: 'v', age: 5}), (w:Person {name: 'w', age: 1})")
+---- ok
+
+# Multi-key: the age-5 tie between u and v is broken by the name key.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (p) RETURN p.name, p.age ORDER BY p.age, p.name")
+---- 3
+w|1
+u|5
+v|5
+-CHECK_ORDER
+-STATEMENT MATCH (p) RETURN p.name, p.age ORDER BY _gql_sortkey(p.age), _gql_sortkey(p.name)
+---- 3
+w|1
+u|5
+v|5
+
+-CASE SortKeyPrecisionParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+-STATEMENT CREATE GRAPH g ANY
+---- ok
+-STATEMENT USE GRAPH g
+---- ok
+
+-STATEMENT CALL GQL("INSERT (h:Person {name: 'h', age: 9007199254740993}), (i:Person {name: 'i', age: 9007199254740994}), (j:Person {name: 'j', age: 9007199254740992.0})")
+---- ok
+
+# 2^53: j < h < i exactly. A double-based sortkey would tie h and i; the
+# exact decimal encoding keeps them apart.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (p) RETURN p.name, p.age ORDER BY p.age")
+---- 3
+j|9007199254740992.0
+h|9007199254740993
+i|9007199254740994
+-CHECK_ORDER
+-STATEMENT MATCH (p) RETURN p.name, p.age ORDER BY _gql_sortkey(p.age)
+---- 3
+j|9007199254740992.0
+h|9007199254740993
+i|9007199254740994
+
+-CASE SortKeyBoolRankParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+-STATEMENT CREATE GRAPH g ANY
+---- ok
+-STATEMENT USE GRAPH g
+---- ok
+
+-STATEMENT CALL GQL("INSERT (k:Person {name: 'k', age: true}), (l:Person {name: 'l', age: false}), (m:Person {name: 'm', age: 'x'}), (n:Person {name: 'n', age: 5})")
+---- ok
+
+# bool < string < number: false, true, 'x', 5.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (p) RETURN p.name, p.age ORDER BY p.age")
+---- 4
+l|false
+k|true
+m|x
+n|5
+-CHECK_ORDER
+-STATEMENT MATCH (p) RETURN p.name, p.age ORDER BY _gql_sortkey(p.age)
+---- 4
+l|false
+k|true
+m|x
+n|5
+
+-CASE EqualityBridgeParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+-STATEMENT CREATE GRAPH g ANY
+---- ok
+-STATEMENT USE GRAPH g
+---- ok
+
+-STATEMENT CALL GQL("INSERT (a:Person {name: 'a', age: 9}), (b:Person {name: 'b', age: 30}), (c:Person {name: 'c', age: 33}), (d:Person {name: 'd', age: 100}), (e:Person {name: 'e', age: 'x'}), (f:Person {name: 'f', age: 33.5}), (g:Person {name: 'g'})")
+---- ok
+
+# B2: '='/'<>' now route through the bridge. 33 = 33.0 is semantically
+# TRUE (exact decimal equality across int/real), which the B1 pin asserted
+# as the known silent-wrong gap; the twin _gql_eq/_gql_ne call the same core.
+-STATEMENT CALL GQL("MATCH (p) WHERE p.age = 33 RETURN p.name, p.age")
+---- 1
+c|33
+-STATEMENT MATCH (p) WHERE _gql_eq(p.age, 33) RETURN p.name, p.age
+---- 1
+c|33
+
+-STATEMENT CALL GQL("MATCH (p) WHERE p.age = 33.0 RETURN p.name, p.age")
+---- 1
+c|33
+-STATEMENT MATCH (p) WHERE _gql_eq(p.age, 33.0) RETURN p.name, p.age
+---- 1
+c|33
+
+# 'x' (bare string) equals the string literal 'x' — parse-failure fallback
+# and the literal classify as the same string, not string-vs-bool or similar.
+-STATEMENT CALL GQL("MATCH (p) WHERE p.age = 'x' RETURN p.name, p.age")
+---- 1
+e|x
+-STATEMENT MATCH (p) WHERE _gql_eq(p.age, 'x') RETURN p.name, p.age
+---- 1
+e|x
+
+# <> flips: every non-null row except c is unequal to 33 (string vs number
+# is unequal too); g's NULL drops.
+-STATEMENT CALL GQL("MATCH (p) WHERE p.age <> 33 RETURN p.name, p.age")
+---- 5
+a|9
+b|30
+d|100
+e|x
+f|33.5
+-STATEMENT MATCH (p) WHERE _gql_ne(p.age, 33) RETURN p.name, p.age
+---- 5
+a|9
+b|30
+d|100
+e|x
+f|33.5
+
+-CASE ArrayLexOrderParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+-STATEMENT CREATE GRAPH g ANY
+---- ok
+-STATEMENT USE GRAPH g
+---- ok
+
+# Homogeneous list literals only: map values and mixed lists are rejected.
+-STATEMENT CALL GQL("INSERT (x:Person {name: 'x', tags: [1, 2]}), (y:Person {name: 'y', tags: [2]}), (z:Person {name: 'z', tags: [2, 0]})")
+---- ok
+
+# Arrays compare element-wise with the shorter prefix smaller:
+# [1,2] < [2] < [2,0], so only y and z are > [1,2].
+-STATEMENT CALL GQL("MATCH (p) WHERE p.tags > [1, 2] RETURN p.name, p.tags")
+---- 2
+y|[2]
+z|[2,0]
+-STATEMENT MATCH (p) WHERE _gql_gt(p.tags, [1, 2]) RETURN p.name, p.tags
+---- 2
+y|[2]
+z|[2,0]
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (p) RETURN p.name, p.tags ORDER BY p.tags")
+---- 3
+x|[1,2]
+y|[2]
+z|[2,0]
+-CHECK_ORDER
+-STATEMENT MATCH (p) RETURN p.name, p.tags ORDER BY _gql_sortkey(p.tags)
+---- 3
+x|[1,2]
+y|[2]
+z|[2,0]
+
+
+-CASE SortKeyObjectRejected
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+# A JSON object (built here through the STRING-to-JSON text passthrough;
+# GQL INSERT cannot create one — map values are rejected by the
+# translator) has no total order: _gql_sortkey must reject it loudly
+# instead of emitting a key that would silently mis-order.
+-STATEMENT RETURN _gql_sortkey(CAST('{"a":1}', 'JSON'))
+---- error(regex)
+[\s\S]+

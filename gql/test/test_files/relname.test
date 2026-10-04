@@ -1,0 +1,129 @@
+-DATASET CSV empty
+-BUFFER_POOL_SIZE 1024000000
+
+--
+
+# Q5-4 relative (dotted) qualified names: `dir.g` and `/dir/g` resolve to one
+# absolute logical path and therefore one physical graph. catalogObjectParent
+# Reference's dotted form (objectName PERIOD)+ graphName is rebuilt segment
+# by segment from the parse tree (not raw-text splitting — delimited names
+# may contain periods) and flows through the existing checkReservedInPath +
+# resolvePhysical _gqlsch__ mangling. Absolute /path, bare and delimited
+# names, CURRENT_GRAPH and parameter branches are unchanged; SESSION SET
+# SCHEMA and the reserved prefix on dotted segments stay loud rejections.
+
+-CASE DottedGraphRoundtrip
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("CREATE SCHEMA /dir")
+---- 0
+
+# Created through the dotted spelling...
+-STATEMENT CALL GQL("CREATE GRAPH dir.g ANY")
+---- 0
+
+# ...selected through the dotted spelling: INSERT/MATCH roundtrip.
+-STATEMENT CALL GQL("SESSION SET GRAPH dir.g")
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:N {k: 1})")
+---- 0
+
+-STATEMENT CALL GQL("MATCH (n) RETURN n.k AS k")
+---- 1
+1
+
+# ...and the absolute spelling sees the SAME graph and data.
+-STATEMENT CALL GQL("USE /dir/g MATCH (n) RETURN n.k AS k")
+---- 1
+1
+
+# Created through the absolute spelling, selected through the dotted one.
+-STATEMENT CALL GQL("CREATE GRAPH /dir/g2 ANY")
+---- 0
+
+-STATEMENT CALL GQL("SESSION SET GRAPH dir.g2")
+---- ok
+
+# g2 is a distinct physical graph (empty), so the two spellings resolve to
+# their own graphs rather than aliasing one.
+-STATEMENT CALL GQL("MATCH (n) RETURN count(n) AS c")
+---- 1
+0
+
+
+-CASE DottedGraphTypeAndDrop
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("CREATE SCHEMA /dir")
+---- 0
+
+# Graph type created, referenced and dropped through dotted names; the graph
+# built FROM the dotted type reference lands on the same physical tables.
+-STATEMENT CALL GQL("CREATE GRAPH TYPE dir.gt {(Person :Person {name STRING})}")
+---- 0
+
+-STATEMENT CALL GQL("CREATE GRAPH dir.h dir.gt")
+---- 0
+
+-STATEMENT CALL GQL("SESSION SET GRAPH dir.h")
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'bob'})")
+---- 0
+
+-STATEMENT CALL GQL("MATCH (n:Person) RETURN n.name AS name")
+---- 1
+bob
+
+-STATEMENT CALL GQL("DROP GRAPH dir.h")
+---- 0
+
+-STATEMENT CALL GQL("DROP GRAPH TYPE dir.gt")
+---- 0
+
+# DROP through the absolute spelling: the dotted-created graph is the same
+# catalog member, so the absolute drop finds it.
+-STATEMENT CALL GQL("CREATE GRAPH dir.g ANY")
+---- 0
+
+-STATEMENT CALL GQL("DROP GRAPH /dir/g")
+---- 0
+
+# Schema is now empty: drop accepted (members under /dir were removed above).
+-STATEMENT CALL GQL("DROP SCHEMA /dir")
+---- 0
+
+-STATEMENT RETURN _gql_schemas()
+---- 1
+{"schemas":[],"directories":[]}
+
+
+-CASE DottedNameRejections
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+# CREATE/DROP SCHEMA take only absolute paths — the relative spelling never
+# parses (no root anchor in catalogSchemaParentAndName).
+-STATEMENT CALL GQL("CREATE SCHEMA dir.s")
+---- error(regex)
+Runtime exception: Failed to parse GQL query: CREATE SCHEMA dir.*
+
+-STATEMENT CALL GQL("DROP SCHEMA dir.s")
+---- error(regex)
+Runtime exception: Failed to parse GQL query: DROP SCHEMA dir.*
+
+# SESSION SET SCHEMA stays loudly unsupported (Q5-4 premise).
+-STATEMENT CALL GQL("SESSION SET SCHEMA /dir")
+---- error
+Runtime exception: GQL feature not supported: SESSION SET SCHEMA
+
+# The reserved physical prefix is caught on a dotted segment after stripping.
+-STATEMENT CALL GQL("SESSION SET GRAPH dir._gqlsch__x")
+---- error
+Runtime exception: GQL feature not supported: identifier with reserved _gqlsch__ prefix (_gqlsch__x)

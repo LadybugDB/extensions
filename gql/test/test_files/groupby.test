@@ -1,0 +1,158 @@
+-DATASET CSV empty
+-BUFFER_POOL_SIZE 1024000000
+
+--
+
+# GROUP BY / HAVING — dual-run parity against equivalent Cypher (WITH...RETURN
+# for the grouped forms; Cypher's implicit grouping for the plain form).
+
+-CASE GroupByImplicitParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(name STRING, age INT64, PRIMARY KEY(name))
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'Alice', age: 30})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'Bob', age: 25})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'Carol', age: 30})")
+---- 0
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("SELECT n.age AS age, count(*) AS c FROM main MATCH (n:Person) ORDER BY n.age")
+---- 2
+25|1
+30|2
+
+-CHECK_ORDER
+-STATEMENT MATCH (n:Person) RETURN n.age AS age, count(*) AS c ORDER BY age
+---- 2
+25|1
+30|2
+
+
+-CASE GroupByHavingParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(name STRING, age INT64, PRIMARY KEY(name))
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'Alice', age: 30})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'Bob', age: 25})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'Carol', age: 30})")
+---- 0
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("SELECT n.age AS age, count(*) AS c FROM main MATCH (n:Person) HAVING count(*) > 1 ORDER BY n.age")
+---- 1
+30|2
+
+-CHECK_ORDER
+-STATEMENT MATCH (n:Person) WITH n.age AS age, count(*) AS c WHERE c > 1 RETURN age, c ORDER BY age
+---- 1
+30|2
+
+
+-CASE GroupByExplicitParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE User(name STRING, PRIMARY KEY(name))
+---- ok
+
+-STATEMENT CREATE NODE TABLE Org(name STRING, PRIMARY KEY(name))
+---- ok
+
+-STATEMENT CREATE REL TABLE WORKS_AT(FROM User TO Org)
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:User {name: 'Alice'})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:User {name: 'Bob'})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:Org {name: 'Acme'})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:Org {name: 'Globex'})")
+---- 0
+
+-STATEMENT MATCH (a:User {name: 'Alice'}), (b:Org {name: 'Acme'}) CREATE (a)-[:WORKS_AT]->(b)
+---- 0
+
+-STATEMENT MATCH (a:User {name: 'Alice'}), (b:Org {name: 'Globex'}) CREATE (a)-[:WORKS_AT]->(b)
+---- 0
+
+-STATEMENT MATCH (a:User {name: 'Bob'}), (b:Org {name: 'Acme'}) CREATE (a)-[:WORKS_AT]->(b)
+---- 0
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("SELECT n.name AS name, count(*) AS c FROM main MATCH (n:User)-[:WORKS_AT]->(o:Org) GROUP BY n ORDER BY n.name")
+---- 2
+Alice|2
+Bob|1
+
+-CHECK_ORDER
+-STATEMENT MATCH (n:User)-[:WORKS_AT]->(o:Org) WITH n, count(*) AS c RETURN n.name AS name, c ORDER BY n.name
+---- 2
+Alice|2
+Bob|1
+
+
+-CASE GroupByExplicitHavingParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE User(name STRING, PRIMARY KEY(name))
+---- ok
+
+-STATEMENT CREATE NODE TABLE Org(name STRING, PRIMARY KEY(name))
+---- ok
+
+-STATEMENT CREATE REL TABLE WORKS_AT(FROM User TO Org)
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:User {name: 'Alice'})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:User {name: 'Bob'})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:Org {name: 'Acme'})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:Org {name: 'Globex'})")
+---- 0
+
+-STATEMENT MATCH (a:User {name: 'Alice'}), (b:Org {name: 'Acme'}) CREATE (a)-[:WORKS_AT]->(b)
+---- 0
+
+-STATEMENT MATCH (a:User {name: 'Alice'}), (b:Org {name: 'Globex'}) CREATE (a)-[:WORKS_AT]->(b)
+---- 0
+
+-STATEMENT MATCH (a:User {name: 'Bob'}), (b:Org {name: 'Acme'}) CREATE (a)-[:WORKS_AT]->(b)
+---- 0
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("SELECT n.name AS name, count(*) AS c FROM main MATCH (n:User)-[:WORKS_AT]->(o:Org) GROUP BY n HAVING count(*) > 1")
+---- 1
+Alice|2
+
+-CHECK_ORDER
+-STATEMENT MATCH (n:User)-[:WORKS_AT]->(o:Org) WITH n, count(*) AS c WHERE c > 1 RETURN n.name AS name, c
+---- 1
+Alice|2

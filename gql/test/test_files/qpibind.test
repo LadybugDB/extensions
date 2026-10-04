@@ -1,0 +1,215 @@
+-DATASET CSV empty
+-BUFFER_POOL_SIZE 1024000000
+
+--
+
+# QPPI slice B3 — quantified interior node bindings/labels. Interior element
+# variables bind the LIST of their per-repetition occurrences (k entries for
+# {k}); adjacent node events across a repetition seam (or an outer seam) are
+# ONE node — the junction merge lets the outer user name win, keeps the left
+# synthetic on an interior seam, and rejects conflicting fillers loudly.
+# Dual-run parity: each GQL case is followed by the hand-written Cypher
+# asserting the same expected result. U-M ({m,n}) cases carry no ORDER BY
+# (the union driver rejects it) — expectations are unsorted (harness sorts).
+
+
+-CASE QpibindFixedInteriorParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1})-[:KNOWS]->(:Person {v:2})-[:KNOWS]->(:Person {v:3})-[:KNOWS]->(:Person {v:4})
+---- ok
+
+# {2} over a single-edge interior with node bindings expands (no Class V
+# collapse): every list has one entry per repetition — 2 rows of 2|2|2.
+-STATEMENT CALL GQL("MATCH ((x:Person)-[e:KNOWS]->(y:Person)){2} RETURN size(x), size(y), size(e)")
+---- 2
+2|2|2
+2|2|2
+
+-STATEMENT MATCH (p1:Person)-[r1:KNOWS]->(p2:Person)-[r2:KNOWS]->(p3:Person) RETURN size([p1, p2]), size([p2, p3]), size([r1, r2])
+---- 2
+2|2|2
+2|2|2
+
+# Full-list value: x = [start of rep 0, start of rep 1] — rep 1 starts at the
+# seam node (rep 0's y), so x is the first two chain nodes of each 2-hop path.
+-STATEMENT CALL GQL("MATCH ((x:Person)-[e:KNOWS]->(y:Person)){2} RETURN x")
+---- 2
+[{_ID: 0:0, _LABEL: Person, v: 1},{_ID: 0:1, _LABEL: Person, v: 2}]
+[{_ID: 0:1, _LABEL: Person, v: 2},{_ID: 0:2, _LABEL: Person, v: 3}]
+
+-STATEMENT MATCH (p1:Person)-[r1:KNOWS]->(p2:Person)-[r2:KNOWS]->(p3:Person) RETURN [p1, p2]
+---- 2
+[{_ID: 0:0, _LABEL: Person, v: 1},{_ID: 0:1, _LABEL: Person, v: 2}]
+[{_ID: 0:1, _LABEL: Person, v: 2},{_ID: 0:2, _LABEL: Person, v: 3}]
+
+
+-CASE QpibindRangeSeamParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1})-[:KNOWS]->(:Person {v:2})-[:KNOWS]->(:Person {v:3})-[:KNOWS]->(:Person {v:4})
+---- ok
+
+# U-M {2,3} with outer seams (a left of the factor, b right): x binds one
+# entry per repetition — size(x) equals the repetition count. No ORDER BY
+# (union driver rejects it); expectations unsorted.
+-STATEMENT CALL GQL("MATCH (a:Person) ((x:Person)-[e:KNOWS]->(y:Person)){2,3} (b:Person) RETURN a.v AS a, b.v AS b, size(x) AS sx")
+---- 3
+1|3|2
+1|4|3
+2|4|2
+
+-STATEMENT MATCH (a:Person)-[:KNOWS]->(m1:Person)-[:KNOWS]->(b:Person) RETURN a.v, b.v, size([a, m1]) UNION ALL MATCH (a:Person)-[:KNOWS]->(m1:Person)-[:KNOWS]->(m2:Person)-[:KNOWS]->(b:Person) RETURN a.v, b.v, size([a, m1, m2])
+---- 3
+1|3|2
+1|4|3
+2|4|2
+
+
+-CASE QpibindOuterSeamNameWin
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1})-[:KNOWS]->(:Person {v:2})-[:KNOWS]->(:Person {v:3})-[:KNOWS]->(:Person {v:4})
+---- ok
+
+# Outer seam name wins: x[0] IS a (the full list pins it — no subscript
+# syntax needed). Interior entries reference the outer name after the merge.
+-STATEMENT CALL GQL("MATCH (a:Person) ((x:Person)-[e:KNOWS]->(y:Person)){2,3} (b:Person) RETURN a, x")
+---- 3
+{_ID: 0:0, _LABEL: Person, v: 1}|[{_ID: 0:0, _LABEL: Person, v: 1},{_ID: 0:1, _LABEL: Person, v: 2}]
+{_ID: 0:0, _LABEL: Person, v: 1}|[{_ID: 0:0, _LABEL: Person, v: 1},{_ID: 0:1, _LABEL: Person, v: 2},{_ID: 0:2, _LABEL: Person, v: 3}]
+{_ID: 0:1, _LABEL: Person, v: 2}|[{_ID: 0:1, _LABEL: Person, v: 2},{_ID: 0:2, _LABEL: Person, v: 3}]
+
+-STATEMENT MATCH (a:Person)-[:KNOWS]->(m1:Person)-[:KNOWS]->(b:Person) RETURN a, [a, m1] UNION ALL MATCH (a:Person)-[:KNOWS]->(m1:Person)-[:KNOWS]->(m2:Person)-[:KNOWS]->(b:Person) RETURN a, [a, m1, m2]
+---- 3
+{_ID: 0:0, _LABEL: Person, v: 1}|[{_ID: 0:0, _LABEL: Person, v: 1},{_ID: 0:1, _LABEL: Person, v: 2}]
+{_ID: 0:0, _LABEL: Person, v: 1}|[{_ID: 0:0, _LABEL: Person, v: 1},{_ID: 0:1, _LABEL: Person, v: 2},{_ID: 0:2, _LABEL: Person, v: 3}]
+{_ID: 0:1, _LABEL: Person, v: 2}|[{_ID: 0:1, _LABEL: Person, v: 2},{_ID: 0:2, _LABEL: Person, v: 3}]
+
+
+-CASE QpibindAnonLabelParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1})-[:KNOWS]->(:Person {v:2})-[:KNOWS]->(:Person {v:3})-[:KNOWS]->(:Person {v:4})-[:KNOWS]->(:Person {v:5})
+---- ok
+
+# Pure labels, no bindings: the seam (:Person)|(:Person) merges (identical
+# fillers), non-seam label positions re-check per repetition. The 5-node
+# chain carries exactly one 4-hop path (1→2→3→4→5).
+-STATEMENT CALL GQL("MATCH ((:Person)-[:KNOWS]->(:Person)-[:KNOWS]->(:Person)){2} RETURN count(*)")
+---- 1
+1
+
+-STATEMENT MATCH (:Person)-[:KNOWS]->(:Person)-[:KNOWS]->(:Person)-[:KNOWS]->(:Person)-[:KNOWS]->(:Person) RETURN count(*)
+---- 1
+1
+
+
+-CASE QpibindJunctionConflictRejected
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE NODE TABLE User(v INT64, PRIMARY KEY(v))
+---- ok
+
+# Repetition seam: rep 0 ends on :User, rep 1 starts on :Person — one node
+# cannot carry both labels here → loud conflict instead of a wrong answer.
+-STATEMENT CALL GQL("MATCH ((:Person)-[:KNOWS]->(:User)){2} RETURN 1")
+---- error
+Runtime exception: GQL feature not supported: quantified interior junction with conflicting labels/properties
+
+
+-CASE QpibindDirectSlotSizeParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1})-[:KNOWS]->(:Person {v:2})-[:KNOWS]->(:Person {v:3})-[:KNOWS]->(:Person {v:4})
+---- ok
+
+# B2 direct slot: e re-bounds as the relationship list through the trailing
+# WITH, so size(e) counts hops exactly like size(relationships(e)).
+-STATEMENT CALL GQL("MATCH (a:Person)-[e:KNOWS]->{2,3}(b:Person) RETURN size(e) AS n")
+---- 3
+2
+2
+3
+
+-STATEMENT MATCH (a:Person)-[e:KNOWS*2..3]->(b:Person) RETURN size(relationships(e)) AS n
+---- 3
+2
+2
+3
+
+
+-CASE QpibindBindingReuseRejected
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+# x is declared inside the quantified interior AND as a plain pattern
+# variable — the interior binding is a list, re-declaring it would silently
+# split or join bindings.
+-STATEMENT CALL GQL("MATCH (x:Person) ((x:Person)-[:KNOWS]->(y:Person)){2} RETURN 1")
+---- error
+Runtime exception: GQL feature not supported: quantified interior binding reused as a pattern variable
+
+
+-CASE QpibindInteriorWhereRejected
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+# Inline element WHERE inside a quantified interior: expression renaming is
+# deferred (hangs on the account), so reject loudly instead.
+-STATEMENT CALL GQL("MATCH ((x:Person WHERE x.v > 1)-[:KNOWS]->(y:Person)){2} RETURN 1")
+---- error
+Runtime exception: GQL feature not supported: inline WHERE in a quantified interior

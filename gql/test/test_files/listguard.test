@@ -1,0 +1,100 @@
+-DATASET CSV empty
+-BUFFER_POOL_SIZE 1024000000
+
+--
+
+# Q5-3 bind-time heterogeneous-list guard for typed graphs. Every typed-graph
+# list literal that contains at least one non-literal element is emitted as
+# _gql_list_checked(...); bindFunc compares the engine-derived argument type
+# classes and throws loudly where the engine's own list_creation would sink
+# the losers to STRING (README residual #17). Passing cases dual-run against
+# the native Cypher twin (same value with and without the wrap); rejection
+# cases pin the exact message. ANY graphs are never wrapped — their JSON
+# property columns are dynamically typed (AnyGraphListUnwrapped).
+
+-CASE ListGuardTypedPassParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE P(age INT64, age2 INT64, name STRING, PRIMARY KEY(name))
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:P {name: 'alice', age: 30, age2: 31})")
+---- 0
+
+# INT literal + INT column: one class at bind time; value matches the
+# unwrapped Cypher twin byte-for-byte.
+-STATEMENT CALL GQL("MATCH (n:P) RETURN [1, n.age] AS xs")
+---- 1
+[1,30]
+-STATEMENT MATCH (n:P) RETURN [1, n.age] AS xs
+---- 1
+[1,30]
+
+# Same-class non-literals pass the class check (INT vs INT).
+-STATEMENT CALL GQL("MATCH (n:P) RETURN [n.age, n.age2] AS xs")
+---- 1
+[30,31]
+-STATEMENT MATCH (n:P) RETURN [n.age, n.age2] AS xs
+---- 1
+[30,31]
+
+# Mixed CASE branches: the non-literal branch wraps (bind-checked), the pure
+# branch stays on the engine's own list creation.
+-STATEMENT CALL GQL("MATCH (n:P) RETURN CASE WHEN n.age > 20 THEN [1, n.age] ELSE [2, 3] END AS xs")
+---- 1
+[1,30]
+-STATEMENT MATCH (n:P) RETURN CASE WHEN n.age > 20 THEN [1, n.age] ELSE [2, 3] END AS xs
+---- 1
+[1,30]
+
+
+-CASE ListGuardTypedRejects
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE P(age INT64, age2 INT64, name STRING, PRIMARY KEY(name))
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:P {name: 'alice', age: 30, age2: 31})")
+---- 0
+
+# INT literal + STRING column: class mismatch at bind time, loud — the engine
+# would have stringified both elements silently.
+-STATEMENT CALL GQL("MATCH (n:P) RETURN [1, n.name] AS xs")
+---- error
+Runtime exception: GQL feature not supported: heterogeneous list element types
+
+# Pure heterogeneous literals never reach the guard: scanValueShapes rejects
+# them at translation time (INT vs DOUBLE are distinct classes there too).
+-STATEMENT CALL GQL("RETURN [1, 2.5] AS xs")
+---- error
+Runtime exception: GQL feature not supported: heterogeneous list literal
+
+
+-CASE AnyGraphListUnwrapped
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE GRAPH g ANY
+---- ok
+
+-STATEMENT USE GRAPH g
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:N {a: 1.5})")
+---- 0
+
+# ANY graphs are exempt from the wrap (nullopt/ANY gate in emitRewrittenExpr):
+# a static class check over JSON property columns would reject legal dynamic
+# queries. GQL keeps today's engine-list_creation behavior and matches the
+# native Cypher twin exactly.
+-STATEMENT CALL GQL("MATCH (n) RETURN [n.a, 1.0] AS xs")
+---- 1
+[1.5,1.0]
+-STATEMENT MATCH (n) RETURN [n.a, 1.0] AS xs
+---- 1
+[1.5,1.0]

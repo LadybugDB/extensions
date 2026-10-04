@@ -1,0 +1,189 @@
+-DATASET CSV empty
+-BUFFER_POOL_SIZE 1024000000
+
+--
+
+# Orderability (GQL total order) and display parity for the max/min
+# aggregates — dual-run parity: every GQL statement via CALL GQL("...") is
+# paired with the equivalent Cypher over the same inputs (either a
+# _gql_to_json-wrapped UNWIND or the same native columns), and both must
+# produce the same rows. Unaliased GQL result columns are named after the
+# GQL source text (`max(x)`), asserted with -CHECK_COLUMN_NAMES; the Cypher
+# twins keep the engine's own names (`_gql_max(x)`), so only their rows are
+# checked.
+
+-CASE MixedNumericMaxMinParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+# Mixed int/real list with null: max is the int 5, min the real 0.1 —
+# nulls are skipped by the aggregate.
+-CHECK_ORDER
+-CHECK_COLUMN_NAMES
+-STATEMENT CALL GQL("FOR x IN [1, 2.0, 5, null, 3.2, 0.1] RETURN max(x)")
+---- 2
+max(x)
+5
+
+-CHECK_ORDER
+-STATEMENT UNWIND [_gql_to_json(1), _gql_to_json(2.0), _gql_to_json(5), null, _gql_to_json(3.2), _gql_to_json(0.1)] AS x RETURN _gql_max(x)
+---- 1
+5
+
+-CHECK_ORDER
+-CHECK_COLUMN_NAMES
+-STATEMENT CALL GQL("FOR x IN [1, 2.0, 5, null, 3.2, 0.1] RETURN min(x)")
+---- 2
+min(x)
+0.1
+
+-CHECK_ORDER
+-STATEMENT UNWIND [_gql_to_json(1), _gql_to_json(2.0), _gql_to_json(5), null, _gql_to_json(3.2), _gql_to_json(0.1)] AS x RETURN _gql_min(x)
+---- 1
+0.1
+
+
+# Lists compare lexicographically: [1] < [2] < [2, 1], so max is [2,1] and
+# min is [1]. JSON arrays print without spaces.
+-CASE ListValueMaxMinParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-CHECK_ORDER
+-CHECK_COLUMN_NAMES
+-STATEMENT CALL GQL("FOR x IN [[1], [2], [2, 1]] RETURN max(x)")
+---- 2
+max(x)
+[2,1]
+
+-CHECK_ORDER
+-STATEMENT UNWIND [_gql_to_json([1]), _gql_to_json([2]), _gql_to_json([2, 1])] AS x RETURN _gql_max(x)
+---- 1
+[2,1]
+
+-CHECK_ORDER
+-CHECK_COLUMN_NAMES
+-STATEMENT CALL GQL("FOR x IN [[1], [2], [2, 1]] RETURN min(x)")
+---- 2
+min(x)
+[1]
+
+-CHECK_ORDER
+-STATEMENT UNWIND [_gql_to_json([1]), _gql_to_json([2]), _gql_to_json([2, 1])] AS x RETURN _gql_min(x)
+---- 1
+[1]
+
+
+# Mixed value types, mirrored from Aggregation2.feature scenarios [11] `max()`
+# over mixed values and [12] `min()` over mixed values. GQL orderability puts
+# lists below strings below numbers, so max is the number 1 and min is the
+# list [1,2].
+-CASE MixedValuesMaxMinParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-CHECK_ORDER
+-CHECK_COLUMN_NAMES
+-STATEMENT CALL GQL("FOR x IN [1, 'a', null, [1, 2], 0.2, 'b'] RETURN max(x)")
+---- 2
+max(x)
+1
+
+-CHECK_ORDER
+-STATEMENT UNWIND [_gql_to_json(1), _gql_to_json('a'), null, _gql_to_json([1, 2]), _gql_to_json(0.2), _gql_to_json('b')] AS x RETURN _gql_max(x)
+---- 1
+1
+
+-CHECK_ORDER
+-CHECK_COLUMN_NAMES
+-STATEMENT CALL GQL("FOR x IN [1, 'a', null, [1, 2], 0.2, 'b'] RETURN min(x)")
+---- 2
+min(x)
+[1,2]
+
+-CHECK_ORDER
+-STATEMENT UNWIND [_gql_to_json(1), _gql_to_json('a'), null, _gql_to_json([1, 2]), _gql_to_json(0.2), _gql_to_json('b')] AS x RETURN _gql_min(x)
+---- 1
+[1,2]
+
+
+# Display regression over native (non-JSON) columns: results must print as
+# bare scalars — no JSON quotes, no %.6f decimals.
+-CASE ScalarMaxMinDisplayParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE (:T {v:1}), (:T {v:3}), (:T {v:2})
+---- ok
+
+-CHECK_ORDER
+-CHECK_COLUMN_NAMES
+-STATEMENT CALL GQL("MATCH (n:T) RETURN max(n.v)")
+---- 2
+max(n.v)
+3
+
+-CHECK_ORDER
+-STATEMENT MATCH (n:T) RETURN _gql_max(n.v)
+---- 1
+3
+
+-CHECK_ORDER
+-CHECK_COLUMN_NAMES
+-STATEMENT CALL GQL("MATCH (n:T) RETURN min(n.v)")
+---- 2
+min(n.v)
+1
+
+-CHECK_ORDER
+-STATEMENT MATCH (n:T) RETURN _gql_min(n.v)
+---- 1
+1
+
+-STATEMENT CREATE NODE TABLE S(w STRING, PRIMARY KEY(w))
+---- ok
+
+-STATEMENT CREATE (:S {w:'a'}), (:S {w:'B'}), (:S {w:'c'})
+---- ok
+
+# String orderability is case-sensitive code order (Aggregation2.feature [8]:
+# min('a','b','B',...) = 'B' pins uppercase-first), so max('a','B','c') = 'c'.
+# The result must print bare — NOT the JSON-quoted form "c".
+-CHECK_ORDER
+-CHECK_COLUMN_NAMES
+-STATEMENT CALL GQL("MATCH (n:S) RETURN max(n.w)")
+---- 2
+max(n.w)
+c
+
+-CHECK_ORDER
+-STATEMENT MATCH (n:S) RETURN _gql_max(n.w)
+---- 1
+c
+
+
+# DISTINCT inside the aggregate: same mixed list, max over distinct values
+# is still the int 5.
+-CASE DistinctMaxParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-CHECK_ORDER
+-CHECK_COLUMN_NAMES
+-STATEMENT CALL GQL("FOR x IN [1, 2.0, 5, null, 3.2, 0.1] RETURN max(DISTINCT x)")
+---- 2
+max(DISTINCT x)
+5
+
+-CHECK_ORDER
+-STATEMENT UNWIND [_gql_to_json(1), _gql_to_json(2.0), _gql_to_json(5), null, _gql_to_json(3.2), _gql_to_json(0.1)] AS x RETURN _gql_max(DISTINCT x)
+---- 1
+5

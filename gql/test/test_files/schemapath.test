@@ -1,0 +1,249 @@
+-DATASET CSV empty
+-BUFFER_POOL_SIZE 1024000000
+
+--
+
+-CASE SchemaCreateAndCatalogJson
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("CREATE SCHEMA /myschema")
+---- 0
+
+-STATEMENT RETURN _gql_schemas()
+---- 1
+{"schemas":["/myschema"],"directories":[]}
+
+-CASE SchemaCreateIfNotExists
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("CREATE SCHEMA /foo/myschema")
+---- 0
+
+-STATEMENT CALL GQL("CREATE SCHEMA IF NOT EXISTS /foo/myschema")
+---- 0
+
+-STATEMENT RETURN _gql_schemas()
+---- 1
+{"schemas":["/foo/myschema"],"directories":["/foo"]}
+
+-CASE SchemaCreateErrorConditions
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("CREATE SCHEMA /foo/myschema")
+---- 0
+
+-STATEMENT CALL GQL("CREATE SCHEMA /foo/myschema")
+---- error
+Runtime exception: [42000] Schema /foo/myschema already exists
+
+-STATEMENT CALL GQL("CREATE SCHEMA /foo")
+---- error
+Runtime exception: [42000] Schema name /foo identifies a directory
+
+-STATEMENT CALL GQL("CREATE SCHEMA /foo2")
+---- 0
+
+-STATEMENT CALL GQL("CREATE GRAPH /foo2/mygraph ANY")
+---- 0
+
+-STATEMENT CALL GQL("CREATE SCHEMA /foo2/mygraph")
+---- error
+Runtime exception: [42000] Schema name /foo2/mygraph identifies a graph
+
+-STATEMENT CALL GQL("CREATE GRAPH TYPE /foo2/mygraphtype {(Person :Person {name STRING})}")
+---- 0
+
+-STATEMENT CALL GQL("CREATE SCHEMA /foo2/mygraphtype")
+---- error
+Runtime exception: [42000] Schema name /foo2/mygraphtype identifies a graph type
+
+-CASE SchemaDropSuccessAndIfExists
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("CREATE SCHEMA /myschema")
+---- 0
+
+-STATEMENT CALL GQL("DROP SCHEMA /myschema")
+---- 0
+
+-STATEMENT RETURN _gql_schemas()
+---- 1
+{"schemas":[],"directories":[]}
+
+-STATEMENT CALL GQL("DROP SCHEMA IF EXISTS /missing_schema")
+---- 0
+
+-STATEMENT RETURN _gql_schemas()
+---- 1
+{"schemas":[],"directories":[]}
+
+-CASE SchemaDropErrorConditions
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("DROP SCHEMA /missing_schema")
+---- error
+Runtime exception: [42000] Schema /missing_schema does not exist
+
+-STATEMENT CALL GQL("CREATE SCHEMA /foo/myschema")
+---- 0
+
+-STATEMENT CALL GQL("DROP SCHEMA /foo")
+---- error
+Runtime exception: [42000] Schema name /foo identifies a directory
+
+-STATEMENT CALL GQL("CREATE SCHEMA /bar")
+---- 0
+
+-STATEMENT CALL GQL("CREATE GRAPH /bar/mygraph ANY")
+---- 0
+
+-STATEMENT CALL GQL("DROP SCHEMA /bar/mygraph")
+---- error
+Runtime exception: [42000] Schema name /bar/mygraph identifies a graph
+
+-STATEMENT CALL GQL("CREATE GRAPH TYPE /bar/mygraphtype {(Person :Person {name STRING})}")
+---- 0
+
+-STATEMENT CALL GQL("DROP SCHEMA /bar/mygraphtype")
+---- error
+Runtime exception: [42000] Schema name /bar/mygraphtype identifies a graph type
+
+-STATEMENT CALL GQL("DROP SCHEMA /bar")
+---- error
+Runtime exception: [42000] Cannot drop schema /bar: schema is not empty
+
+-CASE QualifiedGraphNameRoundtrip
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("CREATE SCHEMA /foo")
+---- 0
+
+-STATEMENT CALL GQL("CREATE GRAPH /foo/g ANY")
+---- 0
+
+-STATEMENT CALL GQL("SESSION SET GRAPH /foo/g")
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'A'})")
+---- 0
+
+-STATEMENT CALL GQL("MATCH (n:Person) RETURN n.name")
+---- 1
+A
+
+-STATEMENT RETURN _gql_schemas()
+---- 1
+{"schemas":["/foo"],"directories":[]}
+
+-STATEMENT CALL GQL("DROP GRAPH /foo/g")
+---- 0
+
+-CASE SchemaStatementCombinedRejected
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("CREATE SCHEMA /a NEXT CREATE SCHEMA /b")
+---- error
+Runtime exception: [42000] GQL feature not supported: schema catalog statement combined with other statements
+
+-STATEMENT CALL GQL("CREATE SCHEMA /c CREATE GRAPH /d ANY")
+---- error
+Runtime exception: [42000] GQL feature not supported: schema catalog statement combined with other statements
+
+-STATEMENT CALL GQL("CREATE SCHEMA /c")
+---- 0
+
+-STATEMENT RETURN _gql_schemas()
+---- 1
+{"schemas":["/c"],"directories":[]}
+
+-CASE TransactionWrappedReadOnlyCode
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("START TRANSACTION READ ONLY CREATE SCHEMA /foo COMMIT")
+---- error
+Runtime exception: [25G03] GQL feature not supported: transaction-wrapped program in a single CALL GQL (issue BEGIN/COMMIT as separate CALL GQL statements)
+
+-CASE TransactionWrappedPlainUntagged
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("START TRANSACTION READ WRITE CREATE SCHEMA /foo COMMIT")
+---- error
+Runtime exception: GQL feature not supported: transaction-wrapped program in a single CALL GQL (issue BEGIN/COMMIT as separate CALL GQL statements)
+
+-CASE ReservedPrefixRejected
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("CREATE GRAPH _gqlsch__evil ANY")
+---- error
+Runtime exception: GQL feature not supported: identifier with reserved _gqlsch__ prefix (_gqlsch__evil)
+
+-CASE UsePrefixClauseParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CALL GQL("CREATE SCHEMA /foo")
+---- 0
+
+-STATEMENT CALL GQL("CREATE GRAPH /foo/g ANY")
+---- 0
+
+-STATEMENT CALL GQL("SESSION SET GRAPH /foo/g")
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:Person {name: 'A'})")
+---- 0
+
+-STATEMENT CALL GQL("USE /foo/g MATCH (n:Person) RETURN n.name")
+---- 1
+A
+
+-STATEMENT CALL GQL("USE /foo/g MATCH (n) RETURN count(n)")
+---- 1
+1
+
+-STATEMENT CALL GQL("CREATE GRAPH mygraph ANY")
+---- 0
+
+-STATEMENT CALL GQL("USE mygraph MATCH (n) RETURN count(n)")
+---- 1
+0
+
+-CASE EngineGraphConflict
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE GRAPH outsider ANY
+---- ok
+
+-STATEMENT CALL GQL("CREATE SCHEMA /outsider")
+---- error
+Runtime exception: [42000] Schema name /outsider identifies a graph
+
+-STATEMENT CALL GQL("CREATE SCHEMA /insider")
+---- 0
+
+-STATEMENT RETURN _gql_schemas()
+---- 1
+{"schemas":["/insider"],"directories":[]}

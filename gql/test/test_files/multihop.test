@@ -1,0 +1,389 @@
+-DATASET CSV empty
+-BUFFER_POOL_SIZE 1024000000
+
+--
+
+# Multi-hop QPPI slice A — unnamed multi-edge paren interiors with bounded
+# quantifiers: fixed {n}/{m,m} expands in place inside the single statement,
+# {m,n} (n-m <= 4, m >= 1) expands as a statement-level UNION [ALL] over the
+# counts. Unbounded / lower-bound-0 / too-wide / branch-explosion forms and
+# statement shapes that cannot compose under UNION reject loudly (exact
+# messages pinned below). Dual-run parity: each GQL case is followed by the
+# equivalent Cypher asserting the same expected result.
+
+
+-CASE MultiHopFixedCountParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1})-[:KNOWS]->(:Person {v:2})-[:KNOWS]->(:Person {v:3})-[:KNOWS]->(:Person {v:4})-[:KNOWS]->(:Person {v:5})
+---- ok
+
+# Former UnsupportedQuantifiedMultiHop, now expanded in place: {2} over a
+# two-edge interior = one fixed 4-hop chain (1 -> 5 on this 5-node chain).
+-STATEMENT CALL GQL("MATCH (()-[]->()-[]->()){2} RETURN count(*)")
+---- 1
+1
+
+-STATEMENT MATCH ()-[:KNOWS]->()-[:KNOWS]->()-[:KNOWS]->()-[:KNOWS]->() RETURN count(*)
+---- 1
+1
+
+# Same expansion with an interior edge binding and endpoint bindings + ORDER BY.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (a:Person) (()-[e:KNOWS]->()-[:KNOWS]->()){2} (b:Person) RETURN a.v AS a, b.v AS b ORDER BY a.v, b.v")
+---- 1
+1|5
+
+-CHECK_ORDER
+-STATEMENT MATCH (a:Person)-[:KNOWS]->()-[:KNOWS]->()-[:KNOWS]->()-[:KNOWS]->(b:Person) RETURN a.v AS a, b.v AS b ORDER BY a.v, b.v
+---- 1
+1|5
+
+# The interior edge binding e is the list of its edges across the two
+# repetitions (fresh pattern names per rep, re-bound by the WITH suffix).
+-STATEMENT CALL GQL("MATCH (a:Person) (()-[e:KNOWS]->()-[:KNOWS]->()){2} (b:Person) RETURN e")
+---- 1
+[(0:0)-{_LABEL: KNOWS, _ID: 1:0}->(0:1),(0:2)-{_LABEL: KNOWS, _ID: 1:2}->(0:3)]
+
+-STATEMENT MATCH (a:Person)-[r1:KNOWS]->()-[:KNOWS]->()-[r2:KNOWS]->()-[:KNOWS]->(b:Person) RETURN [r1, r2]
+---- 1
+[(0:0)-{_LABEL: KNOWS, _ID: 1:0}->(0:1),(0:2)-{_LABEL: KNOWS, _ID: 1:2}->(0:3)]
+
+
+-CASE MultiHopRangeUnionParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1})-[:KNOWS]->(:Person {v:2})-[:KNOWS]->(:Person {v:3})-[:KNOWS]->(:Person {v:4})-[:KNOWS]->(:Person {v:5})-[:KNOWS]->(:Person {v:6})-[:KNOWS]->(:Person {v:7})
+---- ok
+
+# {2,3} over a two-edge interior = 4-hop and 6-hop branches (U-M, no ORDER BY;
+# expectations unsorted — the harness sorts both sides).
+-STATEMENT CALL GQL("MATCH (a:Person) (()-[:KNOWS]->()-[:KNOWS]->()){2,3} (b:Person) RETURN a.v AS a, b.v AS b")
+---- 4
+1|5
+1|7
+2|6
+3|7
+
+-STATEMENT MATCH (a:Person)-[:KNOWS]->()-[:KNOWS]->()-[:KNOWS]->()-[:KNOWS]->(b:Person) RETURN a.v AS a, b.v AS b UNION ALL MATCH (a:Person)-[:KNOWS]->()-[:KNOWS]->()-[:KNOWS]->()-[:KNOWS]->()-[:KNOWS]->()-[:KNOWS]->(b:Person) RETURN a.v AS a, b.v AS b
+---- 4
+1|5
+1|7
+2|6
+3|7
+
+
+-CASE MultiHopRangeWhereProjectionParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1})-[:KNOWS]->(:Person {v:2})-[:KNOWS]->(:Person {v:3})-[:KNOWS]->(:Person {v:4})-[:KNOWS]->(:Person {v:5})
+---- ok
+
+# U-M expansion under a WHERE filter and a multi-column projection.
+-STATEMENT CALL GQL("MATCH (a:Person) (()-[:KNOWS]->()-[:KNOWS]->()){1,2} (b:Person) WHERE a.v < 3 RETURN a.v AS a, b.v AS b, b.v - a.v AS gap")
+---- 3
+1|3|2
+1|5|4
+2|4|2
+
+-STATEMENT MATCH (a:Person)-[:KNOWS]->()-[:KNOWS]->(b:Person) WHERE a.v < 3 RETURN a.v AS a, b.v AS b, b.v - a.v AS gap UNION ALL MATCH (a:Person)-[:KNOWS]->()-[:KNOWS]->()-[:KNOWS]->()-[:KNOWS]->(b:Person) WHERE a.v < 3 RETURN a.v AS a, b.v AS b, b.v - a.v AS gap
+---- 3
+1|3|2
+1|5|4
+2|4|2
+
+
+-CASE MultiHopRangeTrailAcyclicParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1}), (:Person {v:2}), (:Person {v:3})
+---- ok
+
+-STATEMENT MATCH (a:Person {v:1}), (b:Person {v:2}) CREATE (a)-[:KNOWS]->(b)
+---- ok
+
+-STATEMENT MATCH (a:Person {v:2}), (b:Person {v:3}) CREATE (a)-[:KNOWS]->(b)
+---- ok
+
+-STATEMENT MATCH (a:Person {v:3}), (b:Person {v:1}) CREATE (a)-[:KNOWS]->(b)
+---- ok
+
+# Path variable + TRAIL over the 3-cycle: the {1} branch (2-hop) is all trails;
+# the {2} branch (4-hop) must repeat an edge, so IS_TRAIL filters every row.
+-STATEMENT CALL GQL("MATCH p = TRAIL (a:Person) (()-[:KNOWS]->()-[:KNOWS]->()){1,2} (b:Person) RETURN a.v AS a, b.v AS b")
+---- 3
+1|3
+2|1
+3|2
+
+-STATEMENT MATCH p = (a:Person)-[:KNOWS]->()-[:KNOWS]->(b:Person) WHERE IS_TRAIL(p) RETURN a.v AS a, b.v AS b UNION ALL MATCH p = (a:Person)-[:KNOWS]->()-[:KNOWS]->()-[:KNOWS]->()-[:KNOWS]->(b:Person) WHERE IS_TRAIL(p) RETURN a.v AS a, b.v AS b
+---- 3
+1|3
+2|1
+3|2
+
+# ACYCLIC: same rows here — every 2-hop path has distinct nodes, every 4-hop
+# path repeats one (node distinctness kills the {2} branch either way).
+-STATEMENT CALL GQL("MATCH p = ACYCLIC (a:Person) (()-[:KNOWS]->()-[:KNOWS]->()){1,2} (b:Person) RETURN a.v AS a, b.v AS b")
+---- 3
+1|3
+2|1
+3|2
+
+-STATEMENT MATCH p = (a:Person)-[:KNOWS]->()-[:KNOWS]->(b:Person) WHERE IS_ACYCLIC(p) RETURN a.v AS a, b.v AS b UNION ALL MATCH p = (a:Person)-[:KNOWS]->()-[:KNOWS]->()-[:KNOWS]->()-[:KNOWS]->(b:Person) WHERE IS_ACYCLIC(p) RETURN a.v AS a, b.v AS b
+---- 3
+1|3
+2|1
+3|2
+
+
+-CASE VarLenEdgeBindingWrapParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1})-[:KNOWS]->(:Person {v:2})-[:KNOWS]->(:Person {v:3})-[:KNOWS]->(:Person {v:4})
+---- ok
+
+# Class V correction: the collapsed slot's edge binding is renamed in the
+# pattern and re-bound as the rel list through relationships(...) in a
+# trailing WITH; endpoint projections are unaffected.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (a:Person) (()-[e:KNOWS]->()){2} (b:Person) RETURN a.v AS a, b.v AS b ORDER BY a.v, b.v")
+---- 2
+1|3
+2|4
+
+-CHECK_ORDER
+-STATEMENT MATCH (a:Person)-[e:KNOWS*2..2]->(b:Person) RETURN a.v AS a, b.v AS b ORDER BY a.v, b.v
+---- 2
+1|3
+2|4
+
+# size(e): GQL sees the two-edge list directly; Cypher sizes relationships().
+-STATEMENT CALL GQL("MATCH (( )-[e:KNOWS]->()){2} RETURN size(e) AS n")
+---- 2
+2
+2
+
+-STATEMENT MATCH ()-[e:KNOWS*2..2]->() RETURN size(relationships(e)) AS n
+---- 2
+2
+2
+
+# Value shape: the user-facing e is exactly the relationship list (identical
+# rendering on both sides).
+-STATEMENT CALL GQL("MATCH (( )-[e:KNOWS]->()){2} RETURN e")
+---- 2
+[(0:0)-{_LABEL: KNOWS, _ID: 1:0}->(0:1),(0:1)-{_LABEL: KNOWS, _ID: 1:1}->(0:2)]
+[(0:1)-{_LABEL: KNOWS, _ID: 1:1}->(0:2),(0:2)-{_LABEL: KNOWS, _ID: 1:2}->(0:3)]
+
+-STATEMENT MATCH ()-[e:KNOWS*2..2]->() RETURN relationships(e)
+---- 2
+[(0:0)-{_LABEL: KNOWS, _ID: 1:0}->(0:1),(0:1)-{_LABEL: KNOWS, _ID: 1:1}->(0:2)]
+[(0:1)-{_LABEL: KNOWS, _ID: 1:1}->(0:2),(0:2)-{_LABEL: KNOWS, _ID: 1:2}->(0:3)]
+
+
+-CASE MultiHopRangeUseDistinctUnionParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1}), (:Person {v:2})
+---- ok
+
+-STATEMENT MATCH (a:Person {v:1}), (b:Person {v:2}) CREATE (a)-[:KNOWS]->(b)
+---- ok
+
+-STATEMENT MATCH (a:Person {v:2}), (b:Person {v:1}) CREATE (a)-[:KNOWS]->(b)
+---- ok
+
+# SELECT DISTINCT pins two merge paths at once: the shared "USE GRAPH main;"
+# prefix is stripped and re-attached once, and the bare UNION dedups the
+# (1,1)/(2,2) pairs the 2-hop and 4-hop branches produce identically.
+-STATEMENT CALL GQL("SELECT DISTINCT a.v AS a, b.v AS b FROM GRAPH main MATCH (a:Person) (()-[:KNOWS]->()-[:KNOWS]->()){1,2} (b:Person)")
+---- 2
+1|1
+2|2
+
+-STATEMENT MATCH (a:Person)-[:KNOWS]->()-[:KNOWS]->(b:Person) RETURN DISTINCT a.v AS a, b.v AS b UNION MATCH (a:Person)-[:KNOWS]->()-[:KNOWS]->()-[:KNOWS]->()-[:KNOWS]->(b:Person) RETURN DISTINCT a.v AS a, b.v AS b
+---- 2
+1|1
+2|2
+
+
+-CASE MultiHopStarProjectionRejected
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM T TO T)
+---- ok
+
+# B1 red line: the Class V edge rename (_gql_ve0 + relationships(...) AS e)
+# must not leak into a bare star projection as an extra column.
+-STATEMENT CALL GQL("MATCH (( )-[e:KNOWS]->()){2} RETURN *")
+---- error
+Runtime exception: GQL feature not supported: star projection with generated pattern bindings
+
+# Same leak with outer bindings: * would see a|_gql_ve0|e|b instead of a|e|b.
+-STATEMENT CALL GQL("MATCH (a:T) (()-[e]->()){2} (b:T) RETURN *")
+---- error
+Runtime exception: GQL feature not supported: star projection with generated pattern bindings
+
+# No interior bindings → no synthetic names → star stays a,b (allowed).
+-STATEMENT CALL GQL("MATCH (a:T) (()-[:KNOWS]->()){2} (b:T) RETURN *")
+---- 0
+
+-STATEMENT MATCH (a:T)-[:KNOWS*2..2]->(b:T) RETURN a, b
+---- 0
+
+
+-CASE MultiHopLowerBoundZeroRejected
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(v INT64, PRIMARY KEY(v))
+---- ok
+
+# `?` over a multi-edge interior is {0,1} — a lower bound of 0 cannot expand.
+-STATEMENT CALL GQL("MATCH (()-[]->()-[]->())? RETURN 1")
+---- error
+Runtime exception: GQL feature not supported: quantified path pattern with lower bound 0 over a multi-edge interior
+
+-STATEMENT CALL GQL("MATCH (()-[]->()-[]->()){0,2} RETURN 1")
+---- error
+Runtime exception: GQL feature not supported: quantified path pattern with lower bound 0 over a multi-edge interior
+
+
+-CASE MultiHopRangeOrderRejected
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(v INT64, PRIMARY KEY(v))
+---- ok
+
+# UNION branches have no statement-level ORDER BY slot in Cypher.
+-STATEMENT CALL GQL("MATCH (a:T) (()-[]->()-[]->()){1,2} (b:T) RETURN a.v AS a, b.v AS b ORDER BY a.v")
+---- error
+Runtime exception: GQL feature not supported: quantified path pattern expansion with ORDER BY / SKIP / LIMIT
+
+-STATEMENT CALL GQL("MATCH (a:T) (()-[]->()-[]->()){1,2} (b:T) RETURN a.v AS a, b.v AS b LIMIT 5")
+---- error
+Runtime exception: GQL feature not supported: quantified path pattern expansion with ORDER BY / SKIP / LIMIT
+
+
+-CASE MultiHopRangeAggregateRejected
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CALL GQL("MATCH (a:T) (()-[]->()-[]->()){1,2} (b:T) RETURN count(*)")
+---- error
+Runtime exception: GQL feature not supported: quantified path pattern expansion with aggregation / GROUP BY / HAVING
+
+
+-CASE MultiHopRangeOptionalRejected
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CALL GQL("OPTIONAL MATCH (()-[]->()-[]->()){1,2} RETURN 1")
+---- error
+Runtime exception: GQL feature not supported: quantified path pattern expansion with OPTIONAL MATCH
+
+
+-CASE MultiHopRangeTooWideRejected
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(v INT64, PRIMARY KEY(v))
+---- ok
+
+# n - m = 6 > 4 would produce 7 branches for a single factor.
+-STATEMENT CALL GQL("MATCH (a:T) (()-[]->()-[]->()){1,7} (b:T) RETURN a.v AS a")
+---- error
+Runtime exception: GQL feature not supported: quantified path pattern quantifier range too wide
+
+
+-CASE MultiHopBranchExplosionRejected
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(v INT64, PRIMARY KEY(v))
+---- ok
+
+# Two U-M factors with three counts each: 3 x 3 = 9 > 8 expansion branches.
+-STATEMENT CALL GQL("MATCH (a:T) (()-[]->()-[]->()){1,3} (()-[]->()-[]->()){1,3} (b:T) RETURN a.v AS a")
+---- error
+Runtime exception: GQL feature not supported: too many quantified path pattern expansion branches
+
+
+-CASE MultiHopDataModifyingRejected
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CALL GQL("MATCH (n:T) (()-[]->()-[]->()){1,2} SET n.v = 1")
+---- error
+Runtime exception: GQL feature not supported: quantified path pattern expansion in a data-modifying statement

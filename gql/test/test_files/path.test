@@ -1,0 +1,716 @@
+-DATASET CSV empty
+-BUFFER_POOL_SIZE 1024000000
+
+--
+
+# Phase 3 — path patterns: quantified edges / QPPI, path modes (WALK/TRAIL/
+# ACYCLIC), search prefixes (ANY/ALL SHORTEST) and GQL edge spellings.
+# Dual-run parity: each GQL case is followed by the equivalent Cypher asserting
+# the same expected result.
+
+-CASE QuantifiedEdgeIntervalParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1})-[:KNOWS]->(:Person {v:2})-[:KNOWS]->(:Person {v:3})-[:KNOWS]->(:Person {v:4})
+---- ok
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (a:Person)-[e:KNOWS]->{2,3}(b:Person) RETURN a.v AS a, b.v AS b ORDER BY a.v, b.v")
+---- 3
+1|3
+1|4
+2|4
+
+-CHECK_ORDER
+-STATEMENT MATCH (a:Person)-[e:KNOWS*2..3]->(b:Person) RETURN a.v AS a, b.v AS b ORDER BY a.v, b.v
+---- 3
+1|3
+1|4
+2|4
+
+
+-CASE QuantifiedEdgeFixedParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1})-[:KNOWS]->(:Person {v:2})-[:KNOWS]->(:Person {v:3})-[:KNOWS]->(:Person {v:4})
+---- ok
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (a:Person)-[e:KNOWS]->{2}(b:Person) RETURN a.v AS a, b.v AS b ORDER BY a.v, b.v")
+---- 2
+1|3
+2|4
+
+-CHECK_ORDER
+-STATEMENT MATCH (a:Person)-[e:KNOWS*2..2]->(b:Person) RETURN a.v AS a, b.v AS b ORDER BY a.v, b.v
+---- 2
+1|3
+2|4
+
+
+-CASE QuantifiedEdgeStarParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1})-[:KNOWS]->(:Person {v:2})-[:KNOWS]->(:Person {v:3})-[:KNOWS]->(:Person {v:4})
+---- ok
+
+# GQL `*` is {0,} — zero-hop rows bind start = end.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (a:Person)-[e:KNOWS]->*(b:Person) RETURN a.v AS a, b.v AS b ORDER BY a.v, b.v")
+---- 10
+1|1
+1|2
+1|3
+1|4
+2|2
+2|3
+2|4
+3|3
+3|4
+4|4
+
+-CHECK_ORDER
+-STATEMENT MATCH (a:Person)-[e:KNOWS*0..]->(b:Person) RETURN a.v AS a, b.v AS b ORDER BY a.v, b.v
+---- 10
+1|1
+1|2
+1|3
+1|4
+2|2
+2|3
+2|4
+3|3
+3|4
+4|4
+
+
+-CASE QuantifiedEdgeQuestionedParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1})-[:KNOWS]->(:Person {v:2})-[:KNOWS]->(:Person {v:3})-[:KNOWS]->(:Person {v:4})
+---- ok
+
+# GQL `?` is {0,1}.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (a:Person)-[e:KNOWS]->?(b:Person) RETURN a.v AS a, b.v AS b ORDER BY a.v, b.v")
+---- 7
+1|1
+1|2
+2|2
+2|3
+3|3
+3|4
+4|4
+
+-CHECK_ORDER
+-STATEMENT MATCH (a:Person)-[e:KNOWS*0..1]->(b:Person) RETURN a.v AS a, b.v AS b ORDER BY a.v, b.v
+---- 7
+1|1
+1|2
+2|2
+2|3
+3|3
+3|4
+4|4
+
+
+-CASE QuantifiedEdgePlusParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1})-[:KNOWS]->(:Person {v:2})-[:KNOWS]->(:Person {v:3})-[:KNOWS]->(:Person {v:4})
+---- ok
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (a:Person)-[e:KNOWS]->+(b:Person) RETURN a.v AS a, b.v AS b ORDER BY a.v, b.v")
+---- 6
+1|2
+1|3
+1|4
+2|3
+2|4
+3|4
+
+-CHECK_ORDER
+-STATEMENT MATCH (a:Person)-[e:KNOWS*1..]->(b:Person) RETURN a.v AS a, b.v AS b ORDER BY a.v, b.v
+---- 6
+1|2
+1|3
+1|4
+2|3
+2|4
+3|4
+
+
+-CASE QuantifiedEdgeOpenUpperParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1})-[:KNOWS]->(:Person {v:2})-[:KNOWS]->(:Person {v:3})-[:KNOWS]->(:Person {v:4})
+---- ok
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (a:Person)-[e:KNOWS]->{2,}(b:Person) RETURN a.v AS a, b.v AS b ORDER BY a.v, b.v")
+---- 3
+1|3
+1|4
+2|4
+
+-CHECK_ORDER
+-STATEMENT MATCH (a:Person)-[e:KNOWS*2..]->(b:Person) RETURN a.v AS a, b.v AS b ORDER BY a.v, b.v
+---- 3
+1|3
+1|4
+2|4
+
+
+-CASE QPPIParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1})-[:KNOWS]->(:Person {v:2})-[:KNOWS]->(:Person {v:3})-[:KNOWS]->(:Person {v:4})
+---- ok
+
+# Quantified path pattern over a single anonymous hop == a var-length edge.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (a:Person) (()-[e:KNOWS]->()){2} (b:Person) RETURN a.v AS a, b.v AS b ORDER BY a.v, b.v")
+---- 2
+1|3
+2|4
+
+-CHECK_ORDER
+-STATEMENT MATCH (a:Person)-[e:KNOWS*2..2]->(b:Person) RETURN a.v AS a, b.v AS b ORDER BY a.v, b.v
+---- 2
+1|3
+2|4
+
+
+-CASE QPPIBareEdgeParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1})-[:KNOWS]->(:Person {v:2})-[:KNOWS]->(:Person {v:3})-[:KNOWS]->(:Person {v:4})
+---- ok
+
+# Bare-edge interior: ( -[e]-> ){2} with implicit empty end nodes.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH ((-[e:KNOWS]->){2}) RETURN count(*) AS c")
+---- 1
+2
+
+-CHECK_ORDER
+-STATEMENT MATCH ()-[e:KNOWS*2..2]->() RETURN count(*) AS c
+---- 1
+2
+
+
+-CASE WalkModeParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1})-[:KNOWS]->(:Person {v:2})
+---- ok
+
+-STATEMENT MATCH (a:Person {v:2}), (b:Person {v:1}) CREATE (a)-[:KNOWS]->(b)
+---- ok
+
+# WALK allows edge repetition: 1 -> 2 -> 1 -> 2 at 3 hops.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH WALK (a:Person {v:1})-[e:KNOWS]->{3,3}(b:Person) RETURN b.v AS b")
+---- 1
+2
+
+-CHECK_ORDER
+-STATEMENT MATCH (a:Person {v:1})-[e:KNOWS*3..3]->(b:Person) RETURN b.v AS b
+---- 1
+2
+
+
+-CASE TrailModeParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1})-[:KNOWS]->(:Person {v:2})
+---- ok
+
+-STATEMENT MATCH (a:Person {v:2}), (b:Person {v:1}) CREATE (a)-[:KNOWS]->(b)
+---- ok
+
+# 3 hops on a 2-cycle must repeat an edge -> no trail.
+-STATEMENT CALL GQL("MATCH TRAIL (a:Person {v:1})-[e:KNOWS]->{3,3}(b:Person) RETURN b.v AS b")
+---- 0
+
+-STATEMENT MATCH (a:Person {v:1})-[e:KNOWS*TRAIL 3..3]->(b:Person) RETURN b.v AS b
+---- 0
+
+# 2 hops 1 -> 2 -> 1 uses both edges once -> a valid trail.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH TRAIL (a:Person {v:1})-[e:KNOWS]->{2,2}(b:Person) RETURN b.v AS b")
+---- 1
+1
+
+-CHECK_ORDER
+-STATEMENT MATCH (a:Person {v:1})-[e:KNOWS*TRAIL 2..2]->(b:Person) RETURN b.v AS b
+---- 1
+1
+
+
+-CASE AcyclicModeParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1})-[:KNOWS]->(:Person {v:2})
+---- ok
+
+-STATEMENT MATCH (a:Person {v:2}), (b:Person {v:1}) CREATE (a)-[:KNOWS]->(b)
+---- ok
+
+# GQL ACYCLIC requires ALL nodes distinct (ISO 20.5) — closed walks like
+# 1 -> 2 -> 1 repeat the start node and are excluded. The translator wraps the
+# pattern in a path variable and filters with IS_ACYCLIC over the whole path;
+# the equivalent Cypher is that same form.
+# 2 hops 1 -> 2 -> 1 repeats node 1 -> rejected.
+-STATEMENT CALL GQL("MATCH ACYCLIC (a:Person {v:1})-[e:KNOWS]->{2,2}(b:Person) RETURN b.v AS b")
+---- 0
+
+-STATEMENT MATCH p = (a:Person {v:1})-[e:KNOWS*ACYCLIC 2..2]->(b:Person) WHERE IS_ACYCLIC(p) RETURN b.v AS b
+---- 0
+
+# 3 hops 1 -> 2 -> 1 -> 2 repeats nodes 1 and 2 -> rejected.
+-STATEMENT CALL GQL("MATCH ACYCLIC (a:Person {v:1})-[e:KNOWS]->{3,3}(b:Person) RETURN b.v AS b")
+---- 0
+
+-STATEMENT MATCH p = (a:Person {v:1})-[e:KNOWS*ACYCLIC 3..3]->(b:Person) WHERE IS_ACYCLIC(p) RETURN b.v AS b
+---- 0
+
+# 4 hops 1 -> 2 -> 1 -> 2 -> 1 repeat the intermediate node 2 -> rejected.
+-STATEMENT CALL GQL("MATCH ACYCLIC (a:Person {v:1})-[e:KNOWS]->{4,4}(b:Person) RETURN b.v AS b")
+---- 0
+
+-STATEMENT MATCH p = (a:Person {v:1})-[e:KNOWS*ACYCLIC 4..4]->(b:Person) WHERE IS_ACYCLIC(p) RETURN b.v AS b
+---- 0
+
+# The unrestricted WALK form does return that closed 4-hop walk.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH WALK (a:Person {v:1})-[e:KNOWS]->{4,4}(b:Person) RETURN b.v AS b")
+---- 1
+1
+
+-CHECK_ORDER
+-STATEMENT MATCH (a:Person {v:1})-[e:KNOWS*4..4]->(b:Person) RETURN b.v AS b
+---- 1
+1
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH ACYCLIC (a:Person {v:1})-[e:KNOWS]->{1,1}(b:Person) RETURN b.v AS b")
+---- 1
+2
+
+-CHECK_ORDER
+-STATEMENT MATCH p = (a:Person {v:1})-[e:KNOWS*ACYCLIC 1..1]->(b:Person) WHERE IS_ACYCLIC(p) RETURN b.v AS b
+---- 1
+2
+
+
+-CASE MultiHopTrailParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+# 3-cycle 1 -> 2 -> 3 -> 1 with a double edge 1 ⇉ 2, plus self-loop 4 -> 4.
+-STATEMENT CREATE (:Person {v:1}), (:Person {v:2}), (:Person {v:3}), (:Person {v:4})
+---- ok
+
+-STATEMENT MATCH (a:Person {v:1}), (b:Person {v:2}) CREATE (a)-[:KNOWS]->(b)
+---- ok
+
+-STATEMENT MATCH (a:Person {v:2}), (b:Person {v:3}) CREATE (a)-[:KNOWS]->(b)
+---- ok
+
+-STATEMENT MATCH (a:Person {v:3}), (b:Person {v:1}) CREATE (a)-[:KNOWS]->(b)
+---- ok
+
+-STATEMENT MATCH (a:Person {v:1}), (b:Person {v:2}) CREATE (a)-[:KNOWS]->(b)
+---- ok
+
+-STATEMENT MATCH (a:Person {v:4}) CREATE (a)-[:KNOWS]->(a)
+---- ok
+
+# Clean multi-hop: 1 -> 2 -> 3 (two rows: either parallel edge 1 ⇉ 2).
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH TRAIL (a:Person {v:1})-[e1:KNOWS]->(b:Person)-[e2:KNOWS]->(c:Person) RETURN b.v AS b, c.v AS c")
+---- 2
+2|3
+2|3
+
+-CHECK_ORDER
+-STATEMENT MATCH p = (a:Person {v:1})-[e1:KNOWS]->(b:Person)-[e2:KNOWS]->(c:Person) WHERE IS_TRAIL(p) RETURN b.v AS b, c.v AS c
+---- 2
+2|3
+2|3
+
+# Self-loop traversed twice reuses the same edge -> TRAIL rejects the 2-hop.
+-STATEMENT CALL GQL("MATCH TRAIL (a:Person {v:4})-[e1:KNOWS]->(b:Person)-[e2:KNOWS]->(c:Person) RETURN c.v AS c")
+---- 0
+
+-STATEMENT MATCH p = (a:Person {v:4})-[e1:KNOWS]->(b:Person)-[e2:KNOWS]->(c:Person) WHERE IS_TRAIL(p) RETURN c.v AS c
+---- 0
+
+# The WALK form does return it.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH WALK (a:Person {v:4})-[e1:KNOWS]->(b:Person)-[e2:KNOWS]->(c:Person) RETURN c.v AS c")
+---- 1
+4
+
+# 4 hops 1 -> 2 -> 3 -> 1 -> 2: two of the four walks reuse their first edge
+# (1 ⇉ 2 twice); TRAIL keeps only the two walks with distinct edges.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH TRAIL (a:Person {v:1})-[e1:KNOWS]->(b:Person)-[e2:KNOWS]->(c:Person)-[e3:KNOWS]->(d:Person)-[e4:KNOWS]->(z:Person) RETURN z.v AS z")
+---- 2
+2
+2
+
+-CHECK_ORDER
+-STATEMENT MATCH p = (a:Person {v:1})-[e1:KNOWS]->(b:Person)-[e2:KNOWS]->(c:Person)-[e3:KNOWS]->(d:Person)-[e4:KNOWS]->(z:Person) WHERE IS_TRAIL(p) RETURN z.v AS z
+---- 2
+2
+2
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH WALK (a:Person {v:1})-[e1:KNOWS]->(b:Person)-[e2:KNOWS]->(c:Person)-[e3:KNOWS]->(d:Person)-[e4:KNOWS]->(z:Person) RETURN z.v AS z")
+---- 4
+2
+2
+2
+2
+
+
+-CASE MultiHopAcyclicParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1}), (:Person {v:2}), (:Person {v:3}), (:Person {v:4})
+---- ok
+
+-STATEMENT MATCH (a:Person {v:1}), (b:Person {v:2}) CREATE (a)-[:KNOWS]->(b)
+---- ok
+
+-STATEMENT MATCH (a:Person {v:2}), (b:Person {v:3}) CREATE (a)-[:KNOWS]->(b)
+---- ok
+
+-STATEMENT MATCH (a:Person {v:3}), (b:Person {v:1}) CREATE (a)-[:KNOWS]->(b)
+---- ok
+
+-STATEMENT MATCH (a:Person {v:1}), (b:Person {v:2}) CREATE (a)-[:KNOWS]->(b)
+---- ok
+
+-STATEMENT MATCH (a:Person {v:4}) CREATE (a)-[:KNOWS]->(a)
+---- ok
+
+# Fixed-hop self-loop: a single edge is a trail but not acyclic (nodes 4, 4).
+-STATEMENT CALL GQL("MATCH ACYCLIC (a:Person {v:4})-[e:KNOWS]->(b:Person) RETURN b.v AS b")
+---- 0
+
+-STATEMENT MATCH p = (a:Person {v:4})-[e:KNOWS]->(b:Person) WHERE IS_ACYCLIC(p) RETURN b.v AS b
+---- 0
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH TRAIL (a:Person {v:4})-[e:KNOWS]->(b:Person) RETURN b.v AS b")
+---- 1
+4
+
+# 3 hops 1 -> 2 -> 3 -> 1 is a valid trail but repeats node 1 -> not acyclic.
+-STATEMENT CALL GQL("MATCH ACYCLIC (a:Person {v:1})-[e1:KNOWS]->(b:Person)-[e2:KNOWS]->(c:Person)-[e3:KNOWS]->(z:Person) RETURN z.v AS z")
+---- 0
+
+-STATEMENT MATCH p = (a:Person {v:1})-[e1:KNOWS]->(b:Person)-[e2:KNOWS]->(c:Person)-[e3:KNOWS]->(z:Person) WHERE IS_ACYCLIC(p) RETURN z.v AS z
+---- 0
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH TRAIL (a:Person {v:1})-[e1:KNOWS]->(b:Person)-[e2:KNOWS]->(c:Person)-[e3:KNOWS]->(z:Person) RETURN z.v AS z")
+---- 2
+1
+1
+
+# Mixed fixed + quantified segment: 1 -> 2 then 1..2 more hops.
+# ACYCLIC keeps only the open walk 1 -> 2 -> 3 (closing 2 -> 3 -> 1 repeats 1).
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH ACYCLIC (a:Person {v:1})-[e1:KNOWS]->(b:Person)-[e2:KNOWS]->{1,2}(c:Person) RETURN c.v AS cv ORDER BY cv")
+---- 2
+3
+3
+
+-CHECK_ORDER
+-STATEMENT MATCH p = (a:Person {v:1})-[e1:KNOWS]->(b:Person)-[e2:KNOWS*ACYCLIC 1..2]->(c:Person) WHERE IS_ACYCLIC(p) RETURN c.v AS cv ORDER BY cv
+---- 2
+3
+3
+
+# TRAIL keeps the closed walk too (all four walks use distinct edges).
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH TRAIL (a:Person {v:1})-[e1:KNOWS]->(b:Person)-[e2:KNOWS]->{1,2}(c:Person) RETURN c.v AS cv ORDER BY cv")
+---- 4
+1
+1
+3
+3
+
+-CHECK_ORDER
+-STATEMENT MATCH p = (a:Person {v:1})-[e1:KNOWS]->(b:Person)-[e2:KNOWS*TRAIL 1..2]->(c:Person) WHERE IS_TRAIL(p) RETURN c.v AS cv ORDER BY cv
+---- 4
+1
+1
+3
+3
+
+
+-CASE AnyShortestParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1})-[:KNOWS]->(:Person {v:2})-[:KNOWS]->(:Person {v:4})
+---- ok
+
+-STATEMENT MATCH (a:Person {v:1}), (d:Person {v:4}) CREATE (a)-[:KNOWS]->(:Person {v:3})-[:KNOWS]->(d)
+---- ok
+
+# Diamond 1 -> {2,3} -> 4: ANY SHORTEST keeps one path per end node.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH ANY SHORTEST (a:Person {v:1})-[e:KNOWS]->{1,3}(b:Person) RETURN b.v AS b, size(e) AS len ORDER BY b.v, len")
+---- 3
+2|1
+3|1
+4|2
+
+-CHECK_ORDER
+-STATEMENT MATCH (a:Person {v:1})-[e:KNOWS*SHORTEST 1..3]->(b:Person) RETURN b.v AS b, size(relationships(e)) AS len ORDER BY b.v, len
+---- 3
+2|1
+3|1
+4|2
+
+
+-CASE AllShortestParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1})-[:KNOWS]->(:Person {v:2})-[:KNOWS]->(:Person {v:4})
+---- ok
+
+-STATEMENT MATCH (a:Person {v:1}), (d:Person {v:4}) CREATE (a)-[:KNOWS]->(:Person {v:3})-[:KNOWS]->(d)
+---- ok
+
+# ALL SHORTEST keeps both 2-hop paths to node 4.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH ALL SHORTEST (a:Person {v:1})-[e:KNOWS]->{1,3}(b:Person) RETURN b.v AS b, size(e) AS len ORDER BY b.v, len")
+---- 4
+2|1
+3|1
+4|2
+4|2
+
+-CHECK_ORDER
+-STATEMENT MATCH (a:Person {v:1})-[e:KNOWS*ALL SHORTEST 1..3]->(b:Person) RETURN b.v AS b, size(relationships(e)) AS len ORDER BY b.v, len
+---- 4
+2|1
+3|1
+4|2
+4|2
+
+
+-CASE UndirectedEdgeParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1})-[:KNOWS]->(:Person {v:2})
+---- ok
+
+# GQL undirected ~[e]~ collapses to LadybugDB's any-direction -[e]-.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (a:Person {v:1})~[e:KNOWS]~(b:Person) RETURN b.v AS b")
+---- 1
+2
+
+-CHECK_ORDER
+-STATEMENT MATCH (a:Person {v:1})-[e:KNOWS]-(b:Person) RETURN b.v AS b
+---- 1
+2
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (a:Person {v:2})~[e:KNOWS]~(b:Person) RETURN b.v AS b")
+---- 1
+1
+
+-CHECK_ORDER
+-STATEMENT MATCH (a:Person {v:2})-[e:KNOWS]-(b:Person) RETURN b.v AS b
+---- 1
+1
+
+
+-CASE IsLabelAndInlineWhereParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE (:Person {v:1}), (:Person {v:2}), (:Person {v:3})
+---- ok
+
+# GQL `IS Label` spelling and inline element WHERE (hoisted into the clause WHERE).
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (n IS Person WHERE n.v > 1) RETURN n.v AS v ORDER BY n.v")
+---- 2
+2
+3
+
+-CHECK_ORDER
+-STATEMENT MATCH (n:Person) WHERE n.v > 1 RETURN n.v AS v ORDER BY n.v
+---- 2
+2
+3
+
+
+-CASE MultiHopDefaultParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE Person(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CREATE REL TABLE KNOWS(FROM Person TO Person)
+---- ok
+
+-STATEMENT CREATE (:Person {v:1})-[:KNOWS]->(:Person {v:2})-[:KNOWS]->(:Person {v:3})-[:KNOWS]->(:Person {v:4})
+---- ok
+
+# Multi-hop fixed patterns pass through with the edge-repetition semantics
+# LadybugDB MATCH already has (GQL WALK-like).
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (a:Person)-[e1:KNOWS]->(b:Person)-[e2:KNOWS]->(c:Person) RETURN a.v AS a, c.v AS c ORDER BY a.v, c.v")
+---- 2
+1|3
+2|4
+
+-CHECK_ORDER
+-STATEMENT MATCH (a:Person)-[e1:KNOWS]->(b:Person)-[e2:KNOWS]->(c:Person) RETURN a.v AS a, c.v AS c ORDER BY a.v, c.v
+---- 2
+1|3
+2|4

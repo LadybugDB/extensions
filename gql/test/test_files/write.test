@@ -1,0 +1,174 @@
+-DATASET CSV empty
+-BUFFER_POOL_SIZE 1024000000
+
+--
+
+# Write semantics — INSERT/DELETE/SET/REMOVE mapping, dual-run parity where the
+# Cypher equivalent is well-defined.
+
+-CASE InsertLiteralSafety
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(msg STRING, v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:T {msg: 'INSERT ME', v: 1})")
+---- 0
+
+-STATEMENT MATCH (n:T) RETURN n.msg
+---- 1
+INSERT ME
+
+
+-CASE DeleteParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:T {v: 1})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:T {v: 2})")
+---- 0
+
+-STATEMENT CALL GQL("MATCH (n:T {v: 1}) DELETE n")
+---- 0
+
+-STATEMENT MATCH (n:T {v: 2}) DELETE n
+---- 0
+
+-STATEMENT MATCH (n:T) RETURN count(*)
+---- 1
+0
+
+
+-CASE DetachDeleteParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE User(name STRING, PRIMARY KEY(name))
+---- ok
+
+-STATEMENT CREATE NODE TABLE Org(name STRING, PRIMARY KEY(name))
+---- ok
+
+-STATEMENT CREATE REL TABLE WORKS_AT(FROM User TO Org)
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:User {name: 'Alice'})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:Org {name: 'Acme'})")
+---- 0
+
+-STATEMENT MATCH (a:User {name: 'Alice'}), (b:Org {name: 'Acme'}) CREATE (a)-[:WORKS_AT]->(b)
+---- 0
+
+-STATEMENT CALL GQL("MATCH (u:User {name: 'Alice'}) DETACH DELETE u")
+---- 0
+
+-STATEMENT MATCH (u:User) RETURN count(*)
+---- 1
+0
+
+-STATEMENT MATCH ()-[r:WORKS_AT]->() RETURN count(*)
+---- 1
+0
+
+
+-CASE SetPropertyParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(msg STRING, v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:T {msg: 'old', v: 1})")
+---- 0
+
+-STATEMENT CALL GQL("MATCH (n:T {v: 1}) SET n.msg = 'updated'")
+---- 0
+
+-STATEMENT MATCH (n:T) RETURN n.msg
+---- 1
+updated
+
+
+-CASE SetSnapshotOrderParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(a INT64, b INT64, v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:T {a: 10, b: 20, v: 1})")
+---- 0
+
+-STATEMENT CALL GQL("INSERT (n:T {a: 10, b: 20, v: 2})")
+---- 0
+
+# GQL SET is order-independent (all RHS evaluated before assignment): a gets
+# the OLD b. The translator snapshots the RHS values first. Run the GQL form
+# on row 1 and the equivalent Cypher snapshot form on the twin row 2.
+-STATEMENT CALL GQL("MATCH (n:T {v: 1}) SET n.a = n.b, n.b = 99")
+---- 0
+
+-STATEMENT MATCH (n:T {v: 2}) WITH n, n.b AS x, 99 AS y SET n.a = x, n.b = y
+---- 0
+
+-CHECK_ORDER
+-STATEMENT MATCH (n:T) RETURN n.v, n.a, n.b ORDER BY n.v
+---- 2
+1|20|99
+2|20|99
+
+
+-CASE RemovePropertyParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(msg STRING, v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:T {msg: 'x', v: 1})")
+---- 0
+
+# LadybugDB Cypher has no REMOVE; property removal maps to SET ... = NULL.
+-STATEMENT CALL GQL("MATCH (n:T {v: 1}) REMOVE n.msg")
+---- 0
+
+-STATEMENT MATCH (n:T) RETURN n.msg IS NULL
+---- 1
+True
+
+-STATEMENT MATCH (n:T {v: 1}) SET n.msg = NULL
+---- 0
+
+-STATEMENT MATCH (n:T) RETURN n.msg IS NULL
+---- 1
+True
+
+
+-CASE InsertThenMatchThenReturnChain
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE T(v INT64, PRIMARY KEY(v))
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:T {v: 7})")
+---- 0
+
+-STATEMENT CALL GQL("MATCH (n:T) RETURN n.v AS v")
+---- 1
+7
