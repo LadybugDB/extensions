@@ -710,10 +710,10 @@ EmbeddingHandle OnDiskEmbeddings::getEmbedding(common::offset_t offset,
     scanState.nodeIDVector->state->getSelVectorUnsafe().setToUnfiltered(1);
     const auto source = scanState.source;
     const auto nodeGroupIdx = scanState.nodeGroupIdx;
-    if (transaction->isUnCommitted(nodeTable.getTableID(), offset)) {
+    if (transaction->isUnCommitted(nodeTable, offset)) {
         scanState.source = TableScanSource::UNCOMMITTED;
         scanState.nodeGroupIdx = StorageUtils::getNodeGroupIdx(
-            transaction->getLocalRowIdx(nodeTable.getTableID(), offset));
+            transaction->getLocalRowIdx(nodeTable, offset));
     } else {
         scanState.source = TableScanSource::COMMITTED;
         scanState.nodeGroupIdx = StorageUtils::getNodeGroupIdx(offset);
