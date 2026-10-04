@@ -46,7 +46,7 @@ void QueryFTSOptionalParams::evaluateParams(main::ClientContext* context) {
 std::vector<std::string> QueryFTSBindData::getQueryTerms(main::ClientContext& context) const {
     auto queryInStr =
         ExpressionUtil::evaluateLiteral<std::string>(&context, query, LogicalType::STRING());
-    auto config = entry.getAuxInfo().cast<FTSIndexAuxInfo>().config;
+    auto config = auxInfo.config;
     FTSUtils::normalizeQuery(queryInStr, config.ignorePatternQuery,
         true /* protectWildcardChars */);
     auto terms = FTSUtils::tokenizeString(queryInStr, config);
@@ -57,7 +57,7 @@ std::vector<std::string> QueryFTSBindData::getQueryTerms(main::ClientContext& co
                                config.stopWordsTableName)
                            ->getTableID())
             ->ptrCast<NodeTable>();
-    return FTSUtils::stemTerms(terms, entry.getAuxInfo().cast<FTSIndexAuxInfo>().config,
+    return FTSUtils::stemTerms(terms, auxInfo.config,
         MemoryManager::Get(context), stopWordsTable, transaction::Transaction::Get(context),
         optionalParams->constCast<QueryFTSOptionalParams>().conjunctive.getParamVal(),
         true /* isQuery */);
