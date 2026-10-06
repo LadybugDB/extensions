@@ -266,6 +266,38 @@ z|
 
 # SumFunction multiplicity: the cartesian product (2 Persons x 3 Others)
 # feeds each Person's age to the aggregate 3 times -> (33 + 42) * 3 = 225.
+# min/max must agree with the predicates/sortkey on one exact decimal
+# order: int 2^53+1 vs real 2^53 is NOT a tie outside double folding, and
+# _gql_max must return the value _GQL_GT calls larger.
+-CASE MinMaxExactDecimalParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT CREATE GRAPH g ANY
+---- ok
+
+-STATEMENT USE GRAPH g
+---- ok
+
+-STATEMENT CALL GQL("INSERT (h:Person {v: 1, age: 9007199254740993}), (j:Person {v: 2, age: 9007199254740992.0})")
+---- ok
+
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (p) RETURN max(p.age), min(p.age)")
+---- 1
+9007199254740993|9007199254740992.0
+
+-CHECK_ORDER
+-STATEMENT MATCH (p) RETURN _gql_max(p.age), _gql_min(p.age)
+---- 1
+9007199254740993|9007199254740992.0
+
+# The predicate twin says the int is larger — the aggregate must agree.
+-STATEMENT RETURN _gql_gt(9007199254740993, 9007199254740992.0)
+---- 1
+True
+
 -CASE SumMultiplicityParity
 
 -STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"

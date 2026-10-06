@@ -295,6 +295,45 @@ j|9007199254740992.0
 h|9007199254740993
 i|9007199254740994
 
+# Beyond the old 40-digit mantissa cap: the sortkey must accept exactly
+# the numbers the predicates accept (shared decimal path), so ORDER BY can
+# never throw on a value WHERE compares fine.
+# Beyond the old 40-digit mantissa cap: the sortkey must accept exactly
+# the numbers the predicates accept (shared decimal path), so ORDER BY can
+# never throw on a value WHERE compares fine. Numbers reach a JSON column
+# exactly via string values (the property writer stores them raw; a CREATE
+# numeric literal would fold through double at the engine's storage layer,
+# which is out of this layer's hands).
+-CASE SortKeyLongNumberParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+-STATEMENT CREATE GRAPH g ANY
+---- ok
+-STATEMENT USE GRAPH g
+---- ok
+
+-STATEMENT CREATE (b:Person {name: 'big', age: '12345678901234567890123456789012345678901234567890123.5'}), (s:Person {name: 'small', age: '12345678901234567890123456789012345678901234567890123.4'})
+---- ok
+
+# Equal exponent, mantissa differing past digit 40: big > small.
+-STATEMENT RETURN _gql_gt(CAST('12345678901234567890123456789012345678901234567890123.5', 'JSON'), CAST('12345678901234567890123456789012345678901234567890123.4', 'JSON'))
+---- 1
+True
+
+# GQL ORDER BY wraps keys in _gql_sortkey on ANY graphs — the pair must
+# agree: small before big, no "exceeds sortkey precision" rejection.
+-CHECK_ORDER
+-STATEMENT CALL GQL("MATCH (p) RETURN p.name ORDER BY p.age")
+---- 2
+small
+big
+-CHECK_ORDER
+-STATEMENT MATCH (p) RETURN p.name ORDER BY _gql_sortkey(p.age)
+---- 2
+small
+big
+
 -CASE SortKeyBoolRankParity
 
 -STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
