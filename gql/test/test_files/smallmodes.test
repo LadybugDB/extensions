@@ -410,3 +410,19 @@ Runtime exception: GQL feature not supported: DIFFERENT EDGES over multiple path
 1
 2
 3
+
+# _GQL_IS_SIMPLE is a public ANY-typed scalar: a non-path argument must
+# fail loudly at runtime (the DASSERT layout checks vanish in release and
+# the field-vector path would reinterpret-cast).
+-CASE IsSimpleTypeGuardReject
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT RETURN _gql_is_simple(1)
+---- error
+Runtime exception: _GQL_IS_SIMPLE: expected a path value, got INT64
+
+-STATEMENT RETURN _gql_is_simple('x')
+---- error
+Runtime exception: _GQL_IS_SIMPLE: expected a path value, got STRING

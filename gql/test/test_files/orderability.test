@@ -187,3 +187,26 @@ max(DISTINCT x)
 -STATEMENT UNWIND [_gql_to_json(1), _gql_to_json(2.0), _gql_to_json(5), null, _gql_to_json(3.2), _gql_to_json(0.1)] AS x RETURN _gql_max(DISTINCT x)
 ---- 1
 5
+
+# JSON has no spelling for NaN/±Inf: _gql_to_json must reject them loudly
+# (the order siblings reject via realToNumberText; this guard stops the
+# serializer from forging `null`/garbage). error(regex): the non-finite
+# rendering (`inf`, `-nan`) is std::format's, platform-signed.
+-CASE ToJsonNonFiniteRejected
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+
+-STATEMENT RETURN _gql_to_json(1e308 * 10)
+---- error(regex)
+Runtime exception: _GQL_TO_JSON: non-finite value cannot be serialized as JSON: .*
+
+-STATEMENT RETURN _gql_to_json(sqrt(-1.0))
+---- error(regex)
+Runtime exception: _GQL_TO_JSON: non-finite value cannot be serialized as JSON: .*
+
+# Nested in a list: the walk covers LIST/ARRAY/STRUCT nesting too.
+-STATEMENT RETURN _gql_to_json([1.0, sqrt(-1.0)])
+---- error(regex)
+Runtime exception: _GQL_TO_JSON: non-finite value cannot be serialized as JSON: .*
+

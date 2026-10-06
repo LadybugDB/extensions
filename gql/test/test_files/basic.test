@@ -194,3 +194,44 @@ pg|ANY
 -STATEMENT CALL GQL("MATCH (a:A)-[c:CONNECTS]->(b:B) RETURN a.id AS from_, b.id AS to, c.weight AS weight")
 ---- 1
 1|2|100
+
+# GQL double-quoted spellings are delimited identifiers; Cypher spells
+# those with backticks. The translation exit normalizes them so no raw
+# `"..."` identifier ever reaches the Cypher parser (labels, element
+# variables, result aliases all convert under one rule).
+-CASE DelimitedIdentParity
+
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/gql/build/libgql.lbug_extension"
+---- ok
+-STATEMENT CREATE GRAPH g ANY
+---- ok
+-STATEMENT USE GRAPH g
+---- ok
+
+-STATEMENT CALL GQL("INSERT (n:\"My Label\" {name: 'x'})")
+---- ok
+
+-STATEMENT CALL GQL("MATCH (n:\"My Label\") RETURN n.name")
+---- 1
+x
+
+-STATEMENT MATCH (n:`My Label`) RETURN n.name
+---- 1
+x
+
+# Note: delimited *variables* (`MATCH ("weird one" ...)`) never reach
+# translation — the vendored GQL.g4's bindingVariable is regularIdentifier-
+# only, a parse-level ceiling (GQL.g4 is frozen). Labels and result aliases
+# are the surfaces the funnel serves.
+
+-CHECK_COLUMN_NAMES
+-STATEMENT CALL GQL("MATCH (n:\"My Label\") RETURN n.name AS \"weird alias\"")
+---- 2
+weird alias
+x
+
+-CHECK_COLUMN_NAMES
+-STATEMENT MATCH (n:`My Label`) RETURN n.name AS `weird alias`
+---- 2
+weird alias
+x

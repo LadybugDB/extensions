@@ -353,6 +353,12 @@ static std::unique_ptr<TableFuncBindData> bindFunc(ClientContext *context,
     // The graph-type registry and schema catalog live in per-database
     // extension state (same slot) so that catalog semantics (CREATE GRAPH
     // TYPE / CREATE SCHEMA ...) stay scoped to one database.
+    //
+    // ExtensionManager data-slot contract (ladybug#1104 follow-up note): keys
+    // are namespaced under the extension's own prefix `gql.*` (here the single
+    // slot `gql.graphTypes`); the dataMap itself is unguarded by design and is
+    // treated as single-threaded-init state — every read-modify-write below
+    // happens inside one CALL GQL invocation, serialized by the connection.
     auto *extMgr = extension::ExtensionManager::Get(*context);
     std::string catalogData = extMgr->getData("gql.graphTypes");
     GraphTypeRegistry registry = GqlToCypherTransformer::deserializeGraphTypes(catalogData);
