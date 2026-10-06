@@ -1,1 +1,4 @@
 build/
+
+# generated e2e_test case index (see test/runner/e2e_test.cpp)
+test_list
