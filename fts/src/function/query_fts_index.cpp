@@ -141,8 +141,7 @@ struct QFTSEdgeCompute final : EdgeCompute {
         : scores{scores}, dfs{dfs}, scoresMutex{std::make_shared<std::mutex>()} {}
 
     QFTSEdgeCompute(node_id_map_t<ScoreInfo>& scores,
-        const std::unordered_map<offset_t, uint64_t>& dfs,
-        std::shared_ptr<std::mutex> scoresMutex)
+        const std::unordered_map<offset_t, uint64_t>& dfs, std::shared_ptr<std::mutex> scoresMutex)
         : scores{scores}, dfs{dfs}, scoresMutex{std::move(scoresMutex)} {}
 
     std::vector<nodeID_t> edgeCompute(nodeID_t boundNodeID, graph::NbrScanState::Chunk& resultChunk,
@@ -385,11 +384,39 @@ static void initFrontier(FrontierPair& frontierPair, table_id_t termsTableID,
 
 static offset_t tableFunc(const TableFuncInput& input, TableFuncOutput&) {
     auto& clientContext = *input.context->clientContext;
-    auto transaction = transaction::Transaction::Get(clientContext);
+    auto& qFTSBindData = input.bindData->cast<QueryFTSBindData>();
+    // The prepared-plan cache reuses this bind data across executions, so re-resolve the
+    // index on every execution. This throws when the index was dropped (matching the
+    // literal path) and picks up the new backing tables after a recreate.
+    qFTSBindData.refreshFromCatalog(&clientContext);
     auto sharedState = input.sharedState->ptrCast<QFTSSharedState>();
+    // The cached physical plan also reuses the shared state (and its graph) across
+    // executions, so rebuild the graph when the backing tables changed.
+    {
+        auto cachedEntry = sharedState->graph->getGraphEntry();
+        bool stale = cachedEntry->nodeInfos.size() != qFTSBindData.graphEntry.nodeInfos.size() ||
+                     cachedEntry->relInfos.size() != qFTSBindData.graphEntry.relInfos.size();
+        for (size_t i = 0; !stale && i < cachedEntry->nodeInfos.size(); ++i) {
+            if (cachedEntry->nodeInfos[i].entry->getTableID() !=
+                qFTSBindData.graphEntry.nodeInfos[i].entry->getTableID()) {
+                stale = true;
+            }
+        }
+        for (size_t i = 0; !stale && i < cachedEntry->relInfos.size(); ++i) {
+            if (cachedEntry->relInfos[i].entry->getTableID() !=
+                qFTSBindData.graphEntry.relInfos[i].entry->getTableID()) {
+                stale = true;
+            }
+        }
+        if (stale) {
+            sharedState->graph = std::make_unique<graph::OnDiskGraph>(&clientContext,
+                qFTSBindData.graphEntry.copy());
+            sharedState->outputTableID = qFTSBindData.outputTableID;
+        }
+    }
+    auto transaction = transaction::Transaction::Get(clientContext);
     auto graph = sharedState->graph.get();
     auto graphEntry = graph->getGraphEntry();
-    auto& qFTSBindData = input.bindData->cast<QueryFTSBindData>();
     auto qFTSOptionalParams = qFTSBindData.optionalParams->constCast<QueryFTSOptionalParams>();
     if (qFTSOptionalParams.topK.isSet()) {
         sharedState->ptrCast<QFTSTopKSharedState>()->setTopK(qFTSOptionalParams.topK.getParamVal());
@@ -492,8 +519,8 @@ static std::unique_ptr<TableFuncBindData> bindFunc(main::ClientContext* context,
     auto& ftsIndex = index.value()->cast<FTSIndex>();
     auto [numDocs, avgDocLen] = ftsIndex.getStats(transaction);
     auto bindData = std::make_unique<QueryFTSBindData>(std::move(columns), std::move(graphEntry),
-        nodeOutput, std::move(query),
-        ftsIndexEntry->getAuxInfo().cast<FTSIndexAuxInfo>(),
+        nodeOutput, std::move(query), ftsIndexEntry->getAuxInfo().cast<FTSIndexAuxInfo>(),
+        inputTableName, indexName,
         std::make_unique<QueryFTSOptionalParams>(input->optionalParamsLegacy), numDocs, avgDocLen);
     context->setUseInternalCatalogEntry(false /* useInternalCatalogEntry */);
     return bindData;
@@ -522,16 +549,17 @@ static void getLogicalPlan(Planner* planner, const BoundReadingClause& readingCl
 }
 
 std::shared_ptr<TableFuncSharedState> initSharedState(const TableFuncInitSharedStateInput& input) {
-    auto bindData = input.bindData->constPtrCast<QueryFTSBindData>();
+    auto& bindData = input.bindData->cast<QueryFTSBindData>();
+    bindData.refreshFromCatalog(input.context->clientContext);
     auto graph = std::make_unique<graph::OnDiskGraph>(input.context->clientContext,
-        bindData->graphEntry.copy());
-    if (!bindData->optionalParams->constCast<QueryFTSOptionalParams>().topK.isSet()) {
+        bindData.graphEntry.copy());
+    if (!bindData.optionalParams->constCast<QueryFTSOptionalParams>().topK.isSet()) {
         // The user does not give a topK parameter, skip topK optimization.
-        return std::make_shared<QFTSSharedState>(bindData->getResultTable(), std::move(graph),
-            bindData->outputTableID);
+        return std::make_shared<QFTSSharedState>(bindData.getResultTable(), std::move(graph),
+            bindData.outputTableID);
     } else {
-        return std::make_shared<QFTSTopKSharedState>(bindData->getResultTable(), std::move(graph),
-            bindData->outputTableID);
+        return std::make_shared<QFTSTopKSharedState>(bindData.getResultTable(), std::move(graph),
+            bindData.outputTableID);
     }
 }
 

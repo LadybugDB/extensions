@@ -6,11 +6,14 @@
 #include "catalog/fts_index_catalog_entry.h"
 #include "common/exception/binder.h"
 #include "common/string_utils.h"
+#include "index/fts_index.h"
 #include "libstemmer.h"
+#include "main/client_context.h"
 #include "re2.h"
 #include "storage/storage_manager.h"
 #include "storage/table/node_table.h"
 #include "utils/fts_utils.h"
+#include <format>
 
 namespace lbug {
 namespace fts_extension {
@@ -57,10 +60,48 @@ std::vector<std::string> QueryFTSBindData::getQueryTerms(main::ClientContext& co
                                config.stopWordsTableName)
                            ->getTableID())
             ->ptrCast<NodeTable>();
-    return FTSUtils::stemTerms(terms, auxInfo.config,
-        MemoryManager::Get(context), stopWordsTable, transaction::Transaction::Get(context),
+    return FTSUtils::stemTerms(terms, auxInfo.config, MemoryManager::Get(context), stopWordsTable,
+        transaction::Transaction::Get(context),
         optionalParams->constCast<QueryFTSOptionalParams>().conjunctive.getParamVal(),
         true /* isQuery */);
+}
+
+void QueryFTSBindData::refreshFromCatalog(main::ClientContext* context) {
+    std::lock_guard guard{refreshMutex};
+    context->setUseInternalCatalogEntry(true /* useInternalCatalogEntry */);
+    try {
+        auto catalog = catalog::Catalog::Get(*context);
+        auto transaction = transaction::Transaction::Get(*context);
+        auto tableEntry = catalog->getTableCatalogEntry(transaction, tableName);
+        if (!catalog->containsIndex(transaction, tableEntry->getTableID(), indexName)) {
+            throw common::BinderException{std::format(
+                "Table {} doesn't have an index with name {}.", tableEntry->getName(), indexName)};
+        }
+        auto ftsIndexEntry = catalog->getIndex(transaction, tableEntry->getTableID(), indexName);
+        auto termsEntry = catalog->getTableCatalogEntry(transaction,
+            FTSUtils::getTermsTableName(tableEntry->getTableID(), indexName));
+        auto docsEntry = catalog->getTableCatalogEntry(transaction,
+            FTSUtils::getDocsTableName(tableEntry->getTableID(), indexName));
+        auto appearsInEntry = catalog->getTableCatalogEntry(transaction,
+            FTSUtils::getAppearsInTableName(tableEntry->getTableID(), indexName));
+        graphEntry = graph::NativeGraphEntry({termsEntry, docsEntry}, {appearsInEntry});
+        auxInfo.config = ftsIndexEntry->getAuxInfo().cast<FTSIndexAuxInfo>().config;
+        auto nodeTable = StorageManager::Get(*context)
+                             ->getTable(ftsIndexEntry->getTableID())
+                             ->ptrCast<NodeTable>();
+        auto index = nodeTable->getIndex(indexName);
+        if (!index.has_value()) {
+            throw common::BinderException{std::format(
+                "Table {} doesn't have an index with name {}.", tableEntry->getName(), indexName)};
+        }
+        auto [numDocs_, avgDocLen_] = index.value()->cast<FTSIndex>().getStats(transaction);
+        numDocs = numDocs_;
+        avgDocLen = avgDocLen_;
+    } catch (...) {
+        context->setUseInternalCatalogEntry(false /* useInternalCatalogEntry */);
+        throw;
+    }
+    context->setUseInternalCatalogEntry(false /* useInternalCatalogEntry */);
 }
 
 } // namespace fts_extension
