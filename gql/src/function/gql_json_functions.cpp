@@ -45,6 +45,55 @@ using namespace lbug::json_extension;
 // through byte-for-byte: it is already JSON text, and re-serializing it would
 // rewrite formatting the caller may rely on.
 
+namespace {
+
+// JSON has no spelling for NaN/±Inf, and the serializer would silently forge
+// one (`null` or invalid text) — exactly the wrong-value class this layer
+// forbids. The order siblings reject non-finite via realToNumberText; this
+// walks the value (including list/map/struct nesting) and rejects before
+// jsonifying. JSON-typed input is skipped by the caller: it is already text.
+void ensureFiniteForJson(const ValueVector& vec, uint64_t pos) {
+    switch (vec.dataType.getLogicalTypeID()) {
+    case LogicalTypeID::DOUBLE: {
+        auto val = vec.getValue<double>(pos);
+        if (!std::isfinite(val)) {
+            throw RuntimeException(std::format(
+                "_GQL_TO_JSON: non-finite value cannot be serialized as JSON: {}", val));
+        }
+        break;
+    }
+    case LogicalTypeID::FLOAT: {
+        auto val = static_cast<double>(vec.getValue<float>(pos));
+        if (!std::isfinite(val)) {
+            throw RuntimeException(std::format(
+                "_GQL_TO_JSON: non-finite value cannot be serialized as JSON: {}", val));
+        }
+        break;
+    }
+    case LogicalTypeID::LIST:
+    case LogicalTypeID::ARRAY:
+    case LogicalTypeID::MAP: {
+        auto& entry = vec.getValue<list_entry_t>(pos);
+        auto* dataVector = ListVector::getDataVector(&vec);
+        for (auto i = 0u; i < entry.size; ++i) {
+            ensureFiniteForJson(*dataVector, entry.offset + i);
+        }
+        break;
+    }
+    case LogicalTypeID::STRUCT: {
+        auto fieldCount = StructType::getNumFields(vec.dataType);
+        for (auto i = 0u; i < fieldCount; ++i) {
+            ensureFiniteForJson(*StructVector::getFieldVector(&vec, i), pos);
+        }
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+} // namespace
+
 void GqlToJsonFunction::execFunc(const std::vector<std::shared_ptr<ValueVector>>& parameters,
     const std::vector<SelectionVector*>& parameterSelVectors, ValueVector& result,
     SelectionVector* resultSelVector, void* /*dataPtr*/) {
@@ -62,6 +111,7 @@ void GqlToJsonFunction::execFunc(const std::vector<std::shared_ptr<ValueVector>>
             auto jsonVal = parameters[0]->getValue<string_t>(inputPos);
             StringVector::addString(&result, resultPos, jsonVal);
         } else {
+            ensureFiniteForJson(*parameters[0], inputPos);
             StringVector::addString(&result, resultPos,
                 jsonToString(jsonify(*parameters[0], inputPos)));
         }
@@ -225,9 +275,10 @@ void storeFromState(GqlMinMaxState* state, const GqlMinMaxState* other,
 //
 // Within a class:
 //   numbers  — int/real/uint compare numerically regardless of text form
-//              (TCK [5]/[6]); ints compare exactly, a real operand folds both
-//              sides to double (ints beyond 2^53 against a non-integral real
-//              inherit double's usual precision caveat).
+//              (TCK [5]/[6]) through the exact decimal path shared with the
+//              order predicates below (compareDecimalTexts — never double), so
+//              _GQL_MAX/_GQL_MIN cannot disagree with _GQL_LT.._GQL_NE or
+//              ORDER BY _GQL_SORTKEY on the same values.
 //   strings  — byte-wise lexicographic (TCK [7]/[8]: 'b' > 'B' > 'abc').
 //   arrays   — element-wise lexicographic, shorter prefix is smaller
 //              (TCK [9]/[10]: [1] < [2] < [2,1]).
@@ -254,49 +305,21 @@ int jsonRank(yyjson_val* val) {
     throw RuntimeException("_GQL_MAX/_GQL_MIN: unsupported JSON value in comparison");
 }
 
-double jsonNumAsDouble(yyjson_val* val) {
-    if (yyjson_is_real(val)) {
-        return yyjson_get_real(val);
-    }
-    if (yyjson_is_sint(val)) {
-        return static_cast<double>(yyjson_get_sint(val));
-    }
-    return static_cast<double>(yyjson_get_uint(val));
-}
+// Exact decimal machinery, shared with the order-predicate bridge further
+// down this file (same anonymous namespace; defined below). Declared here so
+// aggregate-side number comparison routes through the identical path.
+std::string parsedNumberText(yyjson_val* root, const char* errorPrefix);
+int compareDecimalTexts(std::string_view lhs, std::string_view rhs, const char* errorPrefix);
 
+// Numbers compare through exact decimal normalization — the same
+// compareDecimalTexts path the order predicates and _GQL_SORTKEY use — so
+// min/max can never disagree with _GQL_GT/ORDER BY on the same data. Integers
+// keep their exact spelling; reals carry their double's shortest round-trip
+// form (the shared ceiling for numbers that only exist as parsed doubles).
 int compareJsonNumbers(yyjson_val* lhs, yyjson_val* rhs) {
-    if (yyjson_is_int(lhs) && yyjson_is_int(rhs)) {
-        if (yyjson_is_uint(lhs) && yyjson_is_uint(rhs)) {
-            auto l = yyjson_get_uint(lhs);
-            auto r = yyjson_get_uint(rhs);
-            return l < r ? -1 : (l > r ? 1 : 0);
-        }
-        if (yyjson_is_sint(lhs) && yyjson_is_sint(rhs)) {
-            auto l = yyjson_get_sint(lhs);
-            auto r = yyjson_get_sint(rhs);
-            return l < r ? -1 : (l > r ? 1 : 0);
-        }
-        // Mixed signedness: a negative sint always sorts below any uint.
-        if (yyjson_is_sint(lhs)) {
-            auto l = yyjson_get_sint(lhs);
-            if (l < 0) {
-                return -1;
-            }
-            auto lu = static_cast<uint64_t>(l);
-            auto r = yyjson_get_uint(rhs);
-            return lu < r ? -1 : (lu > r ? 1 : 0);
-        }
-        auto r = yyjson_get_sint(rhs);
-        if (r < 0) {
-            return 1;
-        }
-        auto l = yyjson_get_uint(lhs);
-        auto ru = static_cast<uint64_t>(r);
-        return l < ru ? -1 : (l > ru ? 1 : 0);
-    }
-    auto l = jsonNumAsDouble(lhs);
-    auto r = jsonNumAsDouble(rhs);
-    return l < r ? -1 : (l > r ? 1 : 0);
+    static constexpr const char* kPrefix = "_GQL_MAX/_GQL_MIN";
+    return compareDecimalTexts(parsedNumberText(lhs, kPrefix), parsedNumberText(rhs, kPrefix),
+        kPrefix);
 }
 
 // Structural equality over parsed JSON (all-inline yyjson API, no link-time
@@ -711,13 +734,17 @@ void GqlSumAvgState<IS_AVG>::writeToVector(ValueVector* outputVector, uint64_t p
             }
         },
         [&]<FloatingPointTypes T>(T) {
-            if constexpr (IS_AVG) {
-                // Same expression as AvgState<FloatingPointTypes>::finalize
-                // (avg.h:34): sum / count in double.
-                outputVector->setValue(pos, dblSum / count);
-            } else {
-                outputVector->setValue(pos, dblSum);
+            // Same expression as AvgState<FloatingPointTypes>::finalize
+            // (avg.h:34): sum / count in double. Unlike the engine's IEEE
+            // write-through, a non-finite result is a loud reject here — the
+            // JSON result path (formatJsonReal) already rejects, and a silent
+            // Inf/NaN would be a wrong GQL answer.
+            double out = IS_AVG ? dblSum / count : dblSum;
+            if (!std::isfinite(out)) {
+                throw RuntimeException(
+                    std::format("_GQL_SUM/_GQL_AVG: non-finite result: {}", out));
             }
+            outputVector->setValue(pos, out);
         },
         [&](auto) -> void {
             throw RuntimeException(sumAvgUnsupportedTypeError(LogicalType(storedType)));
@@ -1000,8 +1027,9 @@ function_set GqlAvgFunction::getFunctionSet() {
 // parsing fails — is the bare text the property writer stores, `x` and not
 // `"x"`), LIST/ARRAY columns are serialized through jsonify, and typed
 // integers/floats keep an exact decimal spelling. Numbers compare through
-// exact decimal normalization (arbitrary length, never double) — the upgrade
-// over compareJsonNumbers, whose >int64 path silently folds through double.
+// exact decimal normalization (arbitrary length, never double) — the same
+// path compareJsonNumbers (aggregate min/max) now uses, so every number entry
+// point agrees on one order.
 //
 // _GQL_SORTKEY encodes the same order into one byte-comparable STRING so
 // ORDER BY can use it directly (the engine compares STRING values byte-wise).
@@ -1012,15 +1040,16 @@ constexpr const char* ORDER_PREDICATE_PREFIX = "_GQL_LT/_GQL_LE/_GQL_GT/_GQL_GE"
 constexpr const char* SORTKEY_PREFIX = "_GQL_SORTKEY";
 
 // -----------------------------------------------------------------------------
-// Exact decimal normalization (shared by the predicates and the sort key)
+// Exact decimal normalization (shared by the predicates, the sort key and
+// aggregate min/max number comparison)
 // -----------------------------------------------------------------------------
 
 // `value = sign * 0.<digits> * 10^exponent`, with `digits` stripped of both
 // leading and trailing zeros (zero is sign 0 with empty digits). Parses JSON
 // number spellings (fraction, `e`/`E` exponent, exponent sign) as well as the
 // plain integer text TypeUtils::toString produces. All digits are kept: no
-// step routes the value through double, which is why this bridge cannot reuse
-// compareJsonNumbers.
+// step routes the value through double — which is why every number-ordering
+// entry point (compareJsonNumbers included) funnels through this path.
 struct DecimalParts {
     int32_t sign = 0;
     std::string digits;
@@ -1107,7 +1136,8 @@ DecimalParts normalizeDecimalText(std::string_view text, const char* errorPrefix
 // -1 / 0 / +1 over two decimal payload texts, exact for arbitrary lengths.
 // Sign decides first; within one sign the magnitude (exponent, then canonical
 // digit string — the shorter prefix is smaller) decides, and negative
-// operands reverse it. Replaces compareJsonNumbers for the bridge.
+// operands reverse it. The one number-ordering path: predicates, sort key
+// and compareJsonNumbers (aggregate min/max) all land here.
 int compareDecimalTexts(std::string_view lhs, std::string_view rhs, const char* errorPrefix) {
     auto lhsParts = normalizeDecimalText(lhs, errorPrefix);
     auto rhsParts = normalizeDecimalText(rhs, errorPrefix);
@@ -1375,18 +1405,29 @@ int compareOrderedOperands(const GqlOrderedOperand& lhs, const GqlOrderedOperand
 //   bool   `b` + `0`/`1`
 //   array  `c` + elements + 0x00
 //   string `d` + text (0x00-terminated and 0x00-escaped inside arrays)
-//   number `e` + sign(`0` neg / `1` zero / `2` pos) + 8-digit biased exponent
-//          + 40-digit right-zero-padded mantissa
+//   number `e` + sign(`0` neg / `1` zero / `2` pos) + 20-digit biased int64
+//          exponent + canonical mantissa digits + terminator (0x00 pos /
+//          0xFF neg — see below)
 // Objects have no total order and fail loudly.
+//
+// Number payload note: no width caps — the key accepts exactly the numbers
+// the order predicates accept (one shared decimal path), so ORDER BY can
+// never throw on a value WHERE compares fine. The mantissa is the canonical
+// digit string (no trailing zeros) with a self-delimiting terminator chosen
+// so byte order equals numeric order: positive numbers need "shorter prefix
+// is smaller" (a terminator below every digit, 0x00), while negative numbers
+// compare by 9's complement where a shorter prefix must sort *larger* (the
+// terminator must sit above every complemented digit, 0xFF).
 //
 // Array framing note: the task brief specified an 8-hex-digit element length
 // prefix, but a length field decides byte comparison *before* the element's
 // rank/contents, so it silently mis-orders exactly the values this key exists
 // to order — e.g. ["b"] (len 2) would sort below ["abc"] (len 4) although
 // "abc" < "b". Elements are therefore self-delimiting instead (FoundationDB
-// tuple style): variable-length payloads end with 0x00 and string payloads
-// escape 0x00 as 0x00 0xFF, which keeps byte order equal to element order and
-// makes a shorter element sequence a byte prefix (so it sorts first).
+// tuple style): variable-length payloads end with a terminator and string
+// payloads escape 0x00 as 0x00 0xFF, which keeps byte order equal to element
+// order and makes a shorter element sequence a byte prefix (so it sorts
+// first).
 
 void appendEscapedText(const std::string& text, std::string& out) {
     for (auto c : text) {
@@ -1398,27 +1439,27 @@ void appendEscapedText(const std::string& text, std::string& out) {
 }
 
 void appendNumberSortKey(std::string_view text, const char* errorPrefix, std::string& out) {
-    constexpr int64_t EXPONENT_LIMIT = 999999;
-    constexpr size_t MANTISSA_WIDTH = 40;
     auto parts = normalizeDecimalText(text, errorPrefix);
     out += 'e';
     if (parts.sign == 0) {
-        // -0.0 and 0 collapse into one canonical zero key.
+        // -0.0 and 0 collapse into one canonical zero key ('1' is unique to
+        // zero, so the key self-delimits against the other sign classes).
         out += '1';
-        out.append(8, '0');
         return;
     }
-    if (parts.exponent < -EXPONENT_LIMIT || parts.exponent > EXPONENT_LIMIT ||
-        parts.digits.size() > MANTISSA_WIDTH) {
-        throw RuntimeException(std::format("{}: number exceeds sortkey precision", errorPrefix));
-    }
-    // Bias into [1, 1_999_999]; a fixed 8-digit field keeps byte order equal
-    // to exponent order (no length prefix to interfere).
-    std::string exponentText = std::format("{:08d}", parts.exponent + 1000000);
+    // Biased into [0, 2^64-1] over the full int64 exponent range; a fixed
+    // 20-digit field keeps byte order equal to exponent order (no length
+    // prefix to interfere).
+    const uint64_t biasedExponent = static_cast<uint64_t>(parts.exponent) + (uint64_t{1} << 63);
+    std::string exponentText = std::format("{:020d}", biasedExponent);
     std::string mantissa = parts.digits;
-    mantissa.append(MANTISSA_WIDTH - mantissa.size(), '0');
     if (parts.sign > 0) {
         out += '2';
+        out += exponentText;
+        out += mantissa;
+        // Terminator below every digit: a shorter mantissa (smaller value at
+        // equal exponent) byte-sorts first.
+        out += '\0';
     } else {
         out += '0';
         // Negative numbers reverse both fields digit-wise (9's complement), so
@@ -1429,9 +1470,12 @@ void appendNumberSortKey(std::string_view text, const char* errorPrefix, std::st
         for (auto& c : mantissa) {
             c = static_cast<char>('9' - (c - '0'));
         }
+        out += exponentText;
+        out += mantissa;
+        // Terminator above every complemented digit: a shorter mantissa
+        // (larger value, i.e. less negative) byte-sorts after a longer one.
+        out += static_cast<char>(0xFF);
     }
-    out += exponentText;
-    out += mantissa;
 }
 
 void appendSortKey(const GqlOrderedOperand& operand, bool asElement, const char* errorPrefix,
@@ -1640,6 +1684,49 @@ bool isDistinctPrefix(common::ValueVector* idsVector, common::offset_t base, uin
     return true;
 }
 
+// Runtime shape guard for the path layout this predicate reads. The DASSERTs
+// alone are not enough: this is a public ANY-typed scalar, so an untrusted
+// query (`RETURN _GQL_IS_SIMPLE(1)`) can reach the field-vector path with a
+// non-path value, where StructVector::getFieldVector is a reinterpret_cast in
+// release builds. Validate the layout and throw — never reinterpret.
+void ensurePathNodeIDLayout(const LogicalType& type) {
+    constexpr const char* kFn = "_GQL_IS_SIMPLE";
+    if (type.getPhysicalType() != PhysicalTypeID::STRUCT) {
+        throw RuntimeException(
+            std::format("{}: expected a path value, got {}", kFn, type.toString()));
+    }
+    if (!StructType::hasField(type, InternalKeyword::NODES)) {
+        throw RuntimeException(std::format("{}: expected a path value with a {} field, got {}",
+            kFn, std::string(InternalKeyword::NODES), type.toString()));
+    }
+    const auto& nodesType = StructType::getFieldType(type, InternalKeyword::NODES);
+    if (nodesType.getLogicalTypeID() != LogicalTypeID::LIST) {
+        throw RuntimeException(std::format("{}: path {} field must be a LIST, got {}", kFn,
+            std::string(InternalKeyword::NODES), nodesType.toString()));
+    }
+    const auto& nodeType = ListType::getChildType(nodesType);
+    if (nodeType.getPhysicalType() != PhysicalTypeID::STRUCT) {
+        throw RuntimeException(std::format("{}: path {} elements must be NODE structs, got {}",
+            kFn, std::string(InternalKeyword::NODES), nodeType.toString()));
+    }
+    if (!StructType::hasField(nodeType, InternalKeyword::ID)) {
+        throw RuntimeException(std::format("{}: path NODE elements must have an {} field, got {}",
+            kFn, std::string(InternalKeyword::ID), nodeType.toString()));
+    }
+    // Layout contract shared with UnaryPathExecutor::executeNodeIDs
+    // (src/include/function/path/path_function_executor.h): internalID at
+    // field 0 of each NODE struct.
+    if (0 != StructType::getFieldIdx(nodeType, InternalKeyword::ID)) {
+        throw RuntimeException(std::format(
+            "{}: path NODE {} field must be at layout position 0", kFn, std::string(InternalKeyword::ID)));
+    }
+    const auto& idType = StructType::getFieldType(nodeType, InternalKeyword::ID);
+    if (idType.getLogicalTypeID() != LogicalTypeID::INTERNAL_ID) {
+        throw RuntimeException(std::format("{}: path NODE {} field must be INTERNAL_ID, got {}",
+            kFn, std::string(InternalKeyword::ID), idType.toString()));
+    }
+}
+
 } // namespace
 
 void GqlIsSimpleFunction::execFunc(const std::vector<std::shared_ptr<ValueVector>>& parameters,
@@ -1647,16 +1734,27 @@ void GqlIsSimpleFunction::execFunc(const std::vector<std::shared_ptr<ValueVector
     SelectionVector* resultSelVector, void* /*dataPtr*/) {
     DASSERT(parameters.size() == 1);
     auto& input = *parameters[0];
-    // Path struct: field 0 = NODES (LIST of NODE); internalID at field 0 of
-    // each NODE — the exact layout UnaryPathExecutor::executeNodeIDs reads.
-    DASSERT(0 == StructType::getFieldIdx(input.dataType, InternalKeyword::NODES));
-    auto nodesVector = StructVector::getFieldVector(&input, 0).get();
+    // Path struct: NODES (LIST of NODE); internalID at field 0 of each NODE —
+    // the exact layout UnaryPathExecutor::executeNodeIDs reads. Validated at
+    // runtime (public ANY-typed scalar), looked up by field name below.
+    ensurePathNodeIDLayout(input.dataType);
+    auto nodesIdx = StructType::getFieldIdx(input.dataType, InternalKeyword::NODES);
+    auto nodesVector = StructVector::getFieldVector(&input, nodesIdx).get();
     auto listDataVector = ListVector::getDataVector(nodesVector);
-    DASSERT(0 == StructType::getFieldIdx(listDataVector->dataType, InternalKeyword::ID));
     auto idsVector = StructVector::getFieldVector(listDataVector, 0).get();
+    auto& inputSel = *parameterSelVectors[0];
+    const auto inputSelSize = inputSel.getSelSize();
+    // Pair result rows with input rows. A single-row input may broadcast over
+    // an unflat result; any other size mismatch is a dispatch contract
+    // violation and must fail loudly rather than read the sel vector OOB.
+    if (inputSelSize != 1 && inputSelSize != resultSelVector->getSelSize()) {
+        throw RuntimeException(std::format(
+            "_GQL_IS_SIMPLE: input/result selection size mismatch ({} vs {})", inputSelSize,
+            resultSelVector->getSelSize()));
+    }
     std::unordered_set<common::internalID_t, InternalIDHasher> seen;
     for (auto i = 0u; i < resultSelVector->getSelSize(); ++i) {
-        auto inputPos = (*parameterSelVectors[0])[i];
+        auto inputPos = inputSel[inputSelSize == 1 ? 0 : i];
         auto resultPos = (*resultSelVector)[i];
         if (input.isNull(inputPos)) {
             result.setNull(resultPos, true);
@@ -1810,7 +1908,7 @@ static std::unique_ptr<FunctionBindData> bindListChecked(
     auto resultType = LogicalType::LIST(combinedType.copy());
     auto bindData = std::make_unique<FunctionBindData>(std::move(resultType));
     for (auto& _ : input.arguments) {
-        (void)_;
+        (void)_; 
         bindData->paramTypes.push_back(combinedType.copy());
     }
     return bindData;
