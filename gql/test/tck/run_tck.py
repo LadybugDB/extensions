@@ -59,19 +59,32 @@ REPO_ROOT = TCK_ROOT.parents[3]
 
 
 def _find_e2e_bin() -> pathlib.Path:
-    """E2E_BIN env override, else first existing candidate (Windows MSVC
-    layout from _build_gql.bat, then Ninja single-config layout on Linux)."""
+    """Locate the e2e_test binary.
+
+    Contract: CI and non-standard layouts set E2E_BIN explicitly. Without it
+    we probe the repo's conventional build trees only (single-config Ninja,
+    make-style per-config, MSVC multi-config) — no machine-specific build
+    directories are hardcoded. A miss returns a placeholder path that main()
+    reports with the E2E_BIN hint.
+    """
     env = os.environ.get("E2E_BIN")
     if env:
         return pathlib.Path(env)
-    for cand in (
-        REPO_ROOT / "build_v0211t" / "src" / "Release" / "e2e_test.exe",
-        REPO_ROOT / "build" / "test" / "runner" / "e2e_test",
-        REPO_ROOT / "build" / "test" / "runner" / "e2e_test.exe",
-    ):
-        if cand.exists():
-            return cand
-    return REPO_ROOT / "build_v0211t" / "src" / "Release" / "e2e_test.exe"
+    hits = sorted(
+        p for pat in (
+            "build/test/runner/e2e_test",
+            "build/test/runner/e2e_test.exe",
+            "build/*/test/runner/e2e_test",
+            "build/*/test/runner/e2e_test.exe",
+            "build*/src/Release/e2e_test.exe",
+            "build*/src/Debug/e2e_test.exe",
+        )
+        for p in REPO_ROOT.glob(pat)
+        if p.is_file()
+    )
+    if hits:
+        return hits[0]
+    return REPO_ROOT / "build" / "test" / "runner" / "e2e_test"
 
 
 E2E_BIN = _find_e2e_bin()
@@ -202,11 +215,11 @@ def _parse_scenario_body(lines: list[str], i: int):
         keyword, text = m.group(1), m.group(2)
         i += 1
         doc = None
-        if i < n and lines[i].strip().startswith('"""'):
+        if i < n and lines[i].strip().startswith('\"\"\"'):
             delim_indent = len(lines[i]) - len(lines[i].lstrip())
             i += 1
             body: list[str] = []
-            while i < n and not lines[i].strip().startswith('"""'):
+            while i < n and not lines[i].strip().startswith('\"\"\"'):
                 body.append(lines[i][delim_indent:] if len(lines[i]) > delim_indent
                             else lines[i].strip())
                 i += 1
@@ -1106,6 +1119,7 @@ def main() -> int:
 
     print(f"generated {len(index)} cases in {GEN_DIR} "
           f"(skipped {len(skipped)} of {len(all_sc)} scenarios)")
+    n_generated = len(index)
 
     env = {"E2E_TEST_FILES_DIRECTORY": "_tck_gen", "LBUG_ROOT_DIRECTORY": str(REPO_ROOT)}
     proc = subprocess.run(
@@ -1121,6 +1135,20 @@ def main() -> int:
     # gtest "N tests from M suites" totals
     tot_m = re.search(r"\[==========\] (\d+) tests? from", log)
     n_total = int(tot_m.group(1)) if tot_m else 0
+
+    # ---- harness integrity: a green report is meaningless if nothing ran ----
+    # An e2e_test crash (or unparsable log) must never fall through to
+    # failed=∅ -> exit 0. The gtest footer and the generated-case count are
+    # both hard checks.
+    if tot_m is None:
+        print(f"HARNESS ERROR: no gtest summary footer in {GEN_DIR / 'run.log'} — "
+              f"e2e_test crashed or produced no output (exit {proc.returncode})",
+              file=sys.stderr)
+        return 1
+    if n_total != n_generated:
+        print(f"HARNESS ERROR: e2e_test ran {n_total} tests but {n_generated} "
+              f"cases were generated — see {GEN_DIR / 'run.log'}", file=sys.stderr)
+        return 1
 
     # extract each failed case's RUN block (and its first error line)
     fail_blocks: dict[str, str] = {}
@@ -1188,6 +1216,17 @@ def main() -> int:
     n_note = len(pass_with_note)
     skipped.extend(probe_skipped)
 
+    # Classification completeness: every executed case must land in exactly
+    # one bucket (raw gtest pass / final fail / passed-with-note / probe-skip).
+    # Without this, an unparsable failure block could silently drop a case.
+    if n_pass + n_fail + n_note + len(probe_skipped) != n_total:
+        print(f"HARNESS ERROR: classification incomplete — {n_total} executed "
+              f"but {n_pass} pass + {n_fail} fail + {n_note} note + "
+              f"{len(probe_skipped)} probe-skip = "
+              f"{n_pass + n_fail + n_note + len(probe_skipped)}",
+              file=sys.stderr)
+        return 1
+
     # ---- report ----
     lines = ["# opengql/tck conformance report — LadybugDB GQL translation layer", ""]
     lines.append(f"- TCK vendored at `extension/gql/test/tck/` "
@@ -1197,8 +1236,6 @@ def main() -> int:
     lines.append(f"- Scenarios run: **{n_pass + n_fail + n_note}** executed, "
                  f"**{n_pass} passed**, **{n_note} passed-with-note**, "
                  f"**{n_fail} failed**, **{len(skipped)} skipped**.")
-    if n_total and n_total != n_pass + n_fail + n_note:
-        lines.append(f"- gtest total: {n_total}.")
     lines.append("")
     lines.append("Methodology: expected results are compared in the engine's "
                  "Value::toString form; exception scenarios assert the corpus "
@@ -1225,6 +1262,10 @@ def main() -> int:
     lines.append("")
     lines.append("Corpus-integrity footnotes (the vendored .feature files and "
                  "their assertions are NOT modified):")
+    lines.append("- All corpus-integrity items below are reported upstream as "
+                 "[opengql/tck#9](https://github.com/opengql/tck/issues/9) "
+                 "(filed 2026-10-04; the maintainer invited a corpus-fix PR, "
+                 "tracked in the handover).")
     lines.append("- `data/catalogs/catalog-1.gql` is a harness-supplied fixture "
                  "completing the input data `drop1 [1]`/`[2]` reference via "
                  "`Given catalog-1 catalog` (it contains only `CREATE SCHEMA "
