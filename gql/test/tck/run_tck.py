@@ -215,11 +215,11 @@ def _parse_scenario_body(lines: list[str], i: int):
         keyword, text = m.group(1), m.group(2)
         i += 1
         doc = None
-        if i < n and lines[i].strip().startswith('\"\"\"'):
+        if i < n and lines[i].strip().startswith('"""'):
             delim_indent = len(lines[i]) - len(lines[i].lstrip())
             i += 1
             body: list[str] = []
-            while i < n and not lines[i].strip().startswith('\"\"\"'):
+            while i < n and not lines[i].strip().startswith('"""'):
                 body.append(lines[i][delim_indent:] if len(lines[i]) > delim_indent
                             else lines[i].strip())
                 i += 1

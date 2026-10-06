@@ -1908,7 +1908,7 @@ static std::unique_ptr<FunctionBindData> bindListChecked(
     auto resultType = LogicalType::LIST(combinedType.copy());
     auto bindData = std::make_unique<FunctionBindData>(std::move(resultType));
     for (auto& _ : input.arguments) {
-        (void)_; 
+        (void)_;
         bindData->paramTypes.push_back(combinedType.copy());
     }
     return bindData;
