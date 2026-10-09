@@ -29,8 +29,7 @@ static bool ftsInternalTablesComplete(main::ClientContext* context, common::tabl
     return catalog->containsTable(transaction, stopWordsTableName) &&
            catalog->containsTable(transaction, FTSUtils::getDocsTableName(tableID, indexName)) &&
            catalog->containsTable(transaction, FTSUtils::getTermsTableName(tableID, indexName)) &&
-           catalog->containsTable(transaction,
-               FTSUtils::getAppearsInTableName(tableID, indexName));
+           catalog->containsTable(transaction, FTSUtils::getAppearsInTableName(tableID, indexName));
 }
 
 static void initFTSEntries(main::ClientContext* context, catalog::Catalog& catalog) {
