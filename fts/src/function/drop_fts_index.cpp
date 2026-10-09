@@ -1,6 +1,7 @@
 #include "function/drop_fts_index.h"
 
 #include "catalog/catalog.h"
+#include "catalog/fts_index_catalog_entry.h"
 #include "function/fts_bind_data.h"
 #include "function/fts_index_utils.h"
 #include "function/table/bind_data.h"
@@ -32,14 +33,33 @@ static std::unique_ptr<TableFuncBindData> bindFunc(ClientContext* context,
 std::string dropFTSIndexQuery(ClientContext& context, const TableFuncBindData& bindData) {
     context.setUseInternalCatalogEntry(true /* useInternalCatalogEntry */);
     auto ftsBindData = bindData.constPtrCast<FTSBindData>();
+    auto catalog = catalog::Catalog::Get(context);
+    auto transaction = transaction::Transaction::Get(context);
     auto query = std::format("CALL _DROP_FTS_INDEX('{}', '{}');", ftsBindData->tableName,
         ftsBindData->indexName);
-    query += std::format("DROP TABLE `{}`;",
+    // Drop the rel table before the node tables it references. IF EXISTS keeps a
+    // previously-interrupted DROP retryable: _DROP_FTS_INDEX above removes the catalog
+    // index entry first, so a retry can no longer rely on the entry being present.
+    query += std::format("DROP TABLE IF EXISTS `{}`;",
         FTSUtils::getAppearsInTableName(ftsBindData->tableID, ftsBindData->indexName));
-    query += std::format("DROP TABLE `{}`;",
+    // Transient build table; residue if CREATE was interrupted before its final DROP.
+    query += std::format("DROP TABLE IF EXISTS `{}`;",
+        FTSUtils::getAppearsInfoTableName(ftsBindData->tableID, ftsBindData->indexName));
+    query += std::format("DROP TABLE IF EXISTS `{}`;",
         FTSUtils::getDocsTableName(ftsBindData->tableID, ftsBindData->indexName));
-    query += std::format("DROP TABLE `{}`;",
+    query += std::format("DROP TABLE IF EXISTS `{}`;",
         FTSUtils::getTermsTableName(ftsBindData->tableID, ftsBindData->indexName));
+    // Per-index stopwords copy (the shared default table is never dropped).
+    auto indexEntry = catalog->getIndex(transaction, ftsBindData->tableID, ftsBindData->indexName);
+    auto stopWordsTableName =
+        indexEntry->getAuxInfo().cast<FTSIndexAuxInfo>().config.stopWordsTableName;
+    if (stopWordsTableName != FTSUtils::getDefaultStopWordsTableName()) {
+        query += std::format("DROP TABLE IF EXISTS `{}`;", stopWordsTableName);
+    }
+    // NOTE: the per-index tokenize macro is intentionally left behind. Dropping it
+    // here (or recreating it in CREATE) would emit macro-drop WAL records whose
+    // replay is currently broken engine-side (getScalarMacroCatalogEntry looks in the
+    // wrong catalog set), breaking un-checkpointed reopen. Revisit once fixed.
     return query;
 }
 

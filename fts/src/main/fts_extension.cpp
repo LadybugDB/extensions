@@ -10,11 +10,27 @@
 #include "index/fts_index.h"
 #include "main/client_context.h"
 #include "storage/storage_manager.h"
+#include "utils/fts_utils.h"
 
 namespace lbug {
 namespace fts_extension {
 
 using namespace extension;
+
+// An interrupted CREATE/DROP can leave the catalog index entry present while some of
+// its internal tables are missing. Loading such an index throws and would fail the
+// whole database open, so detect the torn state up front and skip the index instead.
+// The database still opens; repair with DROP_FTS_INDEX + CREATE_FTS_INDEX (a plain
+// re-CREATE also works: CREATE self-heals internal-only residue).
+static bool ftsInternalTablesComplete(main::ClientContext* context, common::table_id_t tableID,
+    const std::string& indexName, const std::string& stopWordsTableName) {
+    auto catalog = catalog::Catalog::Get(*context);
+    auto transaction = transaction::Transaction::Get(*context);
+    return catalog->containsTable(transaction, stopWordsTableName) &&
+           catalog->containsTable(transaction, FTSUtils::getDocsTableName(tableID, indexName)) &&
+           catalog->containsTable(transaction, FTSUtils::getTermsTableName(tableID, indexName)) &&
+           catalog->containsTable(transaction, FTSUtils::getAppearsInTableName(tableID, indexName));
+}
 
 static void initFTSEntries(main::ClientContext* context, catalog::Catalog& catalog) {
     auto storageManager = storage::StorageManager::Get(*context);
@@ -22,6 +38,11 @@ static void initFTSEntries(main::ClientContext* context, catalog::Catalog& catal
         if (indexEntry->getIndexType() == FTSIndexCatalogEntry::TYPE_NAME &&
             !indexEntry->isLoaded()) {
             indexEntry->setAuxInfo(FTSIndexAuxInfo::deserialize(indexEntry->getAuxBufferReader()));
+            auto& auxConfig = indexEntry->getAuxInfo().cast<FTSIndexAuxInfo>().config;
+            if (!ftsInternalTablesComplete(context, indexEntry->getTableID(),
+                    indexEntry->getIndexName(), auxConfig.stopWordsTableName)) {
+                continue;
+            }
             auto& nodeTable =
                 storageManager->getTable(indexEntry->getTableID())->cast<storage::NodeTable>();
             auto optionalIndex = nodeTable.getIndexHolder(indexEntry->getIndexName());
