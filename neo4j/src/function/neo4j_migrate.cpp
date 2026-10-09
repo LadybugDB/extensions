@@ -124,10 +124,14 @@ static void addLabel(httplib::Client& cli, common::TableType tableType, std::str
         auto firstResult = yyjson_arr_get(resultsArr, 0);
         auto dataArr = yyjson_obj_get(firstResult, "data");
         if (yyjson_arr_size(dataArr) > 0) {
-            auto rowArr = yyjson_arr_get(dataArr, 0);
+            auto rowArr = yyjson_obj_get(yyjson_arr_get(dataArr, 0), "row");
+            char* found = yyjson_val_write(rowArr, 0, nullptr);
+            std::string foundStr = found ? found : "";
+            free(found);
+            yyjson_doc_free(doc);
             throw common::RuntimeException{std::format(
                 "Importing nodes with multi-labels is not supported right now. Found: {}",
-                yyjson_get_str(yyjson_arr_get(rowArr, 0)))};
+                foundStr)};
         }
         yyjson_doc_free(doc);
     }
