@@ -187,7 +187,7 @@ std::string createFTSIndexQuery(ClientContext& context, const TableFuncBindData&
                              "UNWIND tk AS t "
                              "WITH t AS t1, id AS id1 "
                              "WHERE t1 is NOT NULL AND SIZE(t1) > 0 AND "
-                             "NOT EXISTS {MATCH (s:`{}` {sw: t1})} "
+                             "NOT EXISTS {{MATCH (s:`{}` {{sw: t1}})}} "
                              "RETURN STEM(t1, '{}'), id1);",
             appearsInfoTableName, tableName, FTSUtils::getTokenizeMacroName(tableID, indexName),
             propertyName, ftsBindData->createFTSConfig.stopWordsTableInfo.tableName,
