@@ -56,8 +56,10 @@ std::string dropFTSIndexQuery(ClientContext& context, const TableFuncBindData& b
     if (stopWordsTableName != FTSUtils::getDefaultStopWordsTableName()) {
         query += std::format("DROP TABLE IF EXISTS `{}`;", stopWordsTableName);
     }
-    query += std::format("DROP MACRO IF EXISTS `{}`;",
-        FTSUtils::getTokenizeMacroName(ftsBindData->tableID, ftsBindData->indexName));
+    // NOTE: the per-index tokenize macro is intentionally left behind. Dropping it
+    // here (or recreating it in CREATE) would emit macro-drop WAL records whose
+    // replay is currently broken engine-side (getScalarMacroCatalogEntry looks in the
+    // wrong catalog set), breaking un-checkpointed reopen. Revisit once fixed.
     return query;
 }
 
