@@ -63,26 +63,38 @@ static std::vector<property_id_t> bindProperties(const catalog::NodeTableCatalog
     return result;
 }
 
-static void validateInternalTableNotExist(const std::string& tableName,
-    const catalog::Catalog& catalog, const transaction::Transaction* transaction) {
-    if (catalog.containsTable(transaction, tableName)) {
-        throw BinderException{
-            std::format("Table: {} already exists. Please drop or rename the table before "
-                        "creating a full text search index.",
-                tableName)};
+// Drops internal-only residue left behind by an interrupted CREATE/DROP so a failed
+// CREATE can simply be retried in place. The catalog index entry is written last
+// during CREATE, so any internal table/macro present without an index entry is
+// residue by definition (bind already validated the index itself doesn't exist).
+// Genuine user tables with colliding names are never dropped; they still raise.
+static std::string dropResidueStatements(ClientContext& context, table_id_t tableID,
+    const std::string& indexName, const StopWordsTableInfo& stopWordsInfo) {
+    auto catalog = catalog::Catalog::Get(context);
+    auto transaction = transaction::Transaction::Get(context);
+    std::string query;
+    auto maybeDropTable = [&](const std::string& tableName) {
+        if (catalog->containsTable(transaction, tableName, false /* useInternal */)) {
+            throw BinderException{
+                std::format("Table: {} already exists. Please drop or rename the table before "
+                            "creating a full text search index.",
+                    tableName)};
+        }
+        if (catalog->containsTable(transaction, tableName)) {
+            query += std::format("DROP TABLE IF EXISTS `{}`;", tableName);
+        }
+    };
+    // Drop the rel table before the node tables it references.
+    maybeDropTable(FTSUtils::getAppearsInTableName(tableID, indexName));
+    maybeDropTable(FTSUtils::getAppearsInfoTableName(tableID, indexName));
+    maybeDropTable(FTSUtils::getDocsTableName(tableID, indexName));
+    maybeDropTable(FTSUtils::getTermsTableName(tableID, indexName));
+    // The shared default stopwords table is idempotent (IF NOT EXISTS + MERGE) and
+    // must never be dropped; only per-index copies are residue candidates.
+    if (stopWordsInfo.source != StopWordsSource::DEFAULT) {
+        maybeDropTable(stopWordsInfo.tableName);
     }
-}
-
-static void validateInternalTablesNotExist(table_id_t tableID, const std::string& indexName,
-    const catalog::Catalog& catalog, const transaction::Transaction* transaction) {
-    validateInternalTableNotExist(FTSUtils::getDocsTableName(tableID, indexName), catalog,
-        transaction);
-    validateInternalTableNotExist(FTSUtils::getAppearsInTableName(tableID, indexName), catalog,
-        transaction);
-    validateInternalTableNotExist(FTSUtils::getAppearsInfoTableName(tableID, indexName), catalog,
-        transaction);
-    validateInternalTableNotExist(FTSUtils::getTermsTableName(tableID, indexName), catalog,
-        transaction);
+    return query;
 }
 
 static std::unique_ptr<TableFuncBindData> bindFunc(ClientContext* context,
@@ -148,23 +160,27 @@ std::string createFTSIndexQuery(ClientContext& context, const TableFuncBindData&
     auto ftsBindData = bindData.constPtrCast<CreateFTSBindData>();
     auto tableID = ftsBindData->tableID;
     auto indexName = ftsBindData->indexName;
-    validateInternalTablesNotExist(ftsBindData->tableID, ftsBindData->indexName,
-        *catalog::Catalog::Get(context), transaction::Transaction::Get(context));
     context.setUseInternalCatalogEntry(true /* useInternalCatalogEntry */);
     // TODO(Ziyi): Copy statement can't be wrapped in manual transaction, so we can't wrap all
     // statements in a single transaction there.
-    // Create the tokenize macro.
     std::string query = "";
-    if (!catalog::Catalog::Get(context)->containsMacro(transaction::Transaction::Get(context),
-            FTSUtils::getTokenizeMacroName(tableID, indexName))) {
-        // TOKENIZE(text, tokenizer, extra_param)
-        query += std::format(R"(CREATE MACRO `{}`(query) AS
-                            TOKENIZE(lower(regexp_replace(CAST(query as STRING), '{}', ' ', 'g')), '{}', '{}');)",
-            FTSUtils::getTokenizeMacroName(tableID, indexName),
-            formatStrInCypher(ftsBindData->createFTSConfig.ignorePattern),
-            ftsBindData->createFTSConfig.tokenizerInfo.tokenizer,
-            ftsBindData->createFTSConfig.tokenizerInfo.jiebaDictDir);
+    // Self-heal internal-only residue from an interrupted CREATE/DROP before rebuilding.
+    query += dropResidueStatements(context, tableID, indexName,
+        ftsBindData->createFTSConfig.stopWordsTableInfo);
+    // Create the tokenize macro (recreated unconditionally: any residue macro was just
+    // dropped above, and DROP MACRO IF EXISTS is a no-op otherwise).
+    auto tokenizeMacroName = FTSUtils::getTokenizeMacroName(tableID, indexName);
+    if (catalog::Catalog::Get(context)->containsMacro(transaction::Transaction::Get(context),
+            tokenizeMacroName)) {
+        query += std::format("DROP MACRO IF EXISTS `{}`;", tokenizeMacroName);
     }
+    // TOKENIZE(text, tokenizer, extra_param)
+    query += std::format(R"(CREATE MACRO `{}`(query) AS
+                        TOKENIZE(lower(regexp_replace(CAST(query as STRING), '{}', ' ', 'g')), '{}', '{}');)",
+        FTSUtils::getTokenizeMacroName(tableID, indexName),
+        formatStrInCypher(ftsBindData->createFTSConfig.ignorePattern),
+        ftsBindData->createFTSConfig.tokenizerInfo.tokenizer,
+        ftsBindData->createFTSConfig.tokenizerInfo.jiebaDictDir);
 
     // Create the stop words table if not exists, or the user is not using the default english
     // one.
