@@ -156,8 +156,9 @@ CreateFTSConfig::CreateFTSConfig(main::ClientContext& context, common::table_id_
             Tokenizer::validate(tokenizerInfo.tokenizer);
         } else if (lowerCaseName == "jieba_dict_dir") {
             value.validateType(common::LogicalTypeID::STRING);
-            tokenizerInfo.jiebaDictDir =
-                common::StringUtils::getLower(value.getValue<std::string>());
+            // NOTE: dictionary paths are case-sensitive on some filesystems, so the
+            // value must be used verbatim (only the parameter *name* is lowercased).
+            tokenizerInfo.jiebaDictDir = value.getValue<std::string>();
         } else {
             throw common::BinderException{"Unrecognized optional parameter: " + name};
         }

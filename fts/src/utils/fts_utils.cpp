@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <mutex>
 #include <optional>
+#include <unordered_map>
 
 #include "common/string_utils.h"
 #include "cppjieba/Jieba.hpp"
@@ -138,13 +140,34 @@ std::vector<std::string> FTSUtils::stemTerms(std::vector<std::string> terms,
     return result;
 }
 
+std::shared_ptr<const cppjieba::Jieba> FTSUtils::getCachedJieba(const std::string& dictDir) {
+    auto key = dictDir;
+    while (key.size() > 1 && key.back() == '/') {
+        key.pop_back();
+    }
+    if (key.empty()) {
+        key = TokenizerInfo{}.jiebaDictDir;
+    }
+    static std::mutex mtx;
+    static std::unordered_map<std::string, std::weak_ptr<const cppjieba::Jieba>> cache;
+    std::lock_guard lck{mtx};
+    if (auto it = cache.find(key); it != cache.end()) {
+        if (auto cached = it->second.lock()) {
+            return cached;
+        }
+    }
+    auto jieba = std::make_shared<cppjieba::Jieba>(key + "/jieba.dict.utf8",
+        key + "/hmm_model.utf8", key + "/user.dict.utf8", key + "/idf.utf8",
+        key + "/stop_words.utf8");
+    cache[key] = jieba;
+    return jieba;
+}
+
 std::vector<std::string> FTSUtils::tokenizeString(std::string& str, const FTSConfig& config) {
     std::vector<std::string> terms;
     if (config.tokenizer == "jieba") {
-        cppjieba::Jieba jieba(config.jiebaDictDir + "/jieba.dict.utf8",
-            config.jiebaDictDir + "/hmm_model.utf8", config.jiebaDictDir + "/user.dict.utf8",
-            config.jiebaDictDir + "/idf.utf8", config.jiebaDictDir + "/stop_words.utf8");
-        jieba.CutForSearch(str, terms);
+        auto jieba = getCachedJieba(config.jiebaDictDir);
+        jieba->CutForSearch(str, terms);
         // CutForSearch keeps the whitespace between words as separate tokens. Whitespace is
         // never a meaningful term, so we skip those tokens.
         std::erase_if(terms, [](const std::string& term) {
