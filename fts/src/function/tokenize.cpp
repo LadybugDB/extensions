@@ -10,6 +10,7 @@
 #include "expression_evaluator/expression_evaluator_utils.h"
 #include "function/scalar_function.h"
 #include "re2.h"
+#include "utils/fts_utils.h"
 
 namespace lbug {
 namespace fts_extension {
@@ -18,9 +19,10 @@ using namespace function;
 using namespace common;
 
 struct JiebaBindData final : public FunctionBindData {
-    std::shared_ptr<cppjieba::Jieba> jieba;
+    std::shared_ptr<const cppjieba::Jieba> jieba;
 
-    JiebaBindData(common::logical_type_vec_t paramTypes, std::shared_ptr<cppjieba::Jieba> jieba)
+    JiebaBindData(common::logical_type_vec_t paramTypes,
+        std::shared_ptr<const cppjieba::Jieba> jieba)
         : FunctionBindData{std::move(paramTypes),
               common::LogicalType::LIST(common::LogicalType::STRING())},
           jieba{std::move(jieba)} {}
@@ -71,12 +73,7 @@ static std::unique_ptr<FunctionBindData> bindFunc(const ScalarBindFuncInput& inp
         std::string dictDir = evaluator::ExpressionEvaluatorUtils::evaluateConstantExpression(
             input.arguments[2], input.context)
                                   .getValue<std::string>();
-        std::string dict = dictDir + "/jieba.dict.utf8";
-        std::string hmm = dictDir + "/hmm_model.utf8";
-        std::string user = dictDir + "/user.dict.utf8"; // Contains custom AI/ML terms
-        std::string idf = dictDir + "/idf.utf8";
-        std::string stop = dictDir + "/stop_words.utf8";
-        auto jieba = std::make_unique<cppjieba::Jieba>(dict, hmm, user, idf, stop);
+        auto jieba = FTSUtils::getCachedJieba(dictDir);
         input.definition->ptrCast<ScalarFunction>()->execFunc =
             ScalarFunction::TernaryRegexExecFunction<string_t, string_t, string_t, list_entry_t,
                 JiebaTokenizer>;

@@ -1,8 +1,16 @@
 #pragma once
+#include <memory>
+#include <string>
+#include <vector>
+
 #include "catalog/catalog_entry/node_table_catalog_entry.h"
 #include "function/fts_config.h"
 #include "main/client_context.h"
 #include <format>
+
+namespace cppjieba {
+class Jieba;
+} // namespace cppjieba
 
 namespace lbug {
 namespace storage {
@@ -60,6 +68,13 @@ struct FTSUtils {
     }
 
     static std::vector<std::string> tokenizeString(std::string& str, const FTSConfig& tokenizer);
+
+    // Returns a process-wide cached jieba instance for the given dictionary directory.
+    // The first call for a directory loads the dictionaries (~0.5s); subsequent calls
+    // reuse the instance. The returned instance is const and safe for concurrent use by
+    // multiple queries (jieba's Cut* methods are const; FTS never calls mutators).
+    // An empty dictDir resolves to the default dictionary directory.
+    static std::shared_ptr<const cppjieba::Jieba> getCachedJieba(const std::string& dictDir);
 };
 
 } // namespace fts_extension
