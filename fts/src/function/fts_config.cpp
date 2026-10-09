@@ -145,22 +145,20 @@ CreateFTSConfig::CreateFTSConfig(main::ClientContext& context, common::table_id_
         } else if (IgnorePattern::NAME == lowerCaseName) {
             value.validateType(IgnorePattern::TYPE);
             ignorePattern = common::StringUtils::getLower(value.getValue<std::string>());
+            // Wildcard characters ('*' and '?') are protected from the ignore pattern during
+            // query normalization (see FTSUtils::normalizeQuery), so the same pattern is used
+            // for indexing and for queries.
             ignorePatternQuery = ignorePattern;
-            common::StringUtils::replaceAll(ignorePatternQuery, "*", "");
-            common::StringUtils::replaceAll(ignorePatternQuery, "?", "");
             IgnorePattern::validate(ignorePattern);
-            IgnorePattern::validate(ignorePatternQuery);
         } else if (lowerCaseName == "tokenizer") {
             value.validateType(common::LogicalTypeID::STRING);
             tokenizerInfo.tokenizer = common::StringUtils::getLower(value.getValue<std::string>());
             Tokenizer::validate(tokenizerInfo.tokenizer);
         } else if (lowerCaseName == "jieba_dict_dir") {
             value.validateType(common::LogicalTypeID::STRING);
-            // Note: the dict dir is a file path and must not be lower-cased.
-            tokenizerInfo.params["jieba_dict_dir"] = value.getValue<std::string>();
-        } else if (lowerCaseName == "mecab_dict_dir") {
-            value.validateType(common::LogicalTypeID::STRING);
-            tokenizerInfo.params["mecab_dict_dir"] = value.getValue<std::string>();
+            // A filesystem path must be used verbatim: lowercasing breaks case-sensitive
+            // filesystems (#37). Only the parameter NAME is matched case-insensitively.
+            tokenizerInfo.jiebaDictDir = value.getValue<std::string>();
         } else {
             throw common::BinderException{"Unrecognized optional parameter: " + name};
         }
@@ -169,15 +167,8 @@ CreateFTSConfig::CreateFTSConfig(main::ClientContext& context, common::table_id_
 
 FTSConfig CreateFTSConfig::getFTSConfig() const {
     return FTSConfig{stemmer, stopWordsTableInfo.tableName, stopWordsTableInfo.stopWords,
-        ignorePattern, ignorePatternQuery, tokenizerInfo.tokenizer, tokenizerInfo.params};
+        ignorePattern, ignorePatternQuery, tokenizerInfo.tokenizer, tokenizerInfo.jiebaDictDir};
 }
-
-// Magic marker written before the tokenizer params so that deserialization can
-// tell apart new catalogs (marker + unordered map) from legacy ones (a single
-// "jiebaDictDir" string field).
-namespace {
-constexpr const char* TOKENIZER_PARAMS_MAGIC = "lbug_tokenizer_params_v1";
-} // namespace
 
 void FTSConfig::serialize(common::Serializer& serializer) const {
     serializer.serializeValue(stemmer);
@@ -186,8 +177,7 @@ void FTSConfig::serialize(common::Serializer& serializer) const {
     serializer.serializeValue(ignorePattern);
     serializer.serializeValue(ignorePatternQuery);
     serializer.serializeValue(tokenizer);
-    serializer.serializeValue(std::string{TOKENIZER_PARAMS_MAGIC});
-    serializer.serializeUnorderedMap(tokenizerParams);
+    serializer.serializeValue(jiebaDictDir);
 }
 
 FTSConfig FTSConfig::deserialize(common::Deserializer& deserializer) {
@@ -198,14 +188,7 @@ FTSConfig FTSConfig::deserialize(common::Deserializer& deserializer) {
     deserializer.deserializeValue(config.ignorePattern);
     deserializer.deserializeValue(config.ignorePatternQuery);
     deserializer.deserializeValue(config.tokenizer);
-    std::string tokenizerParamsField;
-    deserializer.deserializeValue(tokenizerParamsField);
-    if (tokenizerParamsField == TOKENIZER_PARAMS_MAGIC) {
-        deserializer.deserializeUnorderedMap(config.tokenizerParams);
-    } else {
-        // Legacy catalog: the field after tokenizer was the jieba dict dir.
-        config.tokenizerParams["jieba_dict_dir"] = tokenizerParamsField;
-    }
+    deserializer.deserializeValue(config.jiebaDictDir);
     return config;
 }
 
@@ -232,7 +215,7 @@ void TopK::validate(uint64_t value) {
 }
 
 void Tokenizer::validate(const std::string& tokenizer) {
-    if (TokenizerRegistry::isSupported(tokenizer)) {
+    if (tokenizer == "simple" || tokenizer == "jieba") {
         return;
     }
     throw common::BinderException{

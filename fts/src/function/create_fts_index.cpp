@@ -157,22 +157,13 @@ std::string createFTSIndexQuery(ClientContext& context, const TableFuncBindData&
     std::string query = "";
     if (!catalog::Catalog::Get(context)->containsMacro(transaction::Transaction::Get(context),
             FTSUtils::getTokenizeMacroName(tableID, indexName))) {
-        // TOKENIZE(text, tokenizer, extra_param); the extra param is the
-        // dictionary directory for dictionary-based tokenizers. Pick it by
-        // tokenizer name (the params map holds defaults for all tokenizers).
-        auto& tokenizerParams = ftsBindData->createFTSConfig.tokenizerInfo.params;
-        auto& tokenizerName = ftsBindData->createFTSConfig.tokenizerInfo.tokenizer;
-        std::string extraParam = "";
-        if (tokenizerName == "jieba") {
-            extraParam = tokenizerParams.at("jieba_dict_dir");
-        } else if (tokenizerName == "mecab") {
-            extraParam = tokenizerParams.at("mecab_dict_dir");
-        }
+        // TOKENIZE(text, tokenizer, extra_param)
         query += std::format(R"(CREATE MACRO `{}`(query) AS
                             TOKENIZE(lower(regexp_replace(CAST(query as STRING), '{}', ' ', 'g')), '{}', '{}');)",
             FTSUtils::getTokenizeMacroName(tableID, indexName),
             formatStrInCypher(ftsBindData->createFTSConfig.ignorePattern),
-            ftsBindData->createFTSConfig.tokenizerInfo.tokenizer, extraParam);
+            ftsBindData->createFTSConfig.tokenizerInfo.tokenizer,
+            ftsBindData->createFTSConfig.tokenizerInfo.jiebaDictDir);
     }
 
     // Create the stop words table if not exists, or the user is not using the default english
@@ -196,7 +187,7 @@ std::string createFTSIndexQuery(ClientContext& context, const TableFuncBindData&
                              "UNWIND tk AS t "
                              "WITH t AS t1, id AS id1 "
                              "WHERE t1 is NOT NULL AND SIZE(t1) > 0 AND "
-                             "NOT EXISTS {{MATCH (s:`{}` {{sw: t1}})}} "
+                             "NOT EXISTS {MATCH (s:`{}` {sw: t1})} "
                              "RETURN STEM(t1, '{}'), id1);",
             appearsInfoTableName, tableName, FTSUtils::getTokenizeMacroName(tableID, indexName),
             propertyName, ftsBindData->createFTSConfig.stopWordsTableInfo.tableName,
@@ -244,18 +235,14 @@ std::string createFTSIndexQuery(ClientContext& context, const TableFuncBindData&
     properties += "]";
     std::string params;
     params += std::format("stemmer := '{}', ", ftsBindData->createFTSConfig.stemmer);
+    params += std::format("stopWords := '{}', ",
+        ftsBindData->createFTSConfig.stopWordsTableInfo.stopWords);
+    params += std::format("ignore_pattern := '{}', ",
+        formatStrInCypher(ftsBindData->createFTSConfig.ignorePattern));
     params +=
-        std::format("stopWords := '{}', ", ftsBindData->createFTSConfig.stopWordsTableInfo.stopWords);
-    // The internal index uses this config for incremental inserts/updates and
-    // queries, so the tokenizer (and its parameters) must be forwarded or it
-    // silently falls back to the default 'simple' tokenizer.
-    params += std::format("tokenizer := '{}'", ftsBindData->createFTSConfig.tokenizerInfo.tokenizer);
-    auto& ftsTokenizerParams = ftsBindData->createFTSConfig.tokenizerInfo.params;
-    if (ftsBindData->createFTSConfig.tokenizerInfo.tokenizer == "jieba") {
-        params += std::format(", jieba_dict_dir := '{}'", ftsTokenizerParams.at("jieba_dict_dir"));
-    } else if (ftsBindData->createFTSConfig.tokenizerInfo.tokenizer == "mecab") {
-        params += std::format(", mecab_dict_dir := '{}'", ftsTokenizerParams.at("mecab_dict_dir"));
-    }
+        std::format("tokenizer := '{}', ", ftsBindData->createFTSConfig.tokenizerInfo.tokenizer);
+    params += std::format("jieba_dict_dir := '{}'",
+        formatStrInCypher(ftsBindData->createFTSConfig.tokenizerInfo.jiebaDictDir));
     query += std::format("CALL _CREATE_FTS_INDEX('{}', '{}', {}, {});", tableName, indexName,
         properties, params);
     query += std::format("RETURN 'Index {} has been created.' as result;", ftsBindData->indexName);
@@ -333,6 +320,15 @@ static offset_t tableFunc(const TableFuncInput& input, TableFuncOutput&) {
         nodeTable->getNumTotalRows(transaction::Transaction::Get(*context.clientContext)));
     auto onDiskIndex = std::make_unique<FTSIndex>(std::move(indexInfo), std::move(storageInfo),
         std::move(ftsConfig), context.clientContext);
+    // A torn DROP_FTS_INDEX (process died before the drop was checkpointed) leaves the
+    // index holder in the NodeTable while its catalog entry is gone: WAL replay removes
+    // only the catalog entry, so a later CREATE sees a holder with no catalog entry (the
+    // "cross-set residue" state documented on NodeTable::addIndex). The catalog existence
+    // check has already passed at bind time, so any holder with this name is residue —
+    // clear it before installing the rebuilt index. dropIndex() tolerates both loaded and
+    // unloaded holders and retains the old one's page range for reclaim at the next
+    // checkpoint.
+    nodeTable->dropIndex(bindData.indexName);
     if (!context.clientContext->isInMemory()) {
         // We currently can't support FSM reclaiming when rolling back checkpoint
         // so we don't use the optimistic allocator here
