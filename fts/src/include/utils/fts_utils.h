@@ -3,6 +3,11 @@
 #include "function/fts_config.h"
 #include "main/client_context.h"
 #include <format>
+#include <memory>
+
+namespace cppjieba {
+class Jieba;
+}
 
 namespace lbug {
 namespace storage {
@@ -13,7 +18,8 @@ namespace fts_extension {
 
 struct FTSUtils {
 
-    static void normalizeQuery(std::string& query, const regex::RE2& ignorePattern);
+    static void normalizeQuery(std::string& query, const regex::RE2& ignorePattern,
+        bool protectWildcardChars = false);
 
     static bool hasWildcardPattern(const std::string& term);
 
@@ -58,8 +64,14 @@ struct FTSUtils {
         return std::format("{}_tokenize", getInternalTablePrefix(tableID, indexName));
     }
 
-    static std::vector<std::string> tokenizeString(const std::string& str,
-        const FTSConfig& tokenizer);
+    static std::vector<std::string> tokenizeString(std::string& str, const FTSConfig& tokenizer);
+
+    // Process-level cppjieba cache keyed by dictionary directory. Constructing a
+    // cppjieba::Jieba reloads the ~14MB dictionary set on every call, which dominated
+    // QUERY_FTS_INDEX latency (~0.5-1.2s fixed cost per call). Missing dictionaries
+    // raise a catchable BinderException here instead of cppjieba's XCHECK abort(),
+    // which kills the host process and cannot be defended against from bindings.
+    static std::shared_ptr<cppjieba::Jieba> getSharedJieba(const std::string& dictDir);
 };
 
 } // namespace fts_extension
