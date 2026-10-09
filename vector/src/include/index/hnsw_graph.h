@@ -217,18 +217,19 @@ private:
 
 class OnDiskEmbeddingScanState final : public GetEmbeddingsScanState {
 public:
-    OnDiskEmbeddingScanState(const transaction::Transaction* transaction,
-        storage::MemoryManager* mm, storage::NodeTable& nodeTable, common::column_id_t columnID,
-        common::offset_t embeddingDim);
+    OnDiskEmbeddingScanState(transaction::Transaction* transaction, storage::MemoryManager* mm,
+        storage::NodeTable& nodeTable, common::column_id_t columnID, common::offset_t embeddingDim);
 
     void* getEmbeddingPtr(const EmbeddingHandle& handle) override;
     void addEmbedding(const EmbeddingHandle& handle) override;
     void reclaimEmbedding(const EmbeddingHandle& handle) override;
 
+    transaction::Transaction* getTransaction() const { return transaction; }
     storage::NodeTableScanState& getScanState() { return *scanState; }
     common::DataChunk& getScanChunk() { return scanChunk; }
 
 private:
+    transaction::Transaction* transaction;
     std::unique_ptr<storage::NodeTableScanState> scanState;
     common::DataChunk scanChunk;
 
