@@ -76,3 +76,4 @@ struct FTSUtils {
 
 } // namespace fts_extension
 } // namespace lbug
+
