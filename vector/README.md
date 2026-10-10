@@ -20,6 +20,18 @@ CALL DROP_VECTOR_INDEX('embeddings', 'idx');
 CALL ANN_SEARCH('embeddings', 'idx', [0.1, 0.2, 0.3], 10);
 ```
 
+`QUERY_VECTOR_INDEX` (and its `ANN_SEARCH` alias) returns the `node` and `distance` columns in
+arbitrary order. The nearest neighbor is not guaranteed to come back first. Callers that need
+rank order must add `ORDER BY distance`:
+
+```cypher
+CALL QUERY_VECTOR_INDEX('embeddings', 'idx', [0.1, 0.2, 0.3], 10)
+RETURN node, distance ORDER BY distance;
+```
+
+Do not use result row position as rank (e.g. for top-N slicing or rank-based fusion such as RRF)
+without `ORDER BY distance`.
+
 Native Navix DDL syntax such as `CREATE VECTOR INDEX ON ...` and `UPDATE VECTOR INDEX ON ...` is
 not implemented. Supporting that exact syntax is core parser/planner work that should bind to the
 extension functions instead of moving vector-index execution into core.
