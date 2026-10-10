@@ -320,6 +320,15 @@ static offset_t tableFunc(const TableFuncInput& input, TableFuncOutput&) {
         nodeTable->getNumTotalRows(transaction::Transaction::Get(*context.clientContext)));
     auto onDiskIndex = std::make_unique<FTSIndex>(std::move(indexInfo), std::move(storageInfo),
         std::move(ftsConfig), context.clientContext);
+    // A torn DROP_FTS_INDEX (process died before the drop was checkpointed) leaves the
+    // index holder in the NodeTable while its catalog entry is gone: WAL replay removes
+    // only the catalog entry, so a later CREATE sees a holder with no catalog entry (the
+    // "cross-set residue" state documented on NodeTable::addIndex). The catalog existence
+    // check has already passed at bind time, so any holder with this name is residue —
+    // clear it before installing the rebuilt index. dropIndex() tolerates both loaded and
+    // unloaded holders and retains the old one's page range for reclaim at the next
+    // checkpoint.
+    nodeTable->dropIndex(bindData.indexName);
     if (!context.clientContext->isInMemory()) {
         // We currently can't support FSM reclaiming when rolling back checkpoint
         // so we don't use the optimistic allocator here
