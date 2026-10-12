@@ -1,37 +1,28 @@
-if (WIN32 OR BUILD_STATIC_EXTENSION)
-    set(DuckDB_USE_STATIC_LIBS ON)
-else ()
-    set(DuckDB_USE_STATIC_LIBS OFF)
+# Native SQLite backend: the amalgamation is vendored so the extension
+# builds without a system libsqlite3-dev (which also keeps Windows/macOS CI
+# hermetic). It is public-domain (https://sqlite.org).
+add_library(sqlite3_vendor STATIC third_party/sqlite/sqlite3.c)
+target_include_directories(sqlite3_vendor PUBLIC third_party/sqlite)
+if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+    target_compile_options(sqlite3_vendor PRIVATE -w)
 endif ()
-find_package(DuckDB REQUIRED)
+find_package(Threads REQUIRED)
+target_link_libraries(sqlite3_vendor PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
 
 include_directories(
         ${PROJECT_SOURCE_DIR}/src/include
         ${CMAKE_BINARY_DIR}/src/include
-        ${PROJECT_SOURCE_DIR}/extension/httpfs/src/include  # For S3 configuration
         src/include
-        ${PROJECT_SOURCE_DIR}/extension/duckdb/src/include
-        ${DuckDB_INCLUDE_DIRS})
+        third_party/sqlite)
 
 add_subdirectory(src/connector)
+add_subdirectory(src/catalog)
 add_subdirectory(src/storage)
 add_subdirectory(src/main)
-add_subdirectory(src/installer)
 add_subdirectory(src/function)
 
 build_extension_lib(${BUILD_STATIC_EXTENSION} "sqlite")
 
 target_link_libraries(lbug_${EXTENSION_LIB_NAME}_extension
         PRIVATE
-        ${DuckDB_LIBRARIES})
-
-if (NOT WIN32 AND NOT BUILD_STATIC_EXTENSION)
-    add_library(sqlite_loader
-            SHARED
-            ${PROJECT_SOURCE_DIR}/extension/duckdb/src/loader/duckdb_loader.cpp)
-    set_extension_properties(sqlite_loader sqlite_loader sqlite)
-endif ()
-
-if (APPLE AND NOT BUILD_STATIC_EXTENSION)
-    set_apple_dynamic_lookup(sqlite_loader)
-endif ()
+        sqlite3_vendor)
