@@ -1699,7 +1699,11 @@ void ensurePathNodeIDLayout(const LogicalType& type) {
         throw RuntimeException(std::format("{}: expected a path value with a {} field, got {}",
             kFn, std::string(InternalKeyword::NODES), type.toString()));
     }
-    const auto& nodesType = StructType::getFieldType(type, InternalKeyword::NODES);
+    // Bind via index (not the string overload): the string overload takes
+    // `const std::string&` and returns `const LogicalType&`, so binding the
+    // result while passing a `const char*` temporary trips -Wdangling-reference.
+    const auto nodesIdx = StructType::getFieldIdx(type, InternalKeyword::NODES);
+    const auto& nodesType = StructType::getFieldType(type, nodesIdx);
     if (nodesType.getLogicalTypeID() != LogicalTypeID::LIST) {
         throw RuntimeException(std::format("{}: path {} field must be a LIST, got {}", kFn,
             std::string(InternalKeyword::NODES), nodesType.toString()));
@@ -1720,7 +1724,8 @@ void ensurePathNodeIDLayout(const LogicalType& type) {
         throw RuntimeException(std::format(
             "{}: path NODE {} field must be at layout position 0", kFn, std::string(InternalKeyword::ID)));
     }
-    const auto& idType = StructType::getFieldType(nodeType, InternalKeyword::ID);
+    const auto idIdx = StructType::getFieldIdx(nodeType, InternalKeyword::ID);
+    const auto& idType = StructType::getFieldType(nodeType, idIdx);
     if (idType.getLogicalTypeID() != LogicalTypeID::INTERNAL_ID) {
         throw RuntimeException(std::format("{}: path NODE {} field must be INTERNAL_ID, got {}",
             kFn, std::string(InternalKeyword::ID), idType.toString()));
