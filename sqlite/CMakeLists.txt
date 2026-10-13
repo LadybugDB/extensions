@@ -17,9 +17,11 @@ include_directories(
 
 add_subdirectory(src/connector)
 add_subdirectory(src/catalog)
+add_subdirectory(src/cdc)
 add_subdirectory(src/storage)
 add_subdirectory(src/main)
 add_subdirectory(src/function)
+add_subdirectory(test)
 
 build_extension_lib(${BUILD_STATIC_EXTENSION} "sqlite")
 
