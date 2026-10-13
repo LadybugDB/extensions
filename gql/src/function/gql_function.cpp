@@ -277,13 +277,11 @@ static std::string normalizeCreateGraphTypeRef(const std::string &text) {
 // label-expression section in gql_transformer.cpp.
 static std::optional<bool> resolveAnyGraph(ClientContext &context, const std::string &name) {
     auto *transaction = transaction::Transaction::Get(context);
-    auto useInternal = context.useInternalCatalogEntry();
     if (name.empty()) {
-        auto *graphCatalog = DatabaseManager::Get(context)->getDefaultGraphCatalog();
-        if (graphCatalog == nullptr) {
-            return false; // main/default catalog = typed graphs
-        }
-        return graphCatalog->containsTable(transaction, "_nodes", useInternal);
+        // Session's current graph: ANY vs typed is decided by the core, which holds
+        // the graph-registry lock across the check (see DatabaseManager::
+        // isDefaultGraphAny). False when no graph is selected (main catalog).
+        return DatabaseManager::Get(context)->isDefaultGraphAny(context);
     }
     auto upper = common::StringUtils::getUpper(name);
     if (upper == "MAIN") {
