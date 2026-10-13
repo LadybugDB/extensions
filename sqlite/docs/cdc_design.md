@@ -64,10 +64,38 @@ per-page state instead of re-reading tables:
 
 ## Apply path
 
-One WAL commit → one Ladybug transaction: node/rel upserts + deletes by
-PK, then cursor advance. Within a commit, PK-keyed last-writer-wins; across
+One WAL commit → Cypher batches executed statement-by-statement (each its
+own transaction: at-least-once semantics), cursor row written last,
+replays idempotent. Within a commit, PK-keyed last-writer-wins; across
 commits, frame order is the total order. `INTEGER PRIMARY KEY` aliases
-rowid; other PKs (including `WITHOUT ROWID` tables) use their declared key.
+rowid; other PKs use their declared key.
+
+Sync identity is the normalized absolute file path (`CALL
+sqlite_sync('/path/to.db')`); no ATTACH is needed or allowed for a
+synced file (attached shadows share bare table names with synced native
+tables; the engine refuses an attached file and heals stale shadows left
+by older DETACHes).
+
+SQLite reuses rowids after deletes (max+1 allocation), so endpoint-keyed
+edge MERGE cannot replace a moved edge. Edges therefore carry their
+rowid in a `_sqlite_rowid` slot property, and edge upserts are
+delete-by-slot + CREATE. Node PK-keyed MERGE is stable under reuse (a
+reused PK value IS the same identity, matching Debezium semantics).
+
+## Required core fixes (parent repo)
+
+Built as part of this work; sync depends on each:
+
+- DETACH removes its shadow entries (node + rel-group) from the main
+  catalog; previously they leaked and crashed planning with a dangling
+  database reference.
+- DETACH clears the default database when it points at the detached
+  alias (the first ATTACH becomes the default; every node-pattern bind
+  resolves it).
+- `isLbugDatabase` returns false for unknown databases instead of
+  throwing from a predicate.
+- ATTACH/DETACH are write-classified so catalog changes commit (they
+  mutated state inside read transactions before).
 
 ## Edge cases
 

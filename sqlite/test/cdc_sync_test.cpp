@@ -169,8 +169,8 @@ TEST(CdcSyncCypher, ValueRendering) {
 TEST(CdcSyncCypher, NodeDdl) {
     auto mappings = inferMappings({makeNodePerson()});
     auto target = bindTarget(mappings.mappings[0], makeNodePerson().columns);
-    EXPECT_EQ("CREATE NODE TABLE IF NOT EXISTS `node_person`(`id` INT64, `name` STRING, `age` "
-              "INT64, PRIMARY KEY(`id`))",
+    EXPECT_EQ("CREATE NODE TABLE IF NOT EXISTS node_person(id INT64, name STRING, age "
+              "INT64, PRIMARY KEY(id))",
         buildNodeDdl(target));
 }
 
@@ -179,8 +179,8 @@ TEST(CdcSyncCypher, RelDdl) {
     const TableMapping* edge = findMapping(mappings, "rel_knows");
     ASSERT_NE(nullptr, edge);
     auto target = bindTarget(*edge, makeRelKnows().columns);
-    EXPECT_EQ("CREATE REL TABLE IF NOT EXISTS `rel_knows`(FROM `node_person` TO `node_person`, "
-              "`since` INT64)",
+    EXPECT_EQ("CREATE REL TABLE IF NOT EXISTS rel_knows(FROM node_person TO node_person, "
+              "since INT64, _sqlite_rowid INT64)",
         buildRelDdl(target));
 }
 
@@ -204,9 +204,9 @@ TEST(CdcSyncCypher, NodeUpsertsAndDeletes) {
     r2.values[2].type = SqliteValue::Type::Null;
     auto stmts = buildNodeUpserts(target, {r1, r2}, 10);
     ASSERT_EQ(1u, stmts.size());
-    EXPECT_EQ("UNWIND [{`id`: 1, `name`: 'O''Brien', `age`: 30}, {`id`: 2, `name`: 'al', `age`: "
-              "null}] AS row MERGE (n:`node_person` {`id`: row.`id`}) SET n.`name` = row.`name`, "
-              "n.`age` = row.`age`",
+    EXPECT_EQ("UNWIND [{id: 1, name: 'O''Brien', age: 30}, {id: 2, name: 'al', age: "
+              "null}] AS row MERGE (n:node_person {id: row.id}) SET n.name = row.name, "
+              "n.age = row.age",
         stmts[0]);
     // Chunking.
     auto chunked = buildNodeUpserts(target, {r1, r2}, 1);
@@ -219,7 +219,7 @@ TEST(CdcSyncCypher, NodeUpsertsAndDeletes) {
     d2.rowid = 2;
     auto dels = buildNodeDeletes(target, {d1, d2}, 10);
     ASSERT_EQ(1u, dels.size());
-    EXPECT_EQ("UNWIND [1, 2] AS row MATCH (n:`node_person` {`id`: row}) DETACH DELETE n", dels[0]);
+    EXPECT_EQ("UNWIND [1, 2] AS row MATCH (n:node_person {id: row}) DETACH DELETE n", dels[0]);
 }
 
 TEST(CdcSyncCypher, ExplicitPkDeleteRendersValue) {
@@ -237,7 +237,7 @@ TEST(CdcSyncCypher, ExplicitPkDeleteRendersValue) {
     d.identity.textVal = "K-1";
     auto dels = buildNodeDeletes(target, {d}, 10);
     ASSERT_EQ(1u, dels.size());
-    EXPECT_EQ("UNWIND ['K-1'] AS row MATCH (n:`node_doc` {`code`: row}) DETACH DELETE n", dels[0]);
+    EXPECT_EQ("UNWIND ['K-1'] AS row MATCH (n:node_doc {code: row}) DETACH DELETE n", dels[0]);
 }
 
 TEST(CdcSyncCypher, EdgeUpsertsAndDeletes) {
@@ -256,24 +256,27 @@ TEST(CdcSyncCypher, EdgeUpsertsAndDeletes) {
     r.values[2].type = SqliteValue::Type::Integer;
     r.values[2].intVal = 5;
     auto stmts = buildEdgeUpserts(target, {r}, 10);
-    ASSERT_EQ(1u, stmts.size());
-    EXPECT_EQ("UNWIND [{`src`: 1, `dst`: 2, `since`: 5}] AS row MATCH (a:`node_person` {`id`: "
-              "row.`src`}), (b:`node_person` {`id`: row.`dst`}) MERGE (a)-[e:`rel_knows`]->(b) "
-              "SET e.`since` = row.`since`",
+    ASSERT_EQ(2u, stmts.size());
+    EXPECT_EQ("UNWIND [{src: 1, dst: 2, _sqlite_rowid: 1, since: 5}] AS row MATCH ()-[e:rel_knows "
+              "{_sqlite_rowid: row._sqlite_rowid}]->() DELETE e",
         stmts[0]);
+    EXPECT_EQ("UNWIND [{src: 1, dst: 2, _sqlite_rowid: 1, since: 5}] AS row MATCH (a:node_person "
+              "{id: row.src}), (b:node_person {id: row.dst}) CREATE (a)-[e:rel_knows {since: "
+              "row.since, _sqlite_rowid: row._sqlite_rowid}]->(b)",
+        stmts[1]);
     auto dels = buildEdgeDeletes(target, {r}, 10);
     ASSERT_EQ(1u, dels.size());
-    EXPECT_EQ("UNWIND [{`src`: 1, `dst`: 2}] AS row MATCH (a:`node_person` {`id`: row.`src`})-"
-              "[e:`rel_knows`]->(b:`node_person` {`id`: row.`dst`}) DELETE e",
+    EXPECT_EQ("UNWIND [{src: 1, dst: 2}] AS row MATCH (a:node_person {id: row.src})-"
+              "[e:rel_knows]->(b:node_person {id: row.dst}) DELETE e",
         dels[0]);
 }
 
 TEST(CdcSyncCypher, CursorStatements) {
-    EXPECT_EQ("CREATE NODE TABLE IF NOT EXISTS `__sqlite_cdc_cursor`(`sync` STRING, `salt1` INT64,"
-              " `salt2` INT64, `applied` INT64, PRIMARY KEY(`sync`))",
+    EXPECT_EQ("CREATE NODE TABLE IF NOT EXISTS __sqlite_cdc_cursor(sync STRING, salt1 INT64,"
+              " salt2 INT64, applied INT64, PRIMARY KEY(sync))",
         buildCursorDdl());
-    EXPECT_EQ("MERGE (c:`__sqlite_cdc_cursor` {`sync`: 'main'}) SET c.`salt1` = 1, c.`salt2` = 2, "
-              "c.`applied` = 42",
+    EXPECT_EQ("MERGE (c:__sqlite_cdc_cursor {sync: 'main'}) SET c.salt1 = 1, c.salt2 = 2, "
+              "c.applied = 42",
         buildCursorUpsert("main", 1, 2, 42));
 }
 

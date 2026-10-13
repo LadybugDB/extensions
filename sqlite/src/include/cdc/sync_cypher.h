@@ -55,6 +55,13 @@ struct BoundTarget {
 // recordColumns are in schema (record) order.
 BoundTarget bindTarget(const TableMapping& mapping, const std::vector<SyncColumn>& recordColumns);
 
+// Synced edges carry their SQLite rowid in this property. Rowids are
+// reused by SQLite after deletes (max+1 allocation), so endpoint-keyed
+// MERGE cannot replace a moved edge; upserts instead clear the rid slot
+// and CREATE fresh. Nodes need no slot: their PK-keyed MERGE is stable
+// under reuse (a reused PK value IS the same identity).
+constexpr const char* EDGE_RID_PROP = "_sqlite_rowid";
+
 std::string buildNodeDdl(const BoundTarget& target);
 std::string buildRelDdl(const BoundTarget& target);
 std::string buildCursorDdl();

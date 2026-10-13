@@ -38,6 +38,9 @@ void OpResolver::trackRow(TableState& state, const DecodedRow& row) {
         static_cast<size_t>(state.pkRecordIndex) < row.values.size()) {
         state.identities[row.rowid] = row.values[state.pkRecordIndex];
     }
+    if (state.retainRecords) {
+        state.records[row.rowid] = row.values;
+    }
 }
 
 void OpResolver::emitDelete(const std::string& table, TableState& state, int64_t rowid,
@@ -50,6 +53,12 @@ void OpResolver::emitDelete(const std::string& table, TableState& state, int64_t
         del.identity = it->second;
         del.hasIdentity = true;
         state.identities.erase(it);
+    }
+    auto rit = state.records.find(rowid);
+    if (rit != state.records.end()) {
+        del.record = std::move(rit->second);
+        del.hasRecord = true;
+        state.records.erase(rit);
     }
     batch.deletes.push_back(std::move(del));
 }
@@ -114,6 +123,7 @@ ResolveResult OpResolver::fullDiff(const std::vector<TableSchema>& schemas,
         newState.rootPage = schema.rootPage;
         newState.pkRecordIndex = schema.pkRecordIndex;
         newState.pkFromRowid = schema.pkFromRowid;
+        newState.retainRecords = schema.retainRecords;
         auto stateIt = tables_.find(schema.name);
         bool haveState =
             !blind && stateIt != tables_.end() && stateIt->second.rootPage == schema.rootPage;
@@ -158,10 +168,13 @@ ResolveResult OpResolver::fullDiff(const std::vector<TableSchema>& schemas,
             newState.pages[pageNo] = std::move(pageState);
         }
         if (oldState != nullptr) {
-            // Carry retained identities forward so deletes of rows that
-            // vanished before this diff still resolve.
+            // Carry retained identities/records forward so deletes of rows
+            // that vanished before this diff still resolve.
             for (auto& [rowid, identity] : oldState->identities) {
                 newState.identities.emplace(rowid, identity);
+            }
+            for (auto& [rowid, record] : oldState->records) {
+                newState.records.emplace(rowid, record);
             }
             for (auto& [pageNo, page] : oldState->pages) {
                 auto newPageIt = newState.pages.find(pageNo);
@@ -237,6 +250,7 @@ ResolveResult OpResolver::applyFrames(const std::vector<TableSchema>& schemas,
             fresh.rootPage = schema.rootPage;
             fresh.pkRecordIndex = schema.pkRecordIndex;
             fresh.pkFromRowid = schema.pkFromRowid;
+            fresh.retainRecords = schema.retainRecords;
             for (auto pageNo : walk.leaves) {
                 std::vector<DecodedRow> rows;
                 uint64_t hash = 0;
@@ -268,7 +282,7 @@ ResolveResult OpResolver::applyFrames(const std::vector<TableSchema>& schemas,
             return out;
         }
         std::set<int64_t> upsertedRowids;
-        auto emitRows = [&](uint32_t pageNo, const std::vector<DecodedRow>& rows) {
+        auto emitRows = [&](const std::vector<DecodedRow>& rows) {
             for (auto& row : rows) {
                 RowOp op;
                 op.table = schema.name;
@@ -317,7 +331,7 @@ ResolveResult OpResolver::applyFrames(const std::vector<TableSchema>& schemas,
                     }
                 }
             }
-            emitRows(pageNo, rows);
+            emitRows(rows);
             state.pages[pageNo] = std::move(fresh);
         }
         // A row deleted from page A but re-inserted (moved) on page B in

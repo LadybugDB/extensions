@@ -166,7 +166,26 @@ std::string cypherTypeForDecl(const std::string& decltype_) {
     return "STRING";
 }
 
+bool isSimpleIdent(const std::string& name) {
+    if (name.empty() ||
+        (!std::isalpha(static_cast<unsigned char>(name[0])) && name[0] != '_' && name[0] != '$')) {
+        return false;
+    }
+    for (size_t i = 1; i < name.size(); i++) {
+        char c = name[i];
+        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') {
+            return false;
+        }
+    }
+    return true;
+}
+
 std::string quoteCypherIdent(const std::string& name) {
+    // Keep simple identifiers raw: generated statements then match the
+    // exact shapes covered by engine tests. Backticks only when needed.
+    if (isSimpleIdent(name)) {
+        return name;
+    }
     std::string out = "`";
     for (char c : name) {
         if (c == '`') {
@@ -316,12 +335,14 @@ std::string buildRelDdl(const BoundTarget& target) {
     for (auto& prop : target.props) {
         ddl += ", " + quoteCypherIdent(prop.name) + " " + prop.type;
     }
+    // Rowid slot for replace-on-reuse upserts (see EDGE_RID_PROP).
+    ddl += ", " + quoteCypherIdent(EDGE_RID_PROP) + " INT64";
     return ddl + ")";
 }
 
 std::string buildCursorDdl() {
-    return "CREATE NODE TABLE IF NOT EXISTS `__sqlite_cdc_cursor`(`sync` STRING, `salt1` INT64, "
-           "`salt2` INT64, `applied` INT64, PRIMARY KEY(`sync`))";
+    return "CREATE NODE TABLE IF NOT EXISTS __sqlite_cdc_cursor(sync STRING, salt1 INT64, salt2 "
+           "INT64, applied INT64, PRIMARY KEY(sync))";
 }
 
 namespace {} // namespace
@@ -416,6 +437,7 @@ std::vector<std::string> buildEdgeUpserts(const BoundTarget& target, const std::
         batchSize = 1;
     }
     std::string label = quoteCypherIdent(target.mapping->label);
+    std::string ridKey = quoteCypherIdent(EDGE_RID_PROP);
     std::string srcLabel = quoteCypherIdent(target.mapping->srcLabel);
     std::string dstLabel = quoteCypherIdent(target.mapping->dstLabel);
     std::string srcKey = quoteCypherIdent(target.mapping->srcPkColumn);
@@ -431,7 +453,9 @@ std::vector<std::string> buildEdgeUpserts(const BoundTarget& target, const std::
                     dstLit, error)) {
                 continue;
             }
-            std::vector<std::string> rowItems{"`src`: " + srcLit, "`dst`: " + dstLit};
+            std::vector<std::string> rowItems{quoteCypherIdent("src") + ": " + srcLit,
+                quoteCypherIdent("dst") + ": " + dstLit,
+                ridKey + ": " + std::to_string(ops[i].rowid)};
             for (auto& prop : target.props) {
                 if (prop.recordIndex >= ops[i].values.size()) {
                     continue;
@@ -447,18 +471,19 @@ std::vector<std::string> buildEdgeUpserts(const BoundTarget& target, const std::
         if (items.empty()) {
             continue;
         }
-        std::vector<std::string> sets;
+        std::vector<std::string> creates;
         for (auto& prop : target.props) {
-            sets.push_back(
-                "e." + quoteCypherIdent(prop.name) + " = row." + quoteCypherIdent(prop.name));
+            creates.push_back(quoteCypherIdent(prop.name) + ": row." + quoteCypherIdent(prop.name));
         }
-        std::string stmt = "UNWIND [" + join(items, ", ") + "] AS row MATCH (a:" + srcLabel + " {" +
-                           srcKey + ": row.`src`}), (b:" + dstLabel + " {" + dstKey +
-                           ": row.`dst`}) MERGE (a)-[e:" + label + "]->(b)";
-        if (!sets.empty()) {
-            stmt += " SET " + join(sets, ", ");
-        }
-        statements.push_back(std::move(stmt));
+        creates.push_back(ridKey + ": row." + ridKey);
+        // Slot-clear first: a reused rowid may point at different
+        // endpoints than the edge currently occupying the slot.
+        statements.push_back("UNWIND [" + join(items, ", ") + "] AS row MATCH ()-[e:" + label +
+                             " {" + ridKey + ": row." + ridKey + "}]->() DELETE e");
+        statements.push_back("UNWIND [" + join(items, ", ") + "] AS row MATCH (a:" + srcLabel +
+                             " {" + srcKey + ": row." + quoteCypherIdent("src") + "}), (b:" +
+                             dstLabel + " {" + dstKey + ": row." + quoteCypherIdent("dst") +
+                             "}) CREATE (a)-[e:" + label + " {" + join(creates, ", ") + "}]->(b)");
     }
     return statements;
 }
@@ -487,23 +512,25 @@ std::vector<std::string> buildEdgeDeletes(const BoundTarget& target, const std::
                     dstLit, error)) {
                 continue;
             }
-            items.push_back("{`src`: " + srcLit + ", `dst`: " + dstLit + "}");
+            items.push_back("{" + quoteCypherIdent("src") + ": " + srcLit + ", " +
+                            quoteCypherIdent("dst") + ": " + dstLit + "}");
         }
         if (items.empty()) {
             continue;
         }
         statements.push_back("UNWIND [" + join(items, ", ") + "] AS row MATCH (a:" + srcLabel +
-                             " {" + srcKey + ": row.`src`})-[e:" + label + "]->(b:" + dstLabel +
-                             " {" + dstKey + ": row.`dst`}) DELETE e");
+                             " {" + srcKey + ": row." + quoteCypherIdent("src") + "})-[e:" + label +
+                             "]->(b:" + dstLabel + " {" + dstKey + ": row." +
+                             quoteCypherIdent("dst") + "}) DELETE e");
     }
     return statements;
 }
 
 std::string buildCursorUpsert(const std::string& syncName, uint32_t salt1, uint32_t salt2,
     size_t appliedFrames) {
-    return "MERGE (c:`__sqlite_cdc_cursor` {`sync`: '" + escapeString(syncName) + "'}) SET " +
-           "c.`salt1` = " + std::to_string(salt1) + ", c.`salt2` = " + std::to_string(salt2) +
-           ", c.`applied` = " + std::to_string(appliedFrames);
+    return "MERGE (c:__sqlite_cdc_cursor {sync: '" + escapeString(syncName) + "'}) SET " +
+           "c.salt1 = " + std::to_string(salt1) + ", c.salt2 = " + std::to_string(salt2) +
+           ", c.applied = " + std::to_string(appliedFrames);
 }
 
 } // namespace cdc

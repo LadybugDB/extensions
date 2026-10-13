@@ -24,11 +24,14 @@ struct TableSchema {
     // record slot holds NULL). Defaults preserve rowid-only behavior.
     int pkRecordIndex = -1;
     bool pkFromRowid = true;
+    // Retain full last-seen records for deletes (needed by edge tables,
+    // whose deletes must carry endpoint values). Off by default.
+    bool retainRecords = false;
 
     bool operator==(const TableSchema& other) const {
         return name == other.name && rootPage == other.rootPage &&
                withoutRowid == other.withoutRowid && pkRecordIndex == other.pkRecordIndex &&
-               pkFromRowid == other.pkFromRowid;
+               pkFromRowid == other.pkFromRowid && retainRecords == other.retainRecords;
     }
 };
 
@@ -48,6 +51,10 @@ struct RowDelete {
     // delete by PK after the record is gone.
     SqliteValue identity;
     bool hasIdentity = false;
+    // Last-seen full record, when retention was enabled. Lets edge
+    // deletes carry endpoint values after the record is gone.
+    std::vector<SqliteValue> record;
+    bool hasRecord = false;
 };
 
 struct OpBatch {
@@ -123,9 +130,11 @@ private:
         uint32_t rootPage = 0;
         int pkRecordIndex = -1;
         bool pkFromRowid = true;
+        bool retainRecords = false;
         std::unordered_map<uint32_t, PageState> pages;
         // Last-seen PK values for explicit-PK tables, for delete identity.
         std::unordered_map<int64_t, SqliteValue> identities;
+        std::unordered_map<int64_t, std::vector<SqliteValue>> records;
     };
     std::unordered_map<std::string, TableState> tables_;
 

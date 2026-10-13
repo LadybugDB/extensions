@@ -50,6 +50,7 @@ void SqliteConnector::connect(const std::string& dbPath) {
     // Tolerate a concurrent writer holding locks for a short while.
     sqlite3_busy_timeout(handle, 5000);
     db = handle;
+    this->dbPath = dbPath;
 }
 
 void SqliteConnector::disconnect() {
@@ -172,6 +173,9 @@ std::vector<SqliteConnector::ColumnInfo> SqliteConnector::getTableInfo(
         info.name = row.cells[1].textVal;
         if (row.cells[2].storage != SqliteStorageClass::NULL_VALUE) {
             info.declaredType = row.cells[2].textVal;
+        }
+        if (row.cells[5].storage == SqliteStorageClass::INTEGER) {
+            info.pkOrder = static_cast<int>(row.cells[5].intVal);
         }
         columns.push_back(std::move(info));
     }

@@ -81,7 +81,8 @@ struct FixturePages {
         if (found) {
             return found;
         }
-        size_t dbOff = 100 + (static_cast<size_t>(pageNo) - 1) * pageSize;
+        // DB file packs pages at (N-1)*pageSize (page 1 embeds the header).
+        size_t dbOff = (static_cast<size_t>(pageNo) - 1) * pageSize;
         if (pageNo == 1) {
             dbOff = 0; // Page 1 carries the 100-byte DB header.
         }
