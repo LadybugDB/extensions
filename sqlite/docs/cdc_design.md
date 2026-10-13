@@ -44,14 +44,21 @@ applier      Row ops -> Ladybug native writes + cursor advance, one txn per
 Page images are after-images, not logical ops. The resolver keeps bounded
 per-page state instead of re-reading tables:
 
-- State: `pageNo -> {PKs}` for every applied leaf page, plus the table/PK
-  mapping. Built once at bootstrap (one full scan — Debezium's snapshot
-  phase; the only scan, ever).
+- State: `pageNo -> {rowids}` per table, plus a page-image hash.
+  Identity is the **rowid** for rowid tables (== the INTEGER PRIMARY
+  KEY value when one exists; record slots at IPK positions hold NULL
+  with the cell rowid authoritative). Built once at bootstrap (one full
+  scan — Debezium's snapshot phase; the only scan, ever).
+- Table ownership without scans: per batch, walk each table's interior
+  pages (interior reads only, never leaf row data) to get the current
+  leaf set; dirty pages from the commit frames select which leaves to
+  (re-)decode. Splits, frees, and rebuilds fall out of leaf-set diffs.
 - Per WAL commit, two phases:
-  1. **Upserts**: decode all new images of dirty leaf pages, key by PK.
-     A row that moved pages on UPDATE (page A -> page B) reconciles here.
-  2. **Deletes**: `(old page PK-set - new page PK-set) - PKs upserted
-     elsewhere in the same commit`.
+  1. **Upserts**: decode all new images of dirty leaf pages, key by
+     rowid. A row that moved pages on UPDATE (page A -> page B)
+     reconciles here.
+  2. **Deletes**: `(old page rowid-set - new page rowid-set) - rowids
+     upserted elsewhere in the same commit`.
 - DDL is a dirty page 1 (`sqlite_master`): re-resolve schema, emit a
   schema-change event, evolve the mapping. No special channel needed.
 
@@ -75,12 +82,20 @@ rowid; other PKs (including `WITHOUT ROWID` tables) use their declared key.
   checkpointed, not in WAL window) abort the batch, which retries after the
   next commit.
 
-## Sync mapping (open question)
+## Sync loop rule (DDL)
 
-Target tables: auto-create Ladybug node tables from the SQLite schema, or
-map explicitly (SQLite table X -> existing Ladybug table Y)? Default:
-auto-create `sqlite_<table>` node tables; explicit mapping via ATTACH
-option later.
+Schemas are read live, but a batch is applied incrementally only while
+the schema is stable. Any batch touching page 1 (`sqlite_master`, i.e.
+containing DDL) or changing the schema set falls back to `reconcile`,
+which diffs current full state and converges without era-accurate schema
+tracking. This keeps the common path scan-free; DDL batches pay one
+full diff.
+
+## Sync mapping
+
+Decided: **explicit mapping** (SQLite table X -> existing Ladybug table
+Y, configured at ATTACH/sync time). The resolver stays mapping-agnostic
+(table names + rowids); routing happens in the phase-3 applier.
 
 ## Phase plan
 
