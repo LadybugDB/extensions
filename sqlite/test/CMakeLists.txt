@@ -1,6 +1,6 @@
 if (${BUILD_EXTENSION_TESTS})
     include(GoogleTest)
-    foreach(cdc_test cdc_wal_test cdc_op_resolver_test)
+    foreach(cdc_test cdc_wal_test cdc_op_resolver_test cdc_sync_test)
         add_executable(sqlite_${cdc_test} ${cdc_test}.cpp)
         target_include_directories(sqlite_${cdc_test} PRIVATE
             ${PROJECT_SOURCE_DIR}/extension/sqlite/src/include

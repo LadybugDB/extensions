@@ -105,12 +105,14 @@ struct SyncFixture {
             const char* sql = reinterpret_cast<const char*>(sqlite3_column_text(q, 2));
             fs.schema.withoutRowid =
                 sql != nullptr && std::string(sql).find("WITHOUT ROWID") != std::string::npos;
-            // INTEGER PRIMARY KEY detection via PRAGMA table_info.
+            // Primary-key detection via PRAGMA table_info: a single INT
+            // PK is rowid-sourced, a single non-INT PK is record-sourced.
             sqlite3_stmt* p = nullptr;
             std::string pragma = "PRAGMA table_info(\"" + fs.schema.name + "\")";
             if (sqlite3_prepare_v2(db, pragma.c_str(), -1, &p, nullptr) == SQLITE_OK) {
                 int pkCols = 0;
                 int pkIdx = -1;
+                bool pkIsInt = false;
                 int colIdx = 0;
                 while (sqlite3_step(p) == SQLITE_ROW) {
                     const char* type = reinterpret_cast<const char*>(sqlite3_column_text(p, 2));
@@ -119,14 +121,19 @@ struct SyncFixture {
                     for (auto& ch : upper) {
                         ch = static_cast<char>(toupper(ch));
                     }
-                    if (pk == 1 && upper.find("INT") != std::string::npos) {
+                    if (pk > 0) {
                         pkCols++;
                         pkIdx = colIdx;
+                        pkIsInt = upper.find("INT") != std::string::npos;
                     }
                     colIdx++;
                 }
                 if (pkCols == 1) {
-                    fs.ipkIndex = pkIdx;
+                    fs.schema.pkRecordIndex = pkIdx;
+                    fs.schema.pkFromRowid = pkIsInt;
+                    if (pkIsInt) {
+                        fs.ipkIndex = pkIdx;
+                    }
                 }
             }
             sqlite3_finalize(p);
@@ -193,6 +200,7 @@ struct SyncLoop {
     std::vector<std::string> dropped;
     std::vector<std::string> skipped;
     std::vector<TableSchema> lastSchemas;
+    std::vector<RowDelete> allDeletes;
 
     // Production-shaped loop: incremental per commit while the schema is
     // stable; any batch touching page 1 (DDL) or changing schemas falls
@@ -274,6 +282,9 @@ struct SyncLoop {
     }
 
     void applyBatch(const std::unordered_map<std::string, int>& ipk, const OpBatch& batch) {
+        for (auto& del : batch.deletes) {
+            allDeletes.push_back(del);
+        }
         for (auto& op : batch.upserts) {
             shadow[op.table].rows[op.rowid] = op.values;
             auto it = ipk.find(op.table);
@@ -483,6 +494,25 @@ TEST(CdcOpResolver, StressManyRowsAndSplits) {
     }
     EXPECT_EQ(5000u, loop.shadow["t"].rows.size());
     EXPECT_EQ(5000u, loop.resolver.trackedRowCount("t"));
+    expectShadowMatchesSql(f, loop.shadow);
+}
+
+TEST(CdcOpResolver, ExplicitPkIdentitySurvivesDelete) {
+    SyncFixture f;
+    SyncLoop loop;
+    std::string error;
+    f.exec("CREATE TABLE node_doc(code TEXT PRIMARY KEY, v INT);");
+    f.exec("INSERT INTO node_doc VALUES ('k1', 1), ('k2', 2);");
+    ASSERT_TRUE(loop.sync(f, error)) << error;
+    f.exec("DELETE FROM node_doc WHERE code = 'k1';");
+    ASSERT_TRUE(loop.sync(f, error)) << error;
+    EXPECT_EQ(1u, loop.shadow["node_doc"].rows.size());
+    // The delete must carry the retained TEXT PK value, not just a rowid.
+    ASSERT_EQ(1u, loop.allDeletes.size());
+    EXPECT_EQ("node_doc", loop.allDeletes[0].table);
+    ASSERT_TRUE(loop.allDeletes[0].hasIdentity);
+    ASSERT_EQ(SqliteValue::Type::Text, loop.allDeletes[0].identity.type);
+    EXPECT_EQ("k1", loop.allDeletes[0].identity.textVal);
     expectShadowMatchesSql(f, loop.shadow);
 }
 

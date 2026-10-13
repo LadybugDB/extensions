@@ -91,11 +91,28 @@ which diffs current full state and converges without era-accurate schema
 tracking. This keeps the common path scan-free; DDL batches pay one
 full diff.
 
-## Sync mapping
+## Sync mapping (register_node / register_edge semantics)
 
-Decided: **explicit mapping** (SQLite table X -> existing Ladybug table
-Y, configured at ATTACH/sync time). The resolver stays mapping-agnostic
-(table names + rowids); routing happens in the phase-3 applier.
+Maps SQLite tables to Ladybug tables like pg_ladybug's `register_node` /
+`register_edge`: label <-> table, id column, endpoint columns, props,
+with upsert behavior. The `node_*` / `rel_*` / `csr_rel_*` naming
+convention auto-populates this catalog at sync time:
+
+- `node_*` -> node table (label keeps the full table name, matching
+  pg_client catalog behavior). Identity is the single-column PK:
+  rowid-sourced for INTEGER PRIMARY KEY (record slot holds NULL),
+  record-sourced otherwise. No single PK -> skipped, not guessed.
+- `rel_*` / `csr_rel_*` -> edge table. Endpoints require FK-backed
+  src/dst columns resolving to mapped node tables; without them the
+  edge cannot be oriented safely, so it is skipped. `csr_rel_*` sets a
+  contract flag for later bulk-load; the applier treats both as edges.
+- Anything else -> skipped (keeps today's foreign-scan behavior).
+
+Explicit `register_*` calls (phase 3b) upsert catalog rows that take
+precedence over inference. The resolver stays mapping-agnostic (table
+names + rowids + retained PK identities for deletes); routing, DDL
+(`CREATE ... IF NOT EXISTS`), and UNWIND-batched DML happen in the
+applier from the bound mapping.
 
 ## Phase plan
 
