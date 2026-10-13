@@ -64,6 +64,8 @@ public:
 
     bool isConnected() const { return db != nullptr; }
 
+    const std::string& getDbPath() const { return dbPath; }
+
     // Executes the query and materializes every row. Throws
     // common::Exception when the query cannot be prepared or stepped.
     SqliteQueryResult executeQuery(const std::string& query) const;
@@ -71,6 +73,8 @@ public:
     struct ColumnInfo {
         std::string name;
         std::string declaredType;
+        // 1-based PRIMARY KEY order from PRAGMA table_info (0 = not in PK).
+        int pkOrder = 0;
     };
 
     std::vector<std::string> listTables() const;
@@ -88,6 +92,7 @@ public:
 
 private:
     sqlite3* db;
+    std::string dbPath;
     mutable std::mutex mtx;
 };
 

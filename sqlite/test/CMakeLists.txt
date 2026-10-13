@@ -11,4 +11,8 @@ if (${BUILD_EXTENSION_TESTS})
             gtest gtest_main)
         gtest_discover_tests(sqlite_${cdc_test} DISCOVERY_MODE PRE_TEST)
     endforeach()
+    add_lbug_test(sqlite_sync_api_test sync_api_test.cpp)
+    target_include_directories(sqlite_sync_api_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/extension/sqlite/third_party/sqlite)
+    target_link_libraries(sqlite_sync_api_test PRIVATE sqlite3_vendor)
 endif ()

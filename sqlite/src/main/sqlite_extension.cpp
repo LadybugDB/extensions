@@ -1,5 +1,6 @@
 #include "main/sqlite_extension.h"
 
+#include "function/sync_functions.h"
 #include "main/client_context.h"
 #include "main/database.h"
 #include "storage/sqlite_storage.h"
@@ -11,6 +12,9 @@ void SqliteExtension::load(main::ClientContext* context) {
     auto db = context->getDatabase();
     db->registerStorageExtension(EXTENSION_NAME, std::make_unique<SqliteStorageExtension>(*db));
     db->addExtensionOption("sqlite_all_varchar", common::LogicalTypeID::BOOL, common::Value{false});
+    extension::ExtensionUtils::addStandaloneTableFunc<SqliteSyncFunction>(*db);
+    extension::ExtensionUtils::addStandaloneTableFunc<SqliteRegisterNodeFunction>(*db);
+    extension::ExtensionUtils::addStandaloneTableFunc<SqliteRegisterEdgeFunction>(*db);
 }
 
 } // namespace sqlite_extension

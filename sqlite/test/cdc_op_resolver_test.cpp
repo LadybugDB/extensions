@@ -146,6 +146,9 @@ struct SyncFixture {
         auto full = fullSchemas();
         std::vector<TableSchema> out;
         for (auto& fs : full) {
+            // The engine retains records for mapped edge tables; the test
+            // loop retains for all tables (harmless, more coverage).
+            fs.schema.retainRecords = true;
             out.push_back(fs.schema);
         }
         return out;
@@ -176,8 +179,7 @@ struct SyncFixture {
             if (it != shared->images.end()) {
                 return it->second;
             }
-            size_t off =
-                pageNo == 1 ? 0 : 100 + (static_cast<size_t>(pageNo) - 1) * shared->pageSize;
+            size_t off = (static_cast<size_t>(pageNo) - 1) * shared->pageSize;
             if (off + shared->pageSize <= shared->db.size()) {
                 return shared->db.data() + off;
             }
@@ -494,6 +496,40 @@ TEST(CdcOpResolver, StressManyRowsAndSplits) {
     }
     EXPECT_EQ(5000u, loop.shadow["t"].rows.size());
     EXPECT_EQ(5000u, loop.resolver.trackedRowCount("t"));
+    expectShadowMatchesSql(f, loop.shadow);
+}
+
+TEST(CdcOpResolver, RetainedRecordsBackEdgeDeletes) {
+    // Records retained in round one must back deletes emitted in round two
+    // (the engine retains for mapped edge tables; the loop retains for all).
+    SyncFixture f;
+    SyncLoop loop;
+    std::string error;
+    f.exec("CREATE TABLE node_person(id INTEGER PRIMARY KEY, name TEXT);");
+    f.exec("CREATE TABLE node_company(id INTEGER PRIMARY KEY, name TEXT);");
+    f.exec("CREATE TABLE rel_works(src_id BIGINT REFERENCES node_person(id), dst_id BIGINT "
+           "REFERENCES node_company(id), since BIGINT);");
+    f.exec("INSERT INTO node_person VALUES (1, 'ann');");
+    f.exec("INSERT INTO node_company VALUES (10, 'acme');");
+    f.exec("INSERT INTO rel_works VALUES (1, 10, 2020);");
+    ASSERT_TRUE(loop.sync(f, error)) << error;
+    EXPECT_EQ(1u, loop.shadow["rel_works"].rows.size());
+
+    f.exec("DELETE FROM rel_works WHERE src_id = 1;");
+    f.exec("INSERT INTO rel_works VALUES (1, 10, 2024);");
+    ASSERT_TRUE(loop.sync(f, error)) << error;
+    bool sawDelete = false;
+    for (auto& del : loop.allDeletes) {
+        if (del.table == "rel_works") {
+            sawDelete = true;
+            ASSERT_TRUE(del.hasRecord);
+            ASSERT_EQ(3u, del.record.size());
+            EXPECT_EQ(1, del.record[0].intVal);
+            EXPECT_EQ(10, del.record[1].intVal);
+            EXPECT_EQ(2020, del.record[2].intVal);
+        }
+    }
+    EXPECT_TRUE(sawDelete);
     expectShadowMatchesSql(f, loop.shadow);
 }
 
