@@ -33,6 +33,27 @@ const TableSchema* findSchema(const std::vector<TableSchema>& schemas, const std
 
 } // namespace
 
+void OpResolver::trackRow(TableState& state, const DecodedRow& row) {
+    if (!state.pkFromRowid && state.pkRecordIndex >= 0 &&
+        static_cast<size_t>(state.pkRecordIndex) < row.values.size()) {
+        state.identities[row.rowid] = row.values[state.pkRecordIndex];
+    }
+}
+
+void OpResolver::emitDelete(const std::string& table, TableState& state, int64_t rowid,
+    OpBatch& batch) {
+    RowDelete del;
+    del.table = table;
+    del.rowid = rowid;
+    auto it = state.identities.find(rowid);
+    if (it != state.identities.end()) {
+        del.identity = it->second;
+        del.hasIdentity = true;
+        state.identities.erase(it);
+    }
+    batch.deletes.push_back(std::move(del));
+}
+
 bool OpResolver::decodeLeaf(uint32_t pageNo, const PageFetcher& fetcher, uint32_t pageSize,
     std::vector<DecodedRow>& rows, uint64_t& imageHash, std::string& error) {
     const uint8_t* image = fetcher(pageNo);
@@ -70,7 +91,7 @@ ResolveResult OpResolver::fullDiff(const std::vector<TableSchema>& schemas,
             out.batch.droppedTables.push_back(it->first);
             for (auto& [pageNo, page] : it->second.pages) {
                 for (auto rowid : page.rowids) {
-                    out.batch.deletes.push_back({it->first, rowid});
+                    emitDelete(it->first, it->second, rowid, out.batch);
                 }
             }
             it = tables_.erase(it);
@@ -91,6 +112,8 @@ ResolveResult OpResolver::fullDiff(const std::vector<TableSchema>& schemas,
         }
         TableState newState;
         newState.rootPage = schema.rootPage;
+        newState.pkRecordIndex = schema.pkRecordIndex;
+        newState.pkFromRowid = schema.pkFromRowid;
         auto stateIt = tables_.find(schema.name);
         bool haveState =
             !blind && stateIt != tables_.end() && stateIt->second.rootPage == schema.rootPage;
@@ -122,11 +145,9 @@ ResolveResult OpResolver::fullDiff(const std::vector<TableSchema>& schemas,
             pageState.imageHash = decodedHash;
             for (auto& row : rows) {
                 pageState.rowids.insert(row.rowid);
-                if (!blind && pageKnown && oldPageIt->second.rowids.contains(row.rowid)) {
-                    // Row already applied; skip unless the values changed.
-                    // Values are not retained, so any row on a changed page
-                    // is re-emitted (idempotent upsert at apply time).
-                }
+                // Changed pages re-emit all current rows (idempotent
+                // upserts at apply time); identities refresh for deletes.
+                trackRow(newState, row);
                 RowOp op;
                 op.table = schema.name;
                 op.rowid = row.rowid;
@@ -137,23 +158,18 @@ ResolveResult OpResolver::fullDiff(const std::vector<TableSchema>& schemas,
             newState.pages[pageNo] = std::move(pageState);
         }
         if (oldState != nullptr) {
+            // Carry retained identities forward so deletes of rows that
+            // vanished before this diff still resolve.
+            for (auto& [rowid, identity] : oldState->identities) {
+                newState.identities.emplace(rowid, identity);
+            }
             for (auto& [pageNo, page] : oldState->pages) {
-                if (newState.pages.contains(pageNo)) {
-                    // Diffed above via decode; rows missing from the new
-                    // image were already handled: re-decoded pages emit all
-                    // current rows as upserts and vanished rowids below.
-                    auto& newPage = newState.pages[pageNo];
-                    for (auto rowid : page.rowids) {
-                        if (!newPage.rowids.contains(rowid) &&
-                            !upserted.contains({schema.name, rowid})) {
-                            out.batch.deletes.push_back({schema.name, rowid});
-                        }
-                    }
-                } else {
-                    for (auto rowid : page.rowids) {
-                        if (!upserted.contains({schema.name, rowid})) {
-                            out.batch.deletes.push_back({schema.name, rowid});
-                        }
+                auto newPageIt = newState.pages.find(pageNo);
+                for (auto rowid : page.rowids) {
+                    bool stillPresent = newPageIt != newState.pages.end() &&
+                                        newPageIt->second.rowids.contains(rowid);
+                    if (!stillPresent && !upserted.contains({schema.name, rowid})) {
+                        emitDelete(schema.name, newState, rowid, out.batch);
                     }
                 }
             }
@@ -184,7 +200,7 @@ ResolveResult OpResolver::applyFrames(const std::vector<TableSchema>& schemas,
             out.batch.droppedTables.push_back(it->first);
             for (auto& [pageNo, page] : it->second.pages) {
                 for (auto rowid : page.rowids) {
-                    out.batch.deletes.push_back({it->first, rowid});
+                    emitDelete(it->first, it->second, rowid, out.batch);
                 }
             }
             it = tables_.erase(it);
@@ -207,7 +223,7 @@ ResolveResult OpResolver::applyFrames(const std::vector<TableSchema>& schemas,
             if (stateIt != tables_.end()) {
                 for (auto& [pageNo, page] : stateIt->second.pages) {
                     for (auto rowid : page.rowids) {
-                        out.batch.deletes.push_back({schema.name, rowid});
+                        emitDelete(schema.name, stateIt->second, rowid, out.batch);
                     }
                 }
                 tables_.erase(stateIt);
@@ -219,6 +235,8 @@ ResolveResult OpResolver::applyFrames(const std::vector<TableSchema>& schemas,
             }
             TableState fresh;
             fresh.rootPage = schema.rootPage;
+            fresh.pkRecordIndex = schema.pkRecordIndex;
+            fresh.pkFromRowid = schema.pkFromRowid;
             for (auto pageNo : walk.leaves) {
                 std::vector<DecodedRow> rows;
                 uint64_t hash = 0;
@@ -231,6 +249,7 @@ ResolveResult OpResolver::applyFrames(const std::vector<TableSchema>& schemas,
                 pageState.imageHash = hash;
                 for (auto& row : rows) {
                     pageState.rowids.insert(row.rowid);
+                    trackRow(fresh, row);
                     RowOp op;
                     op.table = schema.name;
                     op.rowid = row.rowid;
@@ -264,7 +283,7 @@ ResolveResult OpResolver::applyFrames(const std::vector<TableSchema>& schemas,
             if (!walk.leaves.contains(it->first)) {
                 for (auto rowid : it->second.rowids) {
                     if (!upsertedRowids.contains(rowid)) {
-                        out.batch.deletes.push_back({schema.name, rowid});
+                        emitDelete(schema.name, state, rowid, out.batch);
                     }
                 }
                 it = state.pages.erase(it);
@@ -289,11 +308,12 @@ ResolveResult OpResolver::applyFrames(const std::vector<TableSchema>& schemas,
             fresh.imageHash = hash;
             for (auto& row : rows) {
                 fresh.rowids.insert(row.rowid);
+                trackRow(state, row);
             }
             if (!isNew) {
                 for (auto rowid : pageIt->second.rowids) {
                     if (!fresh.rowids.contains(rowid) && !upsertedRowids.contains(rowid)) {
-                        out.batch.deletes.push_back({schema.name, rowid});
+                        emitDelete(schema.name, state, rowid, out.batch);
                     }
                 }
             }

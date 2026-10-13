@@ -19,10 +19,16 @@ struct TableSchema {
     std::string name;
     uint32_t rootPage = 0;
     bool withoutRowid = false;
+    // Identity retention for deletes: single-column PK position in the
+    // record, or rowid-sourced (INTEGER PRIMARY KEY tables, where the
+    // record slot holds NULL). Defaults preserve rowid-only behavior.
+    int pkRecordIndex = -1;
+    bool pkFromRowid = true;
 
     bool operator==(const TableSchema& other) const {
         return name == other.name && rootPage == other.rootPage &&
-               withoutRowid == other.withoutRowid;
+               withoutRowid == other.withoutRowid && pkRecordIndex == other.pkRecordIndex &&
+               pkFromRowid == other.pkFromRowid;
     }
 };
 
@@ -37,6 +43,11 @@ struct RowOp {
 struct RowDelete {
     std::string table;
     int64_t rowid = 0;
+    // Last-seen PK value for explicit-PK tables (absent for rowid-sourced
+    // identities, where the rowid is authoritative). Lets the applier
+    // delete by PK after the record is gone.
+    SqliteValue identity;
+    bool hasIdentity = false;
 };
 
 struct OpBatch {
@@ -110,9 +121,19 @@ private:
     };
     struct TableState {
         uint32_t rootPage = 0;
+        int pkRecordIndex = -1;
+        bool pkFromRowid = true;
         std::unordered_map<uint32_t, PageState> pages;
+        // Last-seen PK values for explicit-PK tables, for delete identity.
+        std::unordered_map<int64_t, SqliteValue> identities;
     };
     std::unordered_map<std::string, TableState> tables_;
+
+    // Records an observed row: page membership plus PK retention.
+    static void trackRow(TableState& state, const DecodedRow& row);
+    // Emits a delete for a tracked rowid, attaching retained identity.
+    static void emitDelete(const std::string& table, TableState& state, int64_t rowid,
+        OpBatch& batch);
 
     static bool decodeLeaf(uint32_t pageNo, const PageFetcher& fetcher, uint32_t pageSize,
         std::vector<DecodedRow>& rows, uint64_t& imageHash, std::string& error);
