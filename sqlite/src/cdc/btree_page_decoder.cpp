@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cstring>
+#include <set>
+#include <vector>
 
 #include "cdc/wal_format.h"
 #include <format>
@@ -118,6 +120,52 @@ size_t leafLocalPayload(uint32_t usable, size_t payloadLen) {
 }
 
 } // namespace
+
+LeafWalkResult collectLeafPages(uint32_t rootPage, const PageFetcher& fetcher, uint32_t pageSize) {
+    LeafWalkResult out;
+    if (pageSize < 512) {
+        out.error = "Bad page size";
+        return out;
+    }
+    std::set<uint32_t> visited;
+    std::vector<std::pair<uint32_t, size_t>> stack{{rootPage, 0}};
+    constexpr size_t maxDepth = 64;
+    while (!stack.empty()) {
+        auto [pageNo, depth] = stack.back();
+        stack.pop_back();
+        if (pageNo == 0 || depth > maxDepth || !visited.insert(pageNo).second) {
+            continue;
+        }
+        const uint8_t* image = fetcher(pageNo);
+        if (image == nullptr) {
+            out.error = std::format("Page {} unavailable", pageNo);
+            return out;
+        }
+        if (image[0] == 0x0D) {
+            out.leaves.insert(pageNo);
+            continue;
+        }
+        if (image[0] != 0x05) {
+            out.error =
+                std::format("Page {} is not a table b-tree page (flags {:#x})", pageNo, image[0]);
+            return out;
+        }
+        uint16_t nCell = readU16BE(image + 3);
+        // Interior header is 12 bytes (rightmost pointer at [8:12]), so
+        // the cell pointer array starts at [12] -- unlike leaf pages.
+        for (uint16_t i = 0; i < nCell; i++) {
+            uint16_t cellOff = readU16BE(image + 12 + 2 * i);
+            if (cellOff + 4 > pageSize) {
+                out.error = "Interior cell out of range";
+                return out;
+            }
+            stack.emplace_back(readU32BE(image + cellOff), depth + 1);
+        }
+        stack.emplace_back(readU32BE(image + 8), depth + 1);
+    }
+    out.ok = true;
+    return out;
+}
 
 PageDecodeResult decodeTableLeafPage(const uint8_t* image, size_t imageSize, uint32_t pageSize,
     uint8_t reserved, uint8_t textEncoding, const PageFetcher& fetcher) {

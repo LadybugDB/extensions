@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -35,6 +36,19 @@ struct PageDecodeResult {
     std::string error;
     std::vector<DecodedRow> rows;
 };
+
+struct LeafWalkResult {
+    bool ok = false;
+    std::string error;
+    // Ordered for deterministic output.
+    std::set<uint32_t> leaves;
+};
+
+// Collects all table-leaf page numbers under rootPage (root itself when it
+// is a leaf) by walking interior (0x05) pages via fetcher. Reads interior
+// pages only -- never leaf row data -- so this is not a table scan.
+// Guards against corrupt loops with a visited set and depth cap.
+LeafWalkResult collectLeafPages(uint32_t rootPage, const PageFetcher& fetcher, uint32_t pageSize);
 
 // Decodes all cells of a table-b-tree leaf page (flags 0x0D), following
 // overflow chains via fetcher. imageSize must equal pageSize.
