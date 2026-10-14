@@ -15,6 +15,9 @@ void SqliteExtension::load(main::ClientContext* context) {
     extension::ExtensionUtils::addStandaloneTableFunc<SqliteSyncFunction>(*db);
     extension::ExtensionUtils::addStandaloneTableFunc<SqliteRegisterNodeFunction>(*db);
     extension::ExtensionUtils::addStandaloneTableFunc<SqliteRegisterEdgeFunction>(*db);
+    extension::ExtensionUtils::addStandaloneTableFunc<SqliteSyncStartFunction>(*db);
+    extension::ExtensionUtils::addStandaloneTableFunc<SqliteSyncStopFunction>(*db);
+    extension::ExtensionUtils::addStandaloneTableFunc<SqliteSyncStatusFunction>(*db);
 }
 
 } // namespace sqlite_extension

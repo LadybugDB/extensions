@@ -10,6 +10,7 @@ set(SQLITE_EXTENSION_OBJECT_FILES
 
 add_library(lbug_sqlite_sync
         OBJECT
+        sync_daemon.cpp
         sync_engine.cpp
         sync_functions.cpp)
 

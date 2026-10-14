@@ -6,8 +6,10 @@
 
 #include <unistd.h>
 
+#include <chrono>
 #include <filesystem>
 #include <string>
+#include <thread>
 
 #include "api_test/api_test.h"
 #include "sqlite3.h"
@@ -61,6 +63,22 @@ void expectRows(main::Connection* conn, const std::string& cypher,
 
 std::string lit(const std::string& path) {
     return "'" + path + "'";
+}
+
+// Polls a MATCH until it returns the expected rows or the deadline passes.
+// Daemon ticks are asynchronous; polling is the only sane assertion.
+bool pollRows(main::Connection* conn, const std::string& cypher, std::vector<std::string> expected,
+    int timeoutMs = 15000) {
+    int waited = 0;
+    while (waited < timeoutMs) {
+        auto result = conn->query(cypher);
+        if (result->isSuccess() && TestHelper::convertResultToString(*result) == expected) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        waited += 50;
+    }
+    return false;
 }
 
 } // namespace
@@ -156,6 +174,57 @@ TEST_F(ApiTest, SqliteSyncIncremental) {
             lit(sqlite.path)));
     ASSERT_EQ(1u, stats3.size());
     EXPECT_NE(std::string::npos, stats3[0].find("|0|0|")) << stats3[0];
+}
+
+TEST_F(ApiTest, SqliteSyncDaemonConverges) {
+#ifndef __STATIC_LINK_EXTENSION_TEST__
+    ASSERT_TRUE(conn->query(std::format("LOAD EXTENSION '{}'",
+                                TestHelper::appendLbugRootPath(
+                                    "extension/sqlite/build/libsqlite.lbug_extension")))
+                    ->isSuccess());
+#endif
+    SqliteFile sqlite;
+    sqlite.exec("CREATE TABLE node_person(id INTEGER PRIMARY KEY, name TEXT);");
+    sqlite.exec("INSERT INTO node_person VALUES (1, 'ann');");
+
+    expectRows(conn.get(),
+        std::format("CALL sqlite_sync_start({}, 50) RETURN *;", lit(sqlite.path)),
+        {std::format("Sync daemon started for '{}' every 50ms", sqlite.path)});
+    // Duplicate start is rejected.
+    {
+        auto dup =
+            conn->query(std::format("CALL sqlite_sync_start({}, 50) RETURN *;", lit(sqlite.path)));
+        EXPECT_FALSE(dup->isSuccess());
+    }
+    EXPECT_TRUE(
+        pollRows(conn.get(), "MATCH (p:node_person) RETURN p.name ORDER BY p.name;", {"ann"}));
+
+    sqlite.exec("UPDATE node_person SET name = 'ann2' WHERE id = 1;");
+    sqlite.exec("INSERT INTO node_person VALUES (2, 'bob');");
+    EXPECT_TRUE(pollRows(conn.get(), "MATCH (p:node_person) RETURN p.name ORDER BY p.name;",
+        {"ann2", "bob"}));
+
+    sqlite.exec("DELETE FROM node_person WHERE id = 1;");
+    EXPECT_TRUE(
+        pollRows(conn.get(), "MATCH (p:node_person) RETURN p.name ORDER BY p.name;", {"bob"}));
+
+    // Status reports the running daemon.
+    {
+        auto status = queryStrings(conn.get(),
+            "CALL sqlite_sync_status() RETURN running, sync ORDER BY sync;");
+        ASSERT_EQ(1u, status.size());
+        EXPECT_NE(std::string::npos, status[0].find("1|")) << status[0];
+        EXPECT_NE(std::string::npos, status[0].find(sqlite.path)) << status[0];
+    }
+    expectRows(conn.get(), std::format("CALL sqlite_sync_stop({}) RETURN *;", lit(sqlite.path)),
+        {std::format("Sync daemon stopped for '{}'", sqlite.path)});
+    // Stopping twice is an error; status is empty afterwards.
+    {
+        auto dup =
+            conn->query(std::format("CALL sqlite_sync_stop({}) RETURN *;", lit(sqlite.path)));
+        EXPECT_FALSE(dup->isSuccess());
+    }
+    expectRows(conn.get(), "CALL sqlite_sync_status() RETURN *;", {});
 }
 
 } // namespace testing
