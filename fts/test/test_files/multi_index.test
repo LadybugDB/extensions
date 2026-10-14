@@ -34,10 +34,6 @@ Exported database successfully.
 ---- ok
 -STATEMENT DROP TABLE INVALID_STOPWORDS_COL_TYPE
 ---- ok
--STATEMENT DROP MACRO `0_AUTHORIDX_TOKENIZE`
----- ok
--STATEMENT DROP MACRO `0_NAMEIDX_TOKENIZE`
----- ok
 -STATEMENT IMPORT DATABASE "${LBUG_EXPORT_DB_DIRECTORY}/fts-db"
 ---- 1
 Imported database successfully.

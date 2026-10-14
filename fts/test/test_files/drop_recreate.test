@@ -1,0 +1,85 @@
+-DATASET CSV empty-db
+
+--
+
+# DROP_FTS_INDEX removes the index's tokenize macro and stopwords copy, so an index created again
+# under the same name uses its own options.
+-CASE RecreateWithNewOptions
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE Doc(id INT64 PRIMARY KEY, body STRING);
+---- ok
+-STATEMENT CREATE (:Doc {id: 1, body: 'order 12345'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('Doc', 'idx', ['body']);
+---- ok
+-STATEMENT CALL DROP_FTS_INDEX('Doc', 'idx');
+---- 1
+Index idx has been dropped.
+# The default pattern strips digits; the new one keeps them for existing and new rows alike.
+-STATEMENT CALL CREATE_FTS_INDEX('Doc', 'idx', ['body'], ignore_pattern := '[!]+');
+---- ok
+-STATEMENT CREATE (:Doc {id: 2, body: 'order 12345'});
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'idx', '12345') RETURN node.id ORDER BY node.id;
+---- 2
+1
+2
+
+-CASE RecreateWithStopWordsTable
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE Stop(sw STRING PRIMARY KEY);
+---- ok
+-STATEMENT CREATE (:Stop {sw: 'order'});
+---- ok
+-STATEMENT CREATE NODE TABLE Doc(id INT64 PRIMARY KEY, body STRING);
+---- ok
+-STATEMENT CREATE (:Doc {id: 1, body: 'order shipped'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('Doc', 'idx', ['body'], stopwords := 'Stop');
+---- ok
+-STATEMENT CALL DROP_FTS_INDEX('Doc', 'idx');
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('Doc', 'idx', ['body'], stopwords := 'Stop');
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'idx', 'order') RETURN node.id;
+---- 0
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'idx', 'shipped') RETURN node.id;
+---- 1
+1
+
+-CASE RecreateWithStopWordsFile
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE Doc(id INT64 PRIMARY KEY, body STRING);
+---- ok
+-STATEMENT CREATE (:Doc {id: 1, body: 'toronto weather'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('Doc', 'idx', ['body'], stopwords := '${LBUG_ROOT_DIRECTORY}/dataset/fts-small/city_stopwords.csv');
+---- ok
+-STATEMENT CALL DROP_FTS_INDEX('Doc', 'idx');
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('Doc', 'idx', ['body'], stopwords := '${LBUG_ROOT_DIRECTORY}/dataset/fts-small/city_stopwords.csv');
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'idx', 'toronto') RETURN node.id;
+---- 0
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'idx', 'weather') RETURN node.id;
+---- 1
+1
+
+# Earlier versions of DROP_FTS_INDEX left the tokenize macro behind; CREATE_FTS_INDEX replaces it.
+-CASE LeftoverMacroIsReplaced
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE Doc(id INT64 PRIMARY KEY, body STRING);
+---- ok
+-STATEMENT CREATE (:Doc {id: 1, body: 'order 12345'});
+---- ok
+# The macro name embeds the table ID.
+-STATEMENT CALL SHOW_TABLES() WHERE name = 'Doc' RETURN id;
+---- 1
+1
+-STATEMENT CREATE MACRO `1_idx_tokenize`(query) AS TOKENIZE(lower(regexp_replace(CAST(query as STRING), '[0-9]+', ' ', 'g')), 'simple', '');
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('Doc', 'idx', ['body'], ignore_pattern := '[!]+');
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'idx', '12345') RETURN node.id;
+---- 1
+1
