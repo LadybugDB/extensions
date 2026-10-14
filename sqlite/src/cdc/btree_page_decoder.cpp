@@ -155,7 +155,7 @@ LeafWalkResult collectLeafPages(uint32_t rootPage, const PageFetcher& fetcher, u
         // the cell pointer array starts at [12] -- unlike leaf pages.
         for (uint16_t i = 0; i < nCell; i++) {
             uint16_t cellOff = readU16BE(image + 12 + 2 * i);
-            if (cellOff + 4 > pageSize) {
+            if (static_cast<uint32_t>(cellOff) + 4 > pageSize) {
                 out.error = "Interior cell out of range";
                 return out;
             }
@@ -181,7 +181,7 @@ PageDecodeResult decodeTableLeafPage(const uint8_t* image, size_t imageSize, uin
     uint16_t nCell = readU16BE(image + 3);
     uint32_t usable = pageSize - reserved;
     for (uint16_t ci = 0; ci < nCell; ci++) {
-        uint16_t cellOff = readU16BE(image + 8 + 2 * ci);
+        uint32_t cellOff = readU16BE(image + 8 + 2 * ci);
         if (cellOff >= pageSize) {
             out.error = "Cell pointer out of range";
             return out;
