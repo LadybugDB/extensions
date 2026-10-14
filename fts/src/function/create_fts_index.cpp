@@ -266,18 +266,17 @@ std::string createFTSIndexQuery(ClientContext& context, const TableFuncBindData&
         context.setUseInternalCatalogEntry(prevUseInternalCatalogEntry);
         throw;
     }
-    // Create the tokenize macro unless one already exists (a residue macro is reused;
-    // dropping it is avoided: macro-drop WAL replay is currently broken engine-side).
-    if (!catalog::Catalog::Get(context)->containsMacro(transaction::Transaction::Get(context),
-            FTSUtils::getTokenizeMacroName(tableID, indexName))) {
-        // TOKENIZE(text, tokenizer, extra_param)
-        query += std::format(R"(CREATE MACRO `{}`(query) AS
+    // An existing tokenize macro comes from IMPORT DATABASE, an interrupted CREATE, or an index of
+    // the same name dropped by an earlier version; it is replaced so the bulk build tokenizes with
+    // this index's options.
+    query += FTSUtils::dropTokenizeMacroQuery(context, tableID, indexName);
+    // TOKENIZE(text, tokenizer, extra_param)
+    query += std::format(R"(CREATE MACRO `{}`(query) AS
                             TOKENIZE(lower(regexp_replace(CAST(query as STRING), '{}', ' ', 'g')), '{}', '{}');)",
-            FTSUtils::getTokenizeMacroName(tableID, indexName),
-            formatStrInCypher(ftsBindData->createFTSConfig.ignorePattern),
-            ftsBindData->createFTSConfig.tokenizerInfo.tokenizer,
-            ftsBindData->createFTSConfig.tokenizerInfo.jiebaDictDir);
-    }
+        FTSUtils::getTokenizeMacroName(tableID, indexName),
+        formatStrInCypher(ftsBindData->createFTSConfig.ignorePattern),
+        ftsBindData->createFTSConfig.tokenizerInfo.tokenizer,
+        ftsBindData->createFTSConfig.tokenizerInfo.jiebaDictDir);
 
     // Create the stop words table if not exists, or the user is not using the default english
     // one.

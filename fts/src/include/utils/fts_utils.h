@@ -69,6 +69,11 @@ struct FTSUtils {
 
     static std::vector<std::string> tokenizeString(std::string& str, const FTSConfig& tokenizer);
 
+    // DROP MACRO IF EXISTS throws when the macro is missing, so the statement is only emitted for
+    // an existing macro.
+    static std::string dropTokenizeMacroQuery(const main::ClientContext& context,
+        common::table_id_t tableID, const std::string& indexName);
+
     // Returns a process-wide cached jieba instance for the given dictionary directory.
     // The first call for a directory loads the dictionaries (~0.5s); subsequent calls
     // reuse the instance. The returned instance is const and safe for concurrent use by
