@@ -2,10 +2,12 @@
 
 #include <algorithm>
 #include <cctype>
+#include <fstream>
 #include <mutex>
 #include <optional>
 #include <unordered_map>
 
+#include "common/exception/binder.h"
 #include "common/string_utils.h"
 #include "cppjieba/Jieba.hpp"
 #include "function/stem.h"
@@ -155,6 +157,27 @@ std::shared_ptr<const cppjieba::Jieba> FTSUtils::getCachedJieba(const std::strin
         if (auto cached = it->second.lock()) {
             return cached;
         }
+    }
+    // cppjieba's constructor XCHECK()s its five dictionary files and abort()s the
+    // whole process when one is missing (extensions#99) - not a C++ exception, so no
+    // binding can defend against it and a host daemon dies. Probe the files first so
+    // a missing/stale jieba_dict_dir raises a catchable BinderException instead.
+    static const std::string kDictFiles[] = {"jieba.dict.utf8", "hmm_model.utf8",
+        "user.dict.utf8", "idf.utf8", "stop_words.utf8"};
+    std::string missing;
+    for (const auto& file : kDictFiles) {
+        std::ifstream f{key + "/" + file};
+        if (!f.is_open()) {
+            missing.push_back(static_cast<char>(10));
+            missing += "  - " + key + "/" + file;
+        }
+    }
+    if (!missing.empty()) {
+        throw BinderException{std::format(
+            "Cannot locate the jieba dictionary. Missing files:{}. Fix: pass a valid "
+            "jieba_dict_dir pointing at a directory containing jieba.dict.utf8, "
+            "hmm_model.utf8, user.dict.utf8, idf.utf8 and stop_words.utf8.",
+            missing)};
     }
     auto jieba = std::make_shared<cppjieba::Jieba>(key + "/jieba.dict.utf8",
         key + "/hmm_model.utf8", key + "/user.dict.utf8", key + "/idf.utf8",
