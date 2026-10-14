@@ -1,0 +1,82 @@
+-DATASET CSV empty-db
+
+--
+
+# COPY with ignore_errors removes a rejected row before the FTS index has seen it.
+-CASE CopySkipsDuplicateWithText
+-SKIP_IN_MEM
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE Doc(id INT64 PRIMARY KEY, body STRING);
+---- ok
+-STATEMENT CREATE (:Doc {id: 1, body: 'apple'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('Doc', 'idx', ['body']);
+---- ok
+-STATEMENT COPY (UNWIND [1, 2] AS i RETURN i, CASE i WHEN 1 THEN 'banana' ELSE 'cherry' END) TO '${LBUG_EXPORT_DB_DIRECTORY}_dup.csv' (header=false);
+---- ok
+-STATEMENT COPY Doc FROM '${LBUG_EXPORT_DB_DIRECTORY}_dup.csv' (header=false, ignore_errors=true);
+---- ok
+-STATEMENT MATCH (d:Doc) RETURN d.id, d.body ORDER BY d.id;
+---- 2
+1|apple
+2|cherry
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'idx', 'cherry') RETURN node.id;
+---- 1
+2
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'idx', 'banana') RETURN node.id;
+---- 0
+-STATEMENT MATCH (d:Doc {id: 2}) DELETE d;
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'idx', 'cherry') RETURN node.id;
+---- 0
+
+# A rejected row without indexable text must not be indexed with the previous row's text.
+-CASE CopySkipsDuplicateWithoutText
+-SKIP_IN_MEM
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE Doc(id INT64 PRIMARY KEY, body STRING);
+---- ok
+-STATEMENT CREATE (:Doc {id: 1, body: 'apple'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('Doc', 'idx', ['body']);
+---- ok
+-STATEMENT COPY (UNWIND [2, 1, 3] AS i RETURN i, CASE i WHEN 2 THEN 'banana cherry' WHEN 1 THEN '' ELSE 'date' END) TO '${LBUG_EXPORT_DB_DIRECTORY}_dup_empty.csv' (header=false);
+---- ok
+-STATEMENT COPY Doc FROM '${LBUG_EXPORT_DB_DIRECTORY}_dup_empty.csv' (header=false, ignore_errors=true);
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'idx', 'banana') RETURN node.id, score;
+---- 1
+2|0.353634
+-STATEMENT CALL DROP_FTS_INDEX('Doc', 'idx');
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('Doc', 'idx', ['body']);
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'idx', 'banana') RETURN node.id, score;
+---- 1
+2|0.353634
+
+# The rejected row is the last one in the file; rows written after the COPY stay deletable.
+-CASE CopyRejectsLastRow
+-SKIP_IN_MEM
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE Doc(id INT64 PRIMARY KEY, body STRING);
+---- ok
+-STATEMENT CREATE (:Doc {id: 1, body: 'apple'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('Doc', 'idx', ['body']);
+---- ok
+-STATEMENT COPY (UNWIND [2, 1] AS i RETURN i, CASE i WHEN 2 THEN 'cherry' ELSE 'banana' END) TO '${LBUG_EXPORT_DB_DIRECTORY}_dup_last.csv' (header=false);
+---- ok
+-STATEMENT COPY Doc FROM '${LBUG_EXPORT_DB_DIRECTORY}_dup_last.csv' (header=false, ignore_errors=true);
+---- ok
+-STATEMENT CREATE (:Doc {id: 3, body: 'date'});
+---- ok
+-STATEMENT MATCH (d:Doc) WHERE d.id >= 2 DELETE d;
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'idx', 'cherry') RETURN node.id;
+---- 0
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'idx', 'date') RETURN node.id;
+---- 0
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'idx', 'apple') RETURN node.id;
+---- 1
+1

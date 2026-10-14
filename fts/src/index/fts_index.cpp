@@ -183,11 +183,18 @@ std::unique_ptr<Index::DeleteState> FTSIndex::initDeleteState(const Transaction*
 void FTSIndex::delete_(Transaction* transaction, const ValueVector& nodeIDVector,
     DeleteState& deleteState) {
     auto& ftsDeleteState = deleteState.cast<FTSDeleteState>();
+    const auto numIndexedNodes = getNumIndexedNodes(transaction);
     uint64_t totalDeletedDocLen = 0;
     idx_t numDeletedDocs = 0;
     for (auto i = 0u; i < nodeIDVector.state->getSelSize(); i++) {
         auto pos = nodeIDVector.state->getSelVector()[i];
         auto deletedNodeID = nodeIDVector.getValue<nodeID_t>(pos);
+        // A row COPY rejected (ignore_errors) is deleted before finalize() would index it. Above
+        // the indexed prefix the doc table decides, so an indexed row is still deleted.
+        if (deletedNodeID.offset >= numIndexedNodes &&
+            !containsDoc(transaction, ftsDeleteState, deletedNodeID)) {
+            continue;
+        }
         ftsDeleteState.updateVectors.idVector.setValue(0, deletedNodeID);
         internalTableInfo.table->initScanState(transaction,
             *ftsDeleteState.indexTableState.scanState, deletedNodeID.tableID, deletedNodeID.offset);
@@ -220,6 +227,16 @@ std::pair<idx_t, double> FTSIndex::getStats(const Transaction* transaction) cons
     }
     DASSERT(numDocs >= 0);
     return {static_cast<idx_t>(numDocs), numDocs == 0 ? 0 : totalDocLen / numDocs};
+}
+
+offset_t FTSIndex::getNumIndexedNodes(const Transaction* transaction) const {
+    const auto stats = storageInfo->cast<FTSStorageInfo>().stats;
+    std::lock_guard lck{stats->mtx};
+    auto numIndexedNodes = stats->numCheckpointedNodes;
+    if (const auto it = stats->deltas.find(transaction->getID()); it != stats->deltas.end()) {
+        numIndexedNodes = std::max(numIndexedNodes, it->second.numCheckpointedNodes);
+    }
+    return numIndexedNodes;
 }
 
 void FTSIndex::updateStats(Transaction* transaction, int64_t numDocs, double totalDocLen,
@@ -263,16 +280,8 @@ void FTSIndex::updateStats(Transaction* transaction, int64_t numDocs, double tot
 }
 
 void FTSIndex::finalize(main::ClientContext* context) {
-    const auto stats = storageInfo->cast<FTSStorageInfo>().stats;
     auto transaction = transaction::Transaction::Get(*context);
-    common::offset_t numCheckpointedNodes;
-    {
-        std::lock_guard lck{stats->mtx};
-        numCheckpointedNodes = stats->numCheckpointedNodes;
-        if (const auto it = stats->deltas.find(transaction->getID()); it != stats->deltas.end()) {
-            numCheckpointedNodes = std::max(numCheckpointedNodes, it->second.numCheckpointedNodes);
-        }
-    }
+    const auto numCheckpointedNodes = getNumIndexedNodes(transaction);
     const auto numTotalRows =
         internalTableInfo.table->getNumTotalRows(&DUMMY_CHECKPOINT_TRANSACTION);
     if (numTotalRows == numCheckpointedNodes) {
@@ -288,7 +297,10 @@ void FTSIndex::finalize(main::ClientContext* context) {
         idVector.setValue(0, insertedNodeID);
         internalTableInfo.table->initScanState(transaction, *indexTableState.scanState,
             insertedNodeID.tableID, insertedNodeID.offset);
-        internalTableInfo.table->lookup(transaction, *indexTableState.scanState);
+        // Rows COPY rejected are already deleted; their vectors would still hold the previous row.
+        if (!internalTableInfo.table->lookup(transaction, *indexTableState.scanState)) {
+            continue;
+        }
         auto insertState = initInsertState(context, [](offset_t) { return true; });
         insert(transaction, idVector, indexTableState.indexVectors, *insertState);
     }
@@ -364,6 +376,15 @@ void FTSIndex::insertToAppearsInTable(Transaction* transaction,
         internalTableInfo.appearsInfoTable->insert(transaction,
             ftsInsertState.appearsInTableInsertState);
     }
+}
+
+bool FTSIndex::containsDoc(Transaction* transaction, FTSDeleteState& deleteState,
+    nodeID_t nodeID) const {
+    auto& pkVector = deleteState.updateVectors.int64PKVector;
+    pkVector.setValue(0, nodeID.offset);
+    offset_t docOffset = INVALID_OFFSET;
+    return internalTableInfo.docTable->lookupPK(transaction, &pkVector, 0 /* vectorPos */,
+        docOffset);
 }
 
 nodeID_t FTSIndex::deleteFromDocTable(Transaction* transaction, FTSDeleteState& deleteState,

@@ -73,6 +73,9 @@ public:
     void finalize(main::ClientContext* context) override;
 
     std::pair<common::idx_t, double> getStats(const transaction::Transaction* transaction) const;
+    // Rows below this offset are in the index; COPY appends rows past it and indexes them in
+    // finalize().
+    common::offset_t getNumIndexedNodes(const transaction::Transaction* transaction) const;
     void checkpoint(main::ClientContext*, storage::PageAllocator& pageAllocator,
         storage::ShadowFile& shadowFile) override;
 
@@ -96,6 +99,9 @@ private:
         const std::unordered_map<std::string, TermInfo>& tfCollection,
         FTSInsertState& ftsInsertState, common::nodeID_t docID,
         common::table_id_t termsTableID) const;
+
+    bool containsDoc(transaction::Transaction* transaction, FTSDeleteState& deleteState,
+        common::nodeID_t nodeID) const;
 
     common::nodeID_t deleteFromDocTable(transaction::Transaction* transaction,
         FTSDeleteState& deleteState, common::nodeID_t deletedNodeID, uint64_t& deletedDocLen) const;
