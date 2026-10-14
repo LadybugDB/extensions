@@ -26,6 +26,9 @@ struct FTSUtils {
 
     static bool hasWildcardPattern(const std::string& term);
 
+    // Escapes backslashes and single quotes for a single-quoted Cypher string literal.
+    static std::string escapeCypherString(const std::string& str);
+
     static std::vector<std::string> stemTerms(std::vector<std::string> terms,
         const FTSConfig& config, storage::MemoryManager* mm, storage::NodeTable* stopwordsTable,
         transaction::Transaction* tx, bool isConjunctive, bool isQuery);

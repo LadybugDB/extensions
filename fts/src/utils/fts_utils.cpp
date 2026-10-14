@@ -86,6 +86,17 @@ StopWordsChecker::StopWordsChecker(MemoryManager* mm, NodeTable* stopwordsTable,
     }
 }
 
+std::string FTSUtils::escapeCypherString(const std::string& str) {
+    std::string result;
+    for (char c : str) {
+        if (c == '\\' || c == '\'') {
+            result += '\\';
+        }
+        result += c;
+    }
+    return result;
+}
+
 bool FTSUtils::hasWildcardPattern(const std::string& term) {
     for (auto& c : term) {
         if (c == '*' || c == '?') {

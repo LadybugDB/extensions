@@ -227,23 +227,13 @@ static std::string createStopWordsTable([[maybe_unused]] const ClientContext& co
     case StopWordsSource::FILE: {
         query +=
             std::format("CREATE NODE TABLE `{}` (sw STRING, PRIMARY KEY(sw));", info.tableName);
-        query += std::format("COPY `{}` FROM '{}';", info.tableName, info.stopWords);
+        query += std::format("COPY `{}` FROM '{}';", info.tableName,
+            FTSUtils::escapeCypherString(info.stopWords));
     } break;
     default:
         UNREACHABLE_CODE;
     }
     return query;
-}
-
-static std::string formatStrInCypher(const std::string& input) {
-    std::string result;
-    for (char c : input) {
-        if (c == '\\' || c == '\'') {
-            result += '\\';
-        }
-        result += c;
-    }
-    return result;
 }
 
 std::string createFTSIndexQuery(ClientContext& context, const TableFuncBindData& bindData) {
@@ -274,7 +264,7 @@ std::string createFTSIndexQuery(ClientContext& context, const TableFuncBindData&
     query += std::format(R"(CREATE MACRO `{}`(query) AS
                             TOKENIZE(lower(regexp_replace(CAST(query as STRING), '{}', ' ', 'g')), '{}', '{}');)",
         FTSUtils::getTokenizeMacroName(tableID, indexName),
-        formatStrInCypher(ftsBindData->createFTSConfig.ignorePattern),
+        FTSUtils::escapeCypherString(ftsBindData->createFTSConfig.ignorePattern),
         ftsBindData->createFTSConfig.tokenizerInfo.tokenizer,
         ftsBindData->createFTSConfig.tokenizerInfo.jiebaDictDir);
 
@@ -348,13 +338,13 @@ std::string createFTSIndexQuery(ClientContext& context, const TableFuncBindData&
     std::string params;
     params += std::format("stemmer := '{}', ", ftsBindData->createFTSConfig.stemmer);
     params += std::format("stopWords := '{}', ",
-        ftsBindData->createFTSConfig.stopWordsTableInfo.stopWords);
+        FTSUtils::escapeCypherString(ftsBindData->createFTSConfig.stopWordsTableInfo.stopWords));
     params += std::format("ignore_pattern := '{}', ",
-        formatStrInCypher(ftsBindData->createFTSConfig.ignorePattern));
+        FTSUtils::escapeCypherString(ftsBindData->createFTSConfig.ignorePattern));
     params +=
         std::format("tokenizer := '{}', ", ftsBindData->createFTSConfig.tokenizerInfo.tokenizer);
     params += std::format("jieba_dict_dir := '{}'",
-        formatStrInCypher(ftsBindData->createFTSConfig.tokenizerInfo.jiebaDictDir));
+        FTSUtils::escapeCypherString(ftsBindData->createFTSConfig.tokenizerInfo.jiebaDictDir));
     query += std::format("CALL _CREATE_FTS_INDEX('{}', '{}', {}, {});", tableName, indexName,
         properties, params);
     query += std::format("RETURN 'Index {} has been created.' as result;", ftsBindData->indexName);
