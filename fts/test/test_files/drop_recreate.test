@@ -83,3 +83,31 @@ Index idx has been dropped.
 -STATEMENT CALL QUERY_FTS_INDEX('Doc', 'idx', '12345') RETURN node.id;
 ---- 1
 1
+
+# A drop replayed from the WAL removes the macro and stopwords copy too.
+-CASE RecreateAfterDropReplay
+-SKIP_IN_MEM
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE Stop(sw STRING PRIMARY KEY);
+---- ok
+-STATEMENT CREATE NODE TABLE Doc(id INT64 PRIMARY KEY, body STRING);
+---- ok
+-STATEMENT CREATE (:Doc {id: 1, body: 'order 12345'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('Doc', 'idx', ['body'], stopwords := 'Stop');
+---- ok
+-RELOADDB
+-STATEMENT CALL force_checkpoint_on_close=false;
+---- ok
+-STATEMENT CALL auto_checkpoint=false;
+---- ok
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CALL DROP_FTS_INDEX('Doc', 'idx');
+---- ok
+-RELOADDB
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CALL CREATE_FTS_INDEX('Doc', 'idx', ['body'], ignore_pattern := '[!]+', stopwords := 'Stop');
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'idx', '12345') RETURN node.id;
+---- 1
+1
