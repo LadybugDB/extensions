@@ -48,3 +48,37 @@
 -STATEMENT CALL QUERY_FTS_INDEX('emails', 'fileIdx', '102') RETURN node.id;
 ---- 1
 10
+
+# The pattern is matched against the text as written, before it is lowercased, so the case of
+# letters in the pattern must be kept.
+-CASE ignorePatternKeepsCase
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE Doc(id INT64 PRIMARY KEY, body STRING);
+---- ok
+-STATEMENT CREATE (:Doc {id: 1, body: 'Ladybug Graph'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('Doc', 'letters', ['body'], stemmer := 'none', ignore_pattern := '[^A-Za-z]+');
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('Doc', 'words', ['body'], stemmer := 'none', ignore_pattern := '\\W+');
+---- ok
+-STATEMENT CREATE (:Doc {id: 2, body: 'Quiet Morning'});
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'letters', 'ladybug') RETURN node.id;
+---- 1
+1
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'letters', 'adybug') RETURN node.id;
+---- 0
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'letters', 'Morning') RETURN node.id;
+---- 1
+2
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'words', 'graph') RETURN node.id;
+---- 1
+1
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'words', 'quiet') RETURN node.id;
+---- 1
+2
+-RELOADDB
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'letters', 'graph') RETURN node.id;
+---- 1
+1
