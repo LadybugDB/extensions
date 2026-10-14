@@ -72,12 +72,27 @@ std::string FTSIndexAuxInfo::toCypher(const catalog::IndexCatalogEntry& indexEnt
                 i == propertyIDs.size() - 1 ? "" : ", ");
     }
 
+    auto stopWords = stopWordsIsTable(config, indexToCypherInfo.context) ?
+                         config.stopWordsSource :
+                         getStopWordsName(indexToCypherInfo.exportFileInfo);
     cypher += std::format("CALL CREATE_FTS_INDEX('{}', '{}', [{}], stemmer := '{}', "
-                          "stopWords := '{}');",
-        tableName, indexEntry.getIndexName(), std::move(propertyStr), config.stemmer,
-        stopWordsIsTable(config, indexToCypherInfo.context) ?
-            config.stopWordsSource :
-            getStopWordsName(indexToCypherInfo.exportFileInfo));
+                          "stopWords := '{}'",
+        tableName, indexEntry.getIndexName(), std::move(propertyStr),
+        FTSUtils::escapeCypherString(config.stemmer), FTSUtils::escapeCypherString(stopWords));
+    // Options left at their defaults are omitted, so exports of default indexes do not change.
+    if (config.ignorePattern != IgnorePattern::DEFAULT_VALUE) {
+        cypher += std::format(", ignore_pattern := '{}'",
+            FTSUtils::escapeCypherString(config.ignorePattern));
+    }
+    if (config.tokenizer != Tokenizer::DEFAULT_VALUE) {
+        cypher +=
+            std::format(", tokenizer := '{}'", FTSUtils::escapeCypherString(config.tokenizer));
+    }
+    if (config.jiebaDictDir != TokenizerInfo{}.jiebaDictDir) {
+        cypher += std::format(", jieba_dict_dir := '{}'",
+            FTSUtils::escapeCypherString(config.jiebaDictDir));
+    }
+    cypher += ");";
     return cypher;
 }
 
