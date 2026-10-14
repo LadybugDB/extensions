@@ -151,12 +151,38 @@ Built as part of this work; sync depends on each:
 - ATTACH/DETACH are write-classified so catalog changes commit (they
   mutated state inside read transactions before).
 
+## Background daemon (no polling loop required)
+
+Manual `CALL sqlite_sync(path)` suits schedulers; for keep-it-fresh
+operation the extension runs one daemon thread per file:
+
+```sql
+CALL sqlite_sync_start('/data/graph.db', 1000);  -- tick every 1s
+CALL sqlite_sync_status() RETURN *;              -- running, applied, errors
+CALL sqlite_sync_stop('/data/graph.db');         -- joins the thread
+```
+
+- Each tick is the same `SyncEngine::sync` a manual CALL runs (WAL
+  parse -> resolve -> apply -> cursor), on a persistent per-daemon
+  session. Ticks and manual CALLs mutually exclude per path via a tick
+  mutex, so they never resolve/apply concurrently.
+- Sessions are never shared across threads: the CALL's context mutex is
+  held during execution, so nested use self-deadlocks; the daemon owns
+  its `ClientContext`, and the engine's fan-out statements each run on
+  short-lived inner contexts.
+- Shutdown: the thread exits itself once the database closes (probed via
+  a trivial query that throws post-close) and joins promptly on stop
+  (interruptible sleep). Restart the daemon after a process restart;
+  the cursor resumes it with no redundant work.
+- Errors are recorded per daemon with backoff (up to 30s) instead of
+  spinning; `status` surfaces `last_error` and consecutive-error counts.
+
 ## Limitations (future work)
 
 - Resolver memory is process-lifetime: a restart converges upserts but
   may miss deletes that landed while down (the cursor itself is durable).
   Durable page-set state would close the gap.
-- One sync per file per process; resolver memory is keyed by path.
+- One sync (manual or daemon) per file per process; state is keyed by path.
 - No WITHOUT ROWID or composite-PK materialization (skipped with
   reasons); no CSR bulk-load for `csr_rel_*` yet.
 - No background tailer thread yet; sync is per-CALL (same code path will

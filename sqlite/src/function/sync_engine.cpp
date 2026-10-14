@@ -143,6 +143,27 @@ cdc::OpResolver& resolverFor(const std::string& key, bool reset) {
     return resolvers[key];
 }
 
+// Per-path tick mutex: daemon ticks and manual CALLs mutually exclude so
+// two ticks never resolve/apply the same path concurrently. Entries are
+// never erased (bounded by distinct synced paths).
+std::mutex tickMapMtx;
+std::unordered_map<std::string, std::shared_ptr<std::mutex>> tickMutexes;
+
+std::unique_lock<std::mutex> lockTick(const std::string& key) {
+    std::shared_ptr<std::mutex> entry;
+    {
+        std::lock_guard<std::mutex> lock(tickMapMtx);
+        auto it = tickMutexes.find(key);
+        if (it == tickMutexes.end()) {
+            entry = std::make_shared<std::mutex>();
+            tickMutexes[key] = entry;
+        } else {
+            entry = it->second;
+        }
+    }
+    return std::unique_lock<std::mutex>(*entry);
+}
+
 } // namespace
 
 SyncResult SyncEngine::registerNode(main::ClientContext* context, const std::string& dbPath,
@@ -276,6 +297,10 @@ SyncResult SyncEngine::sync(main::ClientContext* context, const std::string& dbP
     SyncResult out;
     try {
         const std::string normPath = normalizeSyncPath(dbPath);
+        // Mutually exclude daemon ticks and manual CALLs on this path.
+        // Held to end of scope by RAII.
+        auto tickGuard = lockTick(normPath);
+        (void)tickGuard;
         guardNotAttached(context, normPath);
         auto connector = openSyncFile(normPath);
         main::ClientContext inner(context->getDatabase());
