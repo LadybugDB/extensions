@@ -116,38 +116,45 @@ struct QFTSTopKSharedState : public QFTSSharedState {
     }
 };
 
+// A dictionary term the query matched. A wildcard can match many dictionary terms, and one
+// dictionary term can match several query terms ("foo" matches both "foo" and "fo*").
+struct MatchedTerm {
+    uint64_t df = 0;
+    std::vector<uint32_t> queryTermIdxs;
+};
+using matched_terms_t = std::unordered_map<offset_t, MatchedTerm>;
+
 struct ScoreData {
-    uint64_t df;
+    const MatchedTerm* term;
     uint64_t tf;
 
-    ScoreData(uint64_t df, uint64_t tf) : df{df}, tf{tf} {}
+    ScoreData(const MatchedTerm* term, uint64_t tf) : term{term}, tf{tf} {}
 };
 
 struct ScoreInfo {
     std::vector<ScoreData> scoreData;
 
-    void addEdge(uint64_t df, uint64_t tf) { scoreData.emplace_back(df, tf); }
+    void addEdge(const MatchedTerm* term, uint64_t tf) { scoreData.emplace_back(term, tf); }
 };
 
 struct QFTSEdgeCompute final : EdgeCompute {
     node_id_map_t<ScoreInfo>& scores;
-    const std::unordered_map<offset_t, uint64_t>& dfs;
+    const matched_terms_t& terms;
     // The scores map is shared by reference between copies of this edge compute (one per
     // worker thread in a parallel frontier task), so all mutations must be serialized.
     std::shared_ptr<std::mutex> scoresMutex;
 
-    QFTSEdgeCompute(node_id_map_t<ScoreInfo>& scores,
-        const std::unordered_map<offset_t, uint64_t>& dfs)
-        : scores{scores}, dfs{dfs}, scoresMutex{std::make_shared<std::mutex>()} {}
+    QFTSEdgeCompute(node_id_map_t<ScoreInfo>& scores, const matched_terms_t& terms)
+        : scores{scores}, terms{terms}, scoresMutex{std::make_shared<std::mutex>()} {}
 
-    QFTSEdgeCompute(node_id_map_t<ScoreInfo>& scores,
-        const std::unordered_map<offset_t, uint64_t>& dfs, std::shared_ptr<std::mutex> scoresMutex)
-        : scores{scores}, dfs{dfs}, scoresMutex{std::move(scoresMutex)} {}
+    QFTSEdgeCompute(node_id_map_t<ScoreInfo>& scores, const matched_terms_t& terms,
+        std::shared_ptr<std::mutex> scoresMutex)
+        : scores{scores}, terms{terms}, scoresMutex{std::move(scoresMutex)} {}
 
     std::vector<nodeID_t> edgeCompute(nodeID_t boundNodeID, graph::NbrScanState::Chunk& resultChunk,
         bool) override {
-        DASSERT(dfs.contains(boundNodeID.offset));
-        auto df = dfs.at(boundNodeID.offset);
+        DASSERT(terms.contains(boundNodeID.offset));
+        const auto& term = terms.at(boundNodeID.offset);
         std::vector<nodeID_t> activeNodes;
         resultChunk.forEach([&](auto neighbors, auto propertyVectors, auto i) {
             auto docNodeID = neighbors[i];
@@ -156,43 +163,43 @@ struct QFTSEdgeCompute final : EdgeCompute {
                 scores.emplace(docNodeID, ScoreInfo{});
             }
             auto tf = propertyVectors[0]->template getValue<uint64_t>(i);
-            scores.at(docNodeID).addEdge(df, tf);
+            scores.at(docNodeID).addEdge(&term, tf);
             activeNodes.push_back(docNodeID);
         });
         return activeNodes;
     }
 
     std::unique_ptr<EdgeCompute> copy() override {
-        return std::make_unique<QFTSEdgeCompute>(scores, dfs, scoresMutex);
+        return std::make_unique<QFTSEdgeCompute>(scores, terms, scoresMutex);
     }
 };
 
 class QFTSOutputWriter {
 public:
     QFTSOutputWriter(const node_id_map_t<ScoreInfo>& scores, MemoryManager* mm,
-        const QueryFTSBindData& bindData, uint64_t numUniqueTerms, QFTSSharedState& sharedState);
+        const QueryFTSBindData& bindData, uint64_t numQueryTerms, QFTSSharedState& sharedState);
 
     void write(processor::FactorizedTable& scoreFT, nodeID_t docNodeID, uint64_t len,
         int64_t docsID);
 
     std::unique_ptr<QFTSOutputWriter> copy() {
-        return std::make_unique<QFTSOutputWriter>(scores, mm, bindData, numUniqueTerms,
-            sharedState);
+        return std::make_unique<QFTSOutputWriter>(scores, mm, bindData, numQueryTerms, sharedState);
     }
 
 private:
     const node_id_map_t<ScoreInfo>& scores;
     MemoryManager* mm;
     const QueryFTSBindData& bindData;
-    uint64_t numUniqueTerms;
+    uint64_t numQueryTerms;
     QFTSSharedState& sharedState;
     ScoreFTInsertState scoreFtInsertState;
+    std::vector<bool> coveredQueryTerms;
 };
 
 QFTSOutputWriter::QFTSOutputWriter(const node_id_map_t<ScoreInfo>& scores, MemoryManager* mm,
-    const QueryFTSBindData& bindData, uint64_t numUniqueTerms, QFTSSharedState& sharedState)
-    : scores{scores}, mm{mm}, bindData{bindData}, numUniqueTerms{numUniqueTerms},
-      sharedState{sharedState}, scoreFtInsertState{} {}
+    const QueryFTSBindData& bindData, uint64_t numQueryTerms, QFTSSharedState& sharedState)
+    : scores{scores}, mm{mm}, bindData{bindData}, numQueryTerms{numQueryTerms},
+      sharedState{sharedState}, scoreFtInsertState{}, coveredQueryTerms(numQueryTerms) {}
 
 void QFTSOutputWriter::write(processor::FactorizedTable& scoreFT, nodeID_t docNodeID, uint64_t len,
     int64_t docsID) {
@@ -203,19 +210,26 @@ void QFTSOutputWriter::write(processor::FactorizedTable& scoreFT, nodeID_t docNo
     if (!scores.contains(docNodeID)) {
         return;
     }
-    auto scoreInfo = scores.at(docNodeID);
+    const auto& scoreInfo = scores.at(docNodeID);
     double score = 0;
-    // If the query is conjunctive, the numbers of distinct terms in the doc and the number of
-    // distinct terms in the query must be equal to each other.
-    if (bindData.optionalParams->constCast<QueryFTSOptionalParams>().conjunctive.getParamVal() &&
-        scoreInfo.scoreData.size() != numUniqueTerms) {
-        return;
+    // A conjunctive query needs every query term matched by one of the doc's terms.
+    if (bindData.optionalParams->constCast<QueryFTSOptionalParams>().conjunctive.getParamVal()) {
+        std::fill(coveredQueryTerms.begin(), coveredQueryTerms.end(), false);
+        for (auto& scoreData : scoreInfo.scoreData) {
+            for (auto idx : scoreData.term->queryTermIdxs) {
+                coveredQueryTerms[idx] = true;
+            }
+        }
+        if (std::find(coveredQueryTerms.begin(), coveredQueryTerms.end(), false) !=
+            coveredQueryTerms.end()) {
+            return;
+        }
     }
     auto auxInfo = bindData.auxInfo;
     for (auto& scoreData : scoreInfo.scoreData) {
         auto numDocs = bindData.numDocs;
         auto avgDocLen = bindData.avgDocLen;
-        auto df = scoreData.df;
+        auto df = scoreData.term->df;
         auto tf = scoreData.tf;
         score += log10((numDocs - df + 0.5) / (df + 0.5) + 1) *
                  ((tf * (k + 1) / (tf + k * (1 - b + b * (len / avgDocLen)))));
@@ -255,43 +269,39 @@ private:
 using VCQueryTerm = std::variant<std::string, std::unique_ptr<RE2>>;
 class MatchTermsVertexCompute final : public VertexCompute {
 public:
-    explicit MatchTermsVertexCompute(std::unordered_map<offset_t, uint64_t>& resDfs,
+    explicit MatchTermsVertexCompute(matched_terms_t& resTerms,
         std::vector<VCQueryTerm>& queryTerms,
-        std::shared_ptr<std::mutex> resDfsMutex = std::make_shared<std::mutex>())
-        : resDfs{resDfs}, queryTerms{queryTerms}, resDfsMutex{std::move(resDfsMutex)} {}
+        std::shared_ptr<std::mutex> resTermsMutex = std::make_shared<std::mutex>())
+        : resTerms{resTerms}, queryTerms{queryTerms}, resTermsMutex{std::move(resTermsMutex)} {}
     void vertexCompute(const graph::VertexScanState::Chunk& chunk) override {
         auto terms = chunk.getProperties<string_t>(0);
         auto dfs = chunk.getProperties<uint64_t>(1);
         auto nodeIds = chunk.getNodeIDs();
-        for (auto& queryTerm : queryTerms) {
+        for (auto idx = 0u; idx < queryTerms.size(); idx++) {
+            auto& queryTerm = queryTerms[idx];
             // queryTerm.index() is 0 for string, 1 for unique_ptr<RE2>
-            if (queryTerm.index() == 0) {
-                std::string& queryString = std::get<0>(queryTerm);
-                for (auto i = 0u; i < chunk.size(); ++i) {
-                    if (queryString == terms[i].getAsString()) {
-                        std::lock_guard guard{*resDfsMutex};
-                        resDfs[nodeIds[i].offset] = dfs[i];
-                    }
-                }
-            } else {
-                RE2& regex = *std::get<1>(queryTerm);
-                for (auto i = 0u; i < chunk.size(); ++i) {
-                    if (RE2::FullMatch(terms[i].getAsString(), regex)) {
-                        std::lock_guard guard{*resDfsMutex};
-                        resDfs[nodeIds[i].offset] = dfs[i];
-                    }
+            for (auto i = 0u; i < chunk.size(); ++i) {
+                const auto matches =
+                    queryTerm.index() == 0 ?
+                        std::get<0>(queryTerm) == terms[i].getAsString() :
+                        RE2::FullMatch(terms[i].getAsString(), *std::get<1>(queryTerm));
+                if (matches) {
+                    std::lock_guard guard{*resTermsMutex};
+                    auto& matchedTerm = resTerms[nodeIds[i].offset];
+                    matchedTerm.df = dfs[i];
+                    matchedTerm.queryTermIdxs.push_back(idx);
                 }
             }
         }
     }
     std::unique_ptr<VertexCompute> copy() override {
-        return std::make_unique<MatchTermsVertexCompute>(resDfs, queryTerms, resDfsMutex);
+        return std::make_unique<MatchTermsVertexCompute>(resTerms, queryTerms, resTermsMutex);
     }
 
 private:
-    std::unordered_map<offset_t, uint64_t>& resDfs;
+    matched_terms_t& resTerms;
     std::vector<VCQueryTerm>& queryTerms;
-    std::shared_ptr<std::mutex> resDfsMutex;
+    std::shared_ptr<std::mutex> resTermsMutex;
 };
 
 static constexpr char SCORE_PROP_NAME[] = "score";
@@ -300,7 +310,7 @@ static constexpr char TERM_FREQUENCY_PROP_NAME[] = "tf";
 static constexpr char DOC_LEN_PROP_NAME[] = "len";
 static constexpr char DOC_ID_PROP_NAME[] = "docID";
 
-static std::unordered_map<offset_t, uint64_t> getDFs(main::ClientContext& context,
+static matched_terms_t getMatchedTerms(main::ClientContext& context,
     processor::ExecutionContext* executionContext, graph::Graph* graph,
     catalog::TableCatalogEntry* termsEntry, std::vector<std::string>& queryTerms) {
     auto storageManager = StorageManager::Get(context);
@@ -321,7 +331,7 @@ static std::unordered_map<offset_t, uint64_t> getDFs(main::ClientContext& contex
         NodeTableScanState(nodeIDVector, std::vector{dfVector}, dataChunk.state);
     nodeTableScanState.setToTable(transaction::Transaction::Get(context), &termsNodeTable,
         {dfColumnID}, {});
-    std::unordered_map<offset_t, uint64_t> dfs;
+    matched_terms_t matchedTerms;
     std::vector<VCQueryTerm> vcQueryTerms;
     vcQueryTerms.reserve(queryTerms.size());
     bool hasWildcardQueryTerm = false;
@@ -338,12 +348,12 @@ static std::unordered_map<offset_t, uint64_t> getDFs(main::ClientContext& contex
         }
     }
     if (hasWildcardQueryTerm) {
-        auto matchVc = MatchTermsVertexCompute{dfs, vcQueryTerms};
+        auto matchVc = MatchTermsVertexCompute{matchedTerms, vcQueryTerms};
         GDSUtils::runVertexCompute(executionContext, GDSDensityState::DENSE, graph, matchVc,
             termsEntry, std::vector<std::string>{"term", DOC_FREQUENCY_PROP_NAME});
     } else {
-        for (auto& queryTerm : queryTerms) {
-            termsVector.setValue(0, queryTerm);
+        for (auto idx = 0u; idx < queryTerms.size(); idx++) {
+            termsVector.setValue(0, queryTerms[idx]);
             offset_t offset = 0;
             if (!termsNodeTable.lookupPK(tx, &termsVector, 0 /* vectorPos */, offset)) {
                 continue;
@@ -352,15 +362,18 @@ static std::unordered_map<offset_t, uint64_t> getDFs(main::ClientContext& contex
             nodeIDVector->setValue(0, nodeID);
             termsNodeTable.initScanState(tx, nodeTableScanState, tableID, offset);
             [[maybe_unused]] auto res = termsNodeTable.lookup(tx, nodeTableScanState);
-            dfs.emplace(offset, dfVector->getValue<uint64_t>(0));
+            auto& matchedTerm = matchedTerms[offset];
+            matchedTerm.df = dfVector->getValue<uint64_t>(0);
+            matchedTerm.queryTermIdxs.push_back(idx);
         }
     }
-    return dfs;
+    return matchedTerms;
 }
 
-static uint64_t getNumUniqueTerms(const std::vector<std::string>& terms) {
-    auto uniqueTerms = std::unordered_set<std::string>{terms.begin(), terms.end()};
-    return uniqueTerms.size();
+static std::vector<std::string> getUniqueTerms(std::vector<std::string> terms) {
+    std::unordered_set<std::string> seen;
+    std::erase_if(terms, [&](const std::string& term) { return !seen.insert(term).second; });
+    return terms;
 }
 
 // A size is considered as sparse if it is smaller than 0.1% of table size of less than 1000.
@@ -375,9 +388,9 @@ static uint64_t getSparseFrontierSize(uint64_t numRows) {
 }
 
 static void initFrontier(FrontierPair& frontierPair, table_id_t termsTableID,
-    const std::unordered_map<offset_t, uint64_t>& dfs) {
+    const matched_terms_t& matchedTerms) {
     frontierPair.pinNextFrontier(termsTableID);
-    for (auto& [offset, _] : dfs) {
+    for (auto& [offset, _] : matchedTerms) {
         frontierPair.addNodeToNextFrontier(offset);
     }
 }
@@ -422,8 +435,9 @@ static offset_t tableFunc(const TableFuncInput& input, TableFuncOutput&) {
         sharedState->ptrCast<QFTSTopKSharedState>()->setTopK(qFTSOptionalParams.topK.getParamVal());
     }
     auto termsEntry = graphEntry->nodeInfos[0].entry;
-    auto queryTerms = qFTSBindData.getQueryTerms(clientContext);
-    auto dfs = getDFs(clientContext, input.context, graph, termsEntry, queryTerms);
+    auto queryTerms = getUniqueTerms(qFTSBindData.getQueryTerms(clientContext));
+    auto matchedTerms =
+        getMatchedTerms(clientContext, input.context, graph, termsEntry, queryTerms);
     // Do edge compute to extend terms -> docs and save the term frequency and document frequency
     // for each term-doc pair. The reason why we store the term frequency and document frequency
     // is that: we need the `len` property from the docs table which is only available during the
@@ -433,12 +447,12 @@ static offset_t tableFunc(const TableFuncInput& input, TableFuncOutput&) {
     auto frontierPair = std::make_unique<DenseSparseDynamicFrontierPair>(std::move(currentFrontier),
         std::move(nextFrontier));
     auto termsTableID = termsEntry->getTableID();
-    initFrontier(*frontierPair, termsTableID, dfs);
+    initFrontier(*frontierPair, termsTableID, matchedTerms);
     auto storageManager = StorageManager::Get(clientContext);
     frontierPair->setActiveNodesForNextIter();
 
     node_id_map_t<ScoreInfo> scores;
-    auto edgeCompute = std::make_unique<QFTSEdgeCompute>(scores, dfs);
+    auto edgeCompute = std::make_unique<QFTSEdgeCompute>(scores, matchedTerms);
     auto auxiliaryState = std::make_unique<EmptyGDSAuxiliaryState>();
     auto compState =
         GDSComputeState(std::move(frontierPair), std::move(edgeCompute), std::move(auxiliaryState));
@@ -447,9 +461,8 @@ static offset_t tableFunc(const TableFuncInput& input, TableFuncOutput&) {
 
     // Do vertex compute to calculate the score for doc with the length property.
     auto mm = MemoryManager::Get(clientContext);
-    auto numUniqueTerms = getNumUniqueTerms(queryTerms);
-    auto writer =
-        std::make_unique<QFTSOutputWriter>(scores, mm, qFTSBindData, numUniqueTerms, *sharedState);
+    auto writer = std::make_unique<QFTSOutputWriter>(scores, mm, qFTSBindData, queryTerms.size(),
+        *sharedState);
     auto vc = std::make_unique<QFTSVertexCompute>(mm, sharedState, std::move(writer));
     auto vertexPropertiesToScan = std::vector<std::string>{DOC_LEN_PROP_NAME, DOC_ID_PROP_NAME};
     auto docsEntry = graphEntry->nodeInfos[1].entry;

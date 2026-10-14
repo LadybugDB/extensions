@@ -51,3 +51,37 @@ Abcdefg|This book is a test?ax*alphabetical?
 ---- 2
 Echoes of the Past|A deep dive into the history of ancient civilizations.
 Computers|The hiory*?story*a?b?c of computing
+
+# A conjunctive query needs every query term matched; a wildcard term counts once however many
+# dictionary terms it expands to, and one dictionary term can match several query terms.
+-CASE ConjunctiveWildcard
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE Doc(id INT64 PRIMARY KEY, body STRING);
+---- ok
+-STATEMENT CREATE (:Doc {id: 1, body: 'foobar foobaz'}), (:Doc {id: 2, body: 'foobar qux'}), (:Doc {id: 3, body: 'foobar foobaz qux'}), (:Doc {id: 4, body: 'foo'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('Doc', 'idx', ['body'], stemmer := 'none');
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'idx', 'foo* qux', conjunctive := true) RETURN node.id ORDER BY node.id;
+---- 2
+2
+3
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'idx', 'foo fo*', conjunctive := true) RETURN node.id ORDER BY node.id;
+---- 1
+4
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'idx', 'foo* qux') RETURN node.id ORDER BY node.id;
+---- 4
+1
+2
+3
+4
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'idx', 'foobar qux', conjunctive := true) RETURN node.id ORDER BY node.id;
+---- 2
+2
+3
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'idx', 'qux qux', conjunctive := true) RETURN node.id ORDER BY node.id;
+---- 2
+2
+3
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'idx', 'zzz* foo', conjunctive := true) RETURN node.id;
+---- 0
