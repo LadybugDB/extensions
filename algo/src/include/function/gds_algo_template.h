@@ -200,12 +200,16 @@ struct GDSPerNodeScalarAlgo {
         function::function_set result;
         std::vector<common::LogicalTypeID> inputTypes{common::LogicalTypeID::STRING};
         std::vector<std::string> paramNames{"graph_name"};
+        std::vector<common::LogicalType> paramTypes{common::LogicalType::STRING()};
         for (auto i = 0u; i < DESC::Extra::NUM_ARGS; ++i) {
+            // Extra args are lists of node rowids (see SourceListArg::bind).
             inputTypes.push_back(common::LogicalTypeID::LIST);
             paramNames.emplace_back("sources");
+            paramTypes.push_back(common::LogicalType::LIST(common::LogicalType::INT64()));
         }
         auto func = std::make_unique<function::TableFunction>(std::string{DESC::name}, inputTypes);
         func->parameterNames = std::move(paramNames);
+        func->parameterTypes = std::move(paramTypes);
         func->bindFunc = bindFunc;
         func->tableFunc = tableFunc;
         func->initSharedStateFunc = function::GDSFunction::initSharedState;
