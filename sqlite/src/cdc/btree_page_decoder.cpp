@@ -58,7 +58,7 @@ bool decodeSerialValue(uint64_t serial, const uint8_t*& p, size_t& remaining, ui
         }
         double d;
         static_assert(sizeof(d) == sizeof(bits));
-        __builtin_memcpy(&d, &bits, 8);
+        std::memcpy(&d, &bits, 8);
         out.type = SqliteValue::Type::Real;
         out.realVal = d;
         p += 8;
