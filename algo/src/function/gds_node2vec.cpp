@@ -142,7 +142,8 @@ static std::unique_ptr<TableFuncBindData> bindFunc(main::ClientContext* context,
 function_set GDSNode2VecFunction::getFunctionSet() {
     function_set result;
     auto func = std::make_unique<TableFunction>(GDSNode2VecFunction::name,
-        std::vector<LogicalTypeID>{LogicalTypeID::ANY});
+        std::vector<LogicalTypeID>{LogicalTypeID::STRING});
+    func->parameterNames = {"graph_name"};
     func->bindFunc = bindFunc;
     func->tableFunc = tableFunc;
     func->initSharedStateFunc = GDSFunction::initSharedState;
