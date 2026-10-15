@@ -454,7 +454,8 @@ static void getLogicalPlan(Planner* planner, const BoundReadingClause& readingCl
 
 function_set SpanningForest::getFunctionSet() {
     function_set result;
-    auto func = std::make_unique<TableFunction>(name, std::vector{LogicalTypeID::ANY});
+    auto func = std::make_unique<TableFunction>(name, std::vector{LogicalTypeID::STRING});
+    func->parameterNames = {"graph_name"};
     func->bindFunc = bindFunc;
     func->tableFunc = tableFunc;
     func->initSharedStateFunc = GDSFunction::initSharedState;

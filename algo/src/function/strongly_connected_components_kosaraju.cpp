@@ -264,7 +264,8 @@ static std::unique_ptr<TableFuncBindData> bindFunc(main::ClientContext* context,
 
 function_set SCCKosarajuFunction::getFunctionSet() {
     function_set result;
-    auto func = std::make_unique<TableFunction>(name, std::vector{LogicalTypeID::ANY});
+    auto func = std::make_unique<TableFunction>(name, std::vector{LogicalTypeID::STRING});
+    func->parameterNames = {"graph_name"};
     func->bindFunc = bindFunc;
     func->tableFunc = tableFunc;
     func->initSharedStateFunc = GDSFunction::initSharedState;
