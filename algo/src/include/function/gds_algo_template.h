@@ -200,7 +200,11 @@ struct GDSPerNodeScalarAlgo {
         function::function_set result;
         std::vector<common::LogicalTypeID> inputTypes{common::LogicalTypeID::STRING};
         std::vector<std::string> paramNames{"graph_name"};
-        std::vector<common::LogicalType> paramTypes{common::LogicalType::STRING()};
+        // LogicalType is explicitly-copyable only (private copy ctor): build via moves,
+        // not an initializer list (which would copy).
+        std::vector<common::LogicalType> paramTypes;
+        paramTypes.reserve(1 + DESC::Extra::NUM_ARGS);
+        paramTypes.push_back(common::LogicalType::STRING());
         for (auto i = 0u; i < DESC::Extra::NUM_ARGS; ++i) {
             // Extra args are lists of node rowids (see SourceListArg::bind).
             inputTypes.push_back(common::LogicalTypeID::LIST);
