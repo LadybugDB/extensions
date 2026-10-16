@@ -212,6 +212,17 @@ struct GDSPerNodeScalarAlgo {
             paramTypes.push_back(common::LogicalType::LIST(common::LogicalType::INT64()));
         }
         auto func = std::make_unique<function::TableFunction>(std::string{DESC::name}, inputTypes);
+        if constexpr (DESC::Extra::NUM_ARGS > 0) {
+            // Extra args are nested types (SOURCE_LIST's LIST(INT64)). The binder builds
+            // input LogicalTypes from the declared LogicalTypeIDs, and a bare LIST ID has
+            // no child info — infer the nested type from the CALL-site argument instead.
+            func->inferInputTypes = [](const binder::expression_vector& params) {
+                std::vector<common::LogicalType> types;
+                types.push_back(common::LogicalType::STRING());
+                types.push_back(params[1]->getDataType().copy());
+                return types;
+            };
+        }
         func->parameterNames = std::move(paramNames);
         func->parameterTypes = std::move(paramTypes);
         func->bindFunc = bindFunc;
