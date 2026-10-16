@@ -263,9 +263,9 @@ public:
             auto* dataVector = common::ListVector::getDataVector(embVector.get());
             for (auto k = 0u; k < emb.size(); ++k) {
                 if constexpr (std::is_same_v<FloatT, float>) {
-                    dataVector->setValue<float>(entry.offset + k, emb[k]);
+                    dataVector->template setValue<float>(entry.offset + k, emb[k]);
                 } else {
-                    dataVector->setValue<double>(entry.offset + k, emb[k]);
+                    dataVector->template setValue<double>(entry.offset + k, emb[k]);
                 }
             }
             localFT->append(vectors);
