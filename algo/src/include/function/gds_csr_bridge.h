@@ -29,6 +29,17 @@ struct BridgeCSR {
                                                  // on the zero-copy path)
 };
 
+// Directed adjacency as separate out/in CSR pair (no symmetrization: parallel edges coalesce
+// per direction, self-loops are kept). Both scans come from storage, so directed mode always
+// takes the scan path even when a materialized (fwd-only) CSR is pinned on the graph entry —
+// transposing it would risk serving a different snapshot for in-edges than out-edges.
+struct DirectedBridgeCSR {
+    std::shared_ptr<arrow::UInt64Array> outIndptr;  // length numNodes + 1
+    std::shared_ptr<arrow::UInt64Array> outIndices; // per-row sorted, deduplicated
+    std::shared_ptr<arrow::UInt64Array> inIndptr;
+    std::shared_ptr<arrow::UInt64Array> inIndices;
+};
+
 // Build the undirected CSR for a single-node-table projected graph.
 //
 // Fast path (zero-copy): PROJECT_GRAPH pins each rel table's arrow CSR on the graph entry at
@@ -39,6 +50,11 @@ struct BridgeCSR {
 BridgeCSR buildUndirectedCSR(main::ClientContext* context, const std::string& graphName,
     graph::Graph* graph, common::table_id_t tableID, common::offset_t numNodes,
     storage::MemoryManager* mm);
+
+// Build the directed CSR pair for a single-node-table projected graph by scanning storage
+// (fwd for out-edges, bwd for in-edges). Always scans; see DirectedBridgeCSR.
+DirectedBridgeCSR buildDirectedCSR(graph::Graph* graph, common::table_id_t tableID,
+    common::offset_t numNodes);
 
 } // namespace algo_extension
 } // namespace lbug

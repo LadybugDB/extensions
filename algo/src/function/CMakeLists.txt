@@ -11,10 +11,10 @@ set(_algo_function_sources
         spanning_forest.cpp
         )
 if (ICEBUG_ENABLED)
-    # The gds_*.cpp sources include NetworKit + Arrow headers. Linking the imported targets to
-    # the object library propagates their compile flags + include dirs to it.
-    list(APPEND _algo_function_sources gds_csr_bridge.cpp gds_page_rank.cpp gds_node2vec.cpp
-            gds_louvain.cpp gds_leiden.cpp gds_ppr.cpp)
+    # gds_registry.cpp is the only translation unit including NetworKit + Arrow headers:
+    # one row per algorithm in the catalog table, no per-algorithm files. Linking the
+    # imported targets to the object library propagates their compile flags + include dirs.
+    list(APPEND _algo_function_sources gds_csr_bridge.cpp gds_registry.cpp)
 endif ()
 
 add_library(lbug_algo_function
@@ -23,8 +23,8 @@ add_library(lbug_algo_function
 
 if (ICEBUG_ENABLED)
     target_link_libraries(lbug_algo_function PRIVATE Arrow::arrow_shared OpenMP::OpenMP_CXX)
-    # ICEBUG_ENABLED is read by gds_page_rank.cpp via #ifdef to skip its body when icebug is off
-    # (defensive: source isn't compiled in that case, but matches the header-side guard).
+    # ICEBUG_ENABLED guards the registry TU's NetworKit/Arrow includes (defensive: the TU
+    # isn't compiled when icebug is off, but matches the header-side guard).
     target_compile_definitions(lbug_algo_function PRIVATE ICEBUG_ENABLED)
 else ()
     # Other sources still use <omp.h> for parallel regions, so keep the OpenMP link — just drop Arrow.

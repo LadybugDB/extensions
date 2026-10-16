@@ -1,0 +1,167 @@
+-DATASET CSV empty
+
+--
+
+-CASE GDSRegistryCentralityStar
+-LOAD_DYNAMIC_EXTENSION algo
+-STATEMENT CREATE NODE TABLE N(id INT64 PRIMARY KEY)
+---- ok
+-STATEMENT CREATE REL TABLE E(FROM N TO N)
+---- ok
+-STATEMENT CREATE (a:N{id:0}), (b:N{id:1}), (c:N{id:2}), (d:N{id:3})
+---- ok
+-STATEMENT MATCH (x:N{id:1}), (y:N{id:0}) CREATE (x)-[:E]->(y)
+---- ok
+-STATEMENT MATCH (x:N{id:2}), (y:N{id:0}) CREATE (x)-[:E]->(y)
+---- ok
+-STATEMENT MATCH (x:N{id:3}), (y:N{id:0}) CREATE (x)-[:E]->(y)
+---- ok
+-STATEMENT CALL PROJECT_GRAPH('G', ['N'], ['E'])
+---- ok
+-LOG Every registry centrality row on a 3-leaf star: the hub dominates, the leaves tie.
+-STATEMENT CALL GDS_BETWEENNESS('G') RETURN node.id, score ORDER BY node.id
+---- 4
+0|6.000000
+1|0.000000
+2|0.000000
+3|0.000000
+-STATEMENT CALL GDS_DEGREE('G') RETURN node.id, score ORDER BY node.id
+---- 4
+0|3.000000
+1|1.000000
+2|1.000000
+3|1.000000
+-STATEMENT CALL GDS_DEGREE('G', normalized := true) RETURN node.id, score ORDER BY node.id
+---- 4
+0|0.750000
+1|0.250000
+2|0.250000
+3|0.250000
+-STATEMENT CALL GDS_CLOSENESS('G') RETURN node.id, score ORDER BY node.id
+---- 4
+0|1.000000
+1|0.600000
+2|0.600000
+3|0.600000
+-STATEMENT CALL GDS_HARMONIC('G') RETURN node.id, score ORDER BY node.id
+---- 4
+0|1.000000
+1|0.666667
+2|0.666667
+3|0.666667
+-STATEMENT CALL GDS_KATZ('G') RETURN node.id, score ORDER BY node.id
+---- 4
+0|0.752296
+1|0.380373
+2|0.380373
+3|0.380373
+-STATEMENT CALL GDS_EIGENVECTOR('G') RETURN node.id, score ORDER BY node.id
+---- 4
+0|0.866025
+1|0.288675
+2|0.288675
+3|0.288675
+-STATEMENT CALL GDS_CORE_DECOMPOSITION('G') RETURN node.id, core_number ORDER BY node.id
+---- 4
+0|1.000000
+1|1.000000
+2|1.000000
+3|1.000000
+-STATEMENT CALL GDS_CONNECTED_COMPONENTS('G') RETURN node.id, component_id ORDER BY node.id
+---- 4
+0|0
+1|0
+2|0
+3|0
+-LOG Directed BFS from leaf 1: only the hub is reachable downstream; the far leaves are -1.
+-STATEMENT CALL GDS_BFS_DISTANCE('G', 1) RETURN node.id, distance ORDER BY node.id
+---- 4
+0|1.000000
+1|0.000000
+2|-1.000000
+3|-1.000000
+-LOG Unknown optional params are rejected with the same message as the retired per-file code.
+-STATEMENT CALL GDS_BETWEENNESS('G', bogus := 1) RETURN node.id, score
+---- error
+Binder exception: Unknown optional parameter: bogus
+-LOG Single-source extras validate like the source list did: range then sign.
+-STATEMENT CALL GDS_BFS_DISTANCE('G', 99) RETURN node.id, distance
+---- error
+Binder exception: GDS_BFS_DISTANCE source node offset 99 is out of range: the projected graph has 4 nodes.
+-STATEMENT CALL GDS_BFS_DISTANCE('G', -1) RETURN node.id, distance
+---- error
+Binder exception: GDS_BFS_DISTANCE source node offset must be non-negative.
+
+-CASE GDSRegistryTwoCliques
+-LOAD_DYNAMIC_EXTENSION algo
+-STATEMENT CREATE NODE TABLE M(id INT64 PRIMARY KEY)
+---- ok
+-STATEMENT CREATE REL TABLE F(FROM M TO M)
+---- ok
+-STATEMENT CREATE (:M{id:0}),(:M{id:1}),(:M{id:2}),(:M{id:3}),(:M{id:4}),(:M{id:5}),(:M{id:6}),(:M{id:7})
+---- ok
+-STATEMENT MATCH (x:M{id:0}),(y:M{id:1}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT MATCH (x:M{id:0}),(y:M{id:2}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT MATCH (x:M{id:1}),(y:M{id:2}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT MATCH (x:M{id:0}),(y:M{id:3}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT MATCH (x:M{id:1}),(y:M{id:3}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT MATCH (x:M{id:2}),(y:M{id:3}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT MATCH (x:M{id:4}),(y:M{id:5}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT MATCH (x:M{id:4}),(y:M{id:6}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT MATCH (x:M{id:5}),(y:M{id:6}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT MATCH (x:M{id:4}),(y:M{id:7}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT MATCH (x:M{id:5}),(y:M{id:7}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT MATCH (x:M{id:6}),(y:M{id:7}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT MATCH (x:M{id:3}),(y:M{id:4}) CREATE (x)-[:F]->(y)
+---- ok
+-STATEMENT CALL PROJECT_GRAPH('GT', ['M'], ['F'])
+---- ok
+-LOG Partition rows assert structure, not exact ids: two communities, one per clique.
+-STATEMENT CALL GDS_PLP('GT') RETURN COUNT(DISTINCT community_id)
+---- 1
+2
+-STATEMENT CALL GDS_PLP('GT') WITH node, community_id WHERE node.id IN [0, 1, 2, 3] RETURN COUNT(DISTINCT community_id)
+---- 1
+1
+-STATEMENT CALL GDS_PLP('GT') WITH node, community_id WHERE node.id IN [4, 5, 6, 7] RETURN COUNT(DISTINCT community_id)
+---- 1
+1
+-STATEMENT CALL GDS_CUT_CLUSTERING('GT', alpha := 0.5) RETURN COUNT(DISTINCT community_id)
+---- 1
+2
+-STATEMENT CALL GDS_CUT_CLUSTERING('GT', alpha := 0.5) WITH node, community_id WHERE node.id IN [0, 1, 2, 3] RETURN COUNT(DISTINCT community_id)
+---- 1
+1
+-STATEMENT CALL GDS_CUT_CLUSTERING('GT', alpha := 0.5) WITH node, community_id WHERE node.id IN [4, 5, 6, 7] RETURN COUNT(DISTINCT community_id)
+---- 1
+1
+-LOG CutClustering's alpha has no default: the row declares it REQUIRED.
+-STATEMENT CALL GDS_CUT_CLUSTERING('GT') RETURN node.id, community_id
+---- error
+Binder exception: Missing required parameter: alpha.
+-LOG One connected component across the bridge; directed BFS reaches the far clique in 2-3 hops.
+-STATEMENT CALL GDS_CONNECTED_COMPONENTS('GT') RETURN COUNT(DISTINCT component_id)
+---- 1
+1
+-STATEMENT CALL GDS_BFS_DISTANCE('GT', 0) RETURN node.id, distance ORDER BY node.id
+---- 8
+0|0.000000
+1|1.000000
+2|1.000000
+3|1.000000
+4|2.000000
+5|3.000000
+6|3.000000
+7|3.000000
