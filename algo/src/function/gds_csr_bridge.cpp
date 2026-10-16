@@ -157,5 +157,58 @@ BridgeCSR buildUndirectedCSR(main::ClientContext* context, const std::string& gr
     return {std::move(indptr), std::move(indices)};
 }
 
+// Scan one direction into CSR arrays: fwdneighbors -> out pair, bwd neighbors -> in pair.
+// Per-row sort + unique coalesces parallel edges (the SIMPLE directed projection); self-loops
+// are kept — they are real directed edges, unlike in the symmetrized undirected scan.
+static std::pair<std::shared_ptr<arrow::UInt64Array>, std::shared_ptr<arrow::UInt64Array>>
+scanDirectedCSR(table_id_t tableID, offset_t numNodes, Graph* graph, bool fwd) {
+    const auto nbrTables = graph->getRelInfos(tableID);
+    const auto nbrInfo = nbrTables[0];
+    const auto scanState = graph->prepareRelScan(*nbrInfo.relGroupEntry, nbrInfo.relTableID,
+        nbrInfo.dstTableID, {}, false /*randomLookup*/);
+    std::vector<std::vector<uint64_t>> adj(numNodes);
+    std::vector<offset_t> nbrs;
+    for (offset_t nodeId = 0; nodeId < numNodes; ++nodeId) {
+        nbrs.clear();
+        const nodeID_t nid = {nodeId, tableID};
+        if (fwd) {
+            for (auto chunk : graph->scanFwd(nid, *scanState)) {
+                chunk.forEach(
+                    [&](auto neighbors, auto, auto i) { nbrs.push_back(neighbors[i].offset); });
+            }
+        } else {
+            for (auto chunk : graph->scanBwd(nid, *scanState)) {
+                chunk.forEach(
+                    [&](auto neighbors, auto, auto i) { nbrs.push_back(neighbors[i].offset); });
+            }
+        }
+        std::sort(nbrs.begin(), nbrs.end());
+        nbrs.erase(std::unique(nbrs.begin(), nbrs.end()), nbrs.end());
+        adj[nodeId].reserve(nbrs.size());
+        for (const auto nbr : nbrs) {
+            adj[nodeId].push_back(static_cast<uint64_t>(nbr));
+        }
+    }
+    std::vector<uint64_t> flat;
+    flat.reserve(1024);
+    std::vector<uint64_t> indptr(numNodes + 1, 0);
+    for (offset_t i = 0; i < numNodes; ++i) {
+        flat.insert(flat.end(), adj[i].begin(), adj[i].end());
+        indptr[i + 1] = flat.size();
+    }
+    auto indptrArr =
+        toU64([&](offset_t i) { return static_cast<offset_t>(indptr[i]); }, numNodes + 1);
+    auto indicesArr = toU64([&](offset_t i) { return static_cast<offset_t>(flat[i]); },
+        static_cast<offset_t>(flat.size()));
+    return {std::move(indptrArr), std::move(indicesArr)};
+}
+
+DirectedBridgeCSR buildDirectedCSR(graph::Graph* graph, common::table_id_t tableID,
+    common::offset_t numNodes) {
+    auto [outIndptr, outIndices] = scanDirectedCSR(tableID, numNodes, graph, /*fwd=*/true);
+    auto [inIndptr, inIndices] = scanDirectedCSR(tableID, numNodes, graph, /*fwd=*/false);
+    return {std::move(outIndptr), std::move(outIndices), std::move(inIndptr), std::move(inIndices)};
+}
+
 } // namespace algo_extension
 } // namespace lbug

@@ -4,6 +4,9 @@
 
 #include "function/algo_function.h"
 #include "main/client_context.h"
+#if defined(ICEBUG_ENABLED)
+#include "function/gds_registry.h"
+#endif
 
 namespace lbug {
 namespace algo_extension {
@@ -37,11 +40,9 @@ void AlgoExtension::load(main::ClientContext* context) {
     ExtensionUtils::addTableFunc<PageRankFunction>(db);
     ExtensionUtils::addTableFuncAlias<PageRankAliasFunction>(db);
 #if defined(ICEBUG_ENABLED)
-    ExtensionUtils::addTableFunc<GDSPageRankFunction>(db);
-    ExtensionUtils::addTableFunc<GDSNode2VecFunction>(db);
-    ExtensionUtils::addTableFunc<GDSLouvainFunction>(db);
-    ExtensionUtils::addTableFunc<GDSLeidenFunction>(db);
-    ExtensionUtils::addTableFunc<GDSPprFunction>(db);
+    // Every icebug-backed GDS_* function comes from the registry table (gds_registry.cpp):
+    // adding an algorithm is one row there, nothing to wire up here.
+    registerGDSFunctions(db);
 #endif
     ExtensionUtils::addTableFunc<KCoreDecompositionFunction>(db);
     ExtensionUtils::addTableFuncAlias<KCoreDecompositionAliasFunction>(db);
