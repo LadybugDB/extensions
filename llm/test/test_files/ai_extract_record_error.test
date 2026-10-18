@@ -1,0 +1,45 @@
+-DATASET CSV empty
+
+--
+
+-CASE AIExtractRecordSchemaErrors
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/llm/build/libllm.lbug_extension"
+---- ok
+
+-STATEMENT RETURN AI_EXTRACT_RECORD('text', 'not json')
+---- error
+Binder exception: AI_EXTRACT_RECORD: json_schema is not valid JSON.
+
+-STATEMENT RETURN AI_EXTRACT_RECORD('text', '{"type":"array"}')
+---- error
+Binder exception: AI_EXTRACT_RECORD: json_schema top-level "type" must be "object".
+
+-STATEMENT RETURN AI_EXTRACT_RECORD('text', '{"type":"object"}')
+---- error
+Binder exception: AI_EXTRACT_RECORD: json_schema must have a "properties" object.
+
+-STATEMENT RETURN AI_EXTRACT_RECORD('text', '{"type":"object","properties":{}}')
+---- error
+Binder exception: AI_EXTRACT_RECORD: json_schema "properties" has no fields.
+
+-CASE AIExtractRecordNonNullLiteralSchema
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/llm/build/libllm.lbug_extension"
+---- ok
+
+-STATEMENT CREATE NODE TABLE ExtractedText (id INT64, schema STRING, PRIMARY KEY (id))
+---- ok
+
+-STATEMENT CREATE (:ExtractedText {id: 1, schema: '{"type":"object","properties":{"label":{"type":"string"}}}'})
+---- ok
+
+-STATEMENT MATCH (t:ExtractedText) RETURN AI_EXTRACT_RECORD('text', t.schema)
+---- error
+Binder exception: AI_EXTRACT_RECORD argument 2 must be a STRING literal or parameter.
+
+-CASE AIExtractRecordNullText
+-STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/llm/build/libllm.lbug_extension"
+---- ok
+
+-STATEMENT RETURN AI_EXTRACT_RECORD(NULL, '{"type":"object","properties":{"label":{"type":"string"}}}')
+---- 1
+NULL
