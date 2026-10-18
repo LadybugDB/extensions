@@ -17,5 +17,11 @@ struct AIExtract {
     static function::function_set getFunctionSet();
 };
 
+struct AIExtractRecord {
+    static constexpr const char* name = "AI_EXTRACT_RECORD";
+
+    static function::function_set getFunctionSet();
+};
+
 } // namespace llm_extension
 } // namespace lbug
