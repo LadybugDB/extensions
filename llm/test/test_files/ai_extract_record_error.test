@@ -40,6 +40,6 @@ Binder exception: AI_EXTRACT_RECORD argument 2 must be a STRING literal or param
 -STATEMENT load extension "${LBUG_ROOT_DIRECTORY}/extension/llm/build/libllm.lbug_extension"
 ---- ok
 
--STATEMENT RETURN AI_EXTRACT_RECORD(NULL, '{"type":"object","properties":{"label":{"type":"string"}}}')
+-STATEMENT RETURN AI_EXTRACT_RECORD(NULL, '{"type":"object","properties":{"label":{"type":"string"}}}') IS NULL
 ---- 1
-NULL
+True
