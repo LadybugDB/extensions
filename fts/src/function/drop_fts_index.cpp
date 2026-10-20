@@ -35,8 +35,9 @@ std::string dropFTSIndexQuery(ClientContext& context, const TableFuncBindData& b
     auto ftsBindData = bindData.constPtrCast<FTSBindData>();
     auto catalog = catalog::Catalog::Get(context);
     auto transaction = transaction::Transaction::Get(context);
-    auto query = std::format("CALL _DROP_FTS_INDEX('{}', '{}');", ftsBindData->tableName,
-        ftsBindData->indexName);
+    auto query = std::format("CALL _DROP_FTS_INDEX('{}', '{}');",
+        FTSUtils::escapeCypherString(ftsBindData->tableName),
+        FTSUtils::escapeCypherString(ftsBindData->indexName));
     // Drop the rel table before the node tables it references. IF EXISTS keeps a
     // previously-interrupted DROP retryable: _DROP_FTS_INDEX above removes the catalog
     // index entry first, so a retry can no longer rely on the entry being present.
@@ -58,7 +59,8 @@ std::string dropFTSIndexQuery(ClientContext& context, const TableFuncBindData& b
     }
     query +=
         FTSUtils::dropTokenizeMacroQuery(context, ftsBindData->tableID, ftsBindData->indexName);
-    query += std::format("RETURN 'Index {} has been dropped.' as result;", ftsBindData->indexName);
+    query += std::format("RETURN 'Index {} has been dropped.' as result;",
+        FTSUtils::escapeCypherString(ftsBindData->indexName));
     return query;
 }
 
