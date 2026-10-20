@@ -265,8 +265,8 @@ std::string createFTSIndexQuery(ClientContext& context, const TableFuncBindData&
                             TOKENIZE(lower(regexp_replace(CAST(query as STRING), '{}', ' ', 'g')), '{}', '{}');)",
         FTSUtils::getTokenizeMacroName(tableID, indexName),
         FTSUtils::escapeCypherString(ftsBindData->createFTSConfig.ignorePattern),
-        ftsBindData->createFTSConfig.tokenizerInfo.tokenizer,
-        ftsBindData->createFTSConfig.tokenizerInfo.jiebaDictDir);
+        FTSUtils::escapeCypherString(ftsBindData->createFTSConfig.tokenizerInfo.tokenizer),
+        FTSUtils::escapeCypherString(ftsBindData->createFTSConfig.tokenizerInfo.jiebaDictDir));
 
     // Create the stop words table if not exists, or the user is not using the default english
     // one.
@@ -285,7 +285,7 @@ std::string createFTSIndexQuery(ClientContext& context, const TableFuncBindData&
         auto propertyName = tableEntry->getProperty(property).getName();
         query += std::format("COPY `{}` FROM "
                              "(MATCH (b:`{}`) "
-                             "WITH `{}`(b.{}) AS tk, OFFSET(ID(b)) AS id "
+                             "WITH `{}`(b.`{}`) AS tk, OFFSET(ID(b)) AS id "
                              "UNWIND tk AS t "
                              "WITH t AS t1, id AS id1 "
                              "WHERE t1 is NOT NULL AND SIZE(t1) > 0 AND "
@@ -293,7 +293,7 @@ std::string createFTSIndexQuery(ClientContext& context, const TableFuncBindData&
                              "RETURN STEM(t1, '{}'), id1);",
             appearsInfoTableName, tableName, FTSUtils::getTokenizeMacroName(tableID, indexName),
             propertyName, ftsBindData->createFTSConfig.stopWordsTableInfo.tableName,
-            ftsBindData->createFTSConfig.stemmer);
+            FTSUtils::escapeCypherString(ftsBindData->createFTSConfig.stemmer));
     }
 
     auto docsTableName = FTSUtils::getDocsTableName(tableID, indexName);
@@ -328,26 +328,29 @@ std::string createFTSIndexQuery(ClientContext& context, const TableFuncBindData&
     query += std::format("DROP TABLE `{}`;", appearsInfoTableName);
     std::string properties = "[";
     for (auto i = 0u; i < ftsBindData->propertyIDs.size(); i++) {
-        properties +=
-            std::format("'{}'", tableEntry->getProperty(ftsBindData->propertyIDs[i]).getName());
+        auto propertyName = tableEntry->getProperty(ftsBindData->propertyIDs[i]).getName();
+        properties += std::format("'{}'", FTSUtils::escapeCypherString(propertyName));
         if (i != ftsBindData->propertyIDs.size() - 1) {
             properties += ", ";
         }
     }
     properties += "]";
     std::string params;
-    params += std::format("stemmer := '{}', ", ftsBindData->createFTSConfig.stemmer);
+    params += std::format("stemmer := '{}', ",
+        FTSUtils::escapeCypherString(ftsBindData->createFTSConfig.stemmer));
     params += std::format("stopWords := '{}', ",
         FTSUtils::escapeCypherString(ftsBindData->createFTSConfig.stopWordsTableInfo.stopWords));
     params += std::format("ignore_pattern := '{}', ",
         FTSUtils::escapeCypherString(ftsBindData->createFTSConfig.ignorePattern));
-    params +=
-        std::format("tokenizer := '{}', ", ftsBindData->createFTSConfig.tokenizerInfo.tokenizer);
+    params += std::format("tokenizer := '{}', ",
+        FTSUtils::escapeCypherString(ftsBindData->createFTSConfig.tokenizerInfo.tokenizer));
     params += std::format("jieba_dict_dir := '{}'",
         FTSUtils::escapeCypherString(ftsBindData->createFTSConfig.tokenizerInfo.jiebaDictDir));
-    query += std::format("CALL _CREATE_FTS_INDEX('{}', '{}', {}, {});", tableName, indexName,
+    query += std::format("CALL _CREATE_FTS_INDEX('{}', '{}', {}, {});",
+        FTSUtils::escapeCypherString(tableName), FTSUtils::escapeCypherString(indexName),
         properties, params);
-    query += std::format("RETURN 'Index {} has been created.' as result;", ftsBindData->indexName);
+    query += std::format("RETURN 'Index {} has been created.' as result;",
+        FTSUtils::escapeCypherString(indexName));
     return query;
 }
 

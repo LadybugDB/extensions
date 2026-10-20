@@ -11,7 +11,7 @@
 ---- ok
 -STATEMENT CREATE (:Doc {id: 1, body: 'order 12345'}), (:Doc {id: 2, body: '我来到北京清华大学'});
 ---- ok
--STATEMENT CALL CREATE_FTS_INDEX('Doc', 'digits', ['body'], ignore_pattern := '[!]+', stemmer := 'porter');
+-STATEMENT CALL CREATE_FTS_INDEX('Doc', 'digits', ['body'], ignore_pattern := '[\\s!\']+', stemmer := 'porter');
 ---- ok
 -STATEMENT CALL CREATE_FTS_INDEX('Doc', 'zh', ['body'], tokenizer := 'jieba');
 ---- ok
@@ -32,10 +32,14 @@
 ---- 2
 2
 3
+-STATEMENT CREATE (:Doc {id: 4, body: 'ref 67890'});
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'digits', '67890') RETURN node.id;
+---- 1
+4
 
 # A stopwords file path is quoted correctly, even when it contains a quote.
 -CASE StopWordsPathWithQuote
--SKIP_IN_MEM
 -LOAD_DYNAMIC_EXTENSION fts
 -STATEMENT COPY (RETURN 'order') TO '${LBUG_EXPORT_DB_DIRECTORY}_it\'s_stopwords.csv' (header=false);
 ---- ok

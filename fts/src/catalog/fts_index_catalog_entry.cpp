@@ -67,9 +67,9 @@ std::string FTSIndexAuxInfo::toCypher(const catalog::IndexCatalogEntry& indexEnt
     std::string propertyStr;
     auto propertyIDs = indexEntry.getPropertyIDs();
     for (auto i = 0u; i < propertyIDs.size(); i++) {
-        propertyStr +=
-            std::format("'{}'{}", tableCatalogEntry->getProperty(propertyIDs[i]).getName(),
-                i == propertyIDs.size() - 1 ? "" : ", ");
+        propertyStr += std::format("'{}'{}",
+            FTSUtils::escapeCypherString(tableCatalogEntry->getProperty(propertyIDs[i]).getName()),
+            i == propertyIDs.size() - 1 ? "" : ", ");
     }
 
     auto stopWords = stopWordsIsTable(config, indexToCypherInfo.context) ?
@@ -77,9 +77,13 @@ std::string FTSIndexAuxInfo::toCypher(const catalog::IndexCatalogEntry& indexEnt
                          getStopWordsName(indexToCypherInfo.exportFileInfo);
     cypher += std::format("CALL CREATE_FTS_INDEX('{}', '{}', [{}], stemmer := '{}', "
                           "stopWords := '{}'",
-        tableName, indexEntry.getIndexName(), std::move(propertyStr),
+        FTSUtils::escapeCypherString(tableName),
+        FTSUtils::escapeCypherString(indexEntry.getIndexName()), std::move(propertyStr),
         FTSUtils::escapeCypherString(config.stemmer), FTSUtils::escapeCypherString(stopWords));
-    // Options left at their defaults are omitted, so exports of default indexes do not change.
+    // Options left at their defaults are omitted.
+    // ignorePatternQuery is not written: CREATE_FTS_INDEX sets it to ignore_pattern when one is
+    // given. An explicit default pattern comes back with DEFAULT_VALUE_QUERY, which differs only in
+    // '*' and '?', and query normalization never passes those to the regex.
     if (config.ignorePattern != IgnorePattern::DEFAULT_VALUE) {
         cypher += std::format(", ignore_pattern := '{}'",
             FTSUtils::escapeCypherString(config.ignorePattern));
