@@ -221,7 +221,7 @@ std::string FTSUtils::dropTokenizeMacroQuery(const main::ClientContext& context,
     if (!Catalog::Get(context)->containsMacro(Transaction::Get(context), macroName)) {
         return "";
     }
-    return std::format("DROP MACRO `{}`;", macroName);
+    return std::format("DROP MACRO {};", StringUtils::quoteIdentifier(macroName));
 }
 
 } // namespace fts_extension
