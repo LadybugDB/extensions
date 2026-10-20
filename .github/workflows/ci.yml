@@ -210,6 +210,15 @@ jobs:
           dnf install -y cmake ninja-build python3 python3-pip git wget unzip \
             gcc-toolset-13 openssl3 openssl3-devel pkg-config \
             libpq libpq-devel libomp-devel
+          # Arrow 26 for libarrow.so.2600: the icebug 13.5 prebuilt vendored by
+          # extension/algo needs the 2600 SONAME, which conda-forge (pixi)
+          # does not ship yet. Pin to 26.* so Arrow 27 cannot slip in silently;
+          # the assertion below fails loudly if the repo stops serving 26.
+          # (Arrow RPMs have a GPG key mismatch, so we use --nogpgcheck.)
+          dnf install -y https://apache.jfrog.io/artifactory/arrow/centos/$(cut -d: -f5 /etc/system-release-cpe)/apache-arrow-release-latest.rpm
+          dnf install -y --nogpgcheck --enablerepo=epel 'arrow-devel-26*'
+          test -e /usr/lib64/libarrow.so.2600
+          ldconfig -p | grep -q 'libarrow.so.2600'
 
       - name: Shim libomp.so.5 -> installed libomp (Linux)
         if: runner.os == 'Linux'
@@ -247,9 +256,11 @@ jobs:
 
       # ── Setup pixi + ADBC runtime ───────────────────────────
       # The ADBC extension requires libadbc-driver-manager and libarrow,
-      # which the ladybug repo's pixi.toml pins to conda-forge.  These
-      # are needed both to *build* the ADBC extension and to run its
-      # tests.
+      # which the ladybug repo's pixi.toml pins to conda-forge (still Arrow 25).
+      # On Linux the algo extension additionally needs the system Arrow 26
+      # (libarrow.so.2600, required by the vendored icebug 13.5 prebuilt),
+      # installed above and selected via -DArrow_ROOT=/usr at configure time.
+      # These are needed both to *build* the extensions and to run their tests.
       - name: Setup pixi
         if: runner.os != 'Windows'
         uses: prefix-dev/setup-pixi@v0.9.4
@@ -343,11 +354,21 @@ jobs:
           source /opt/rh/gcc-toolset-13/enable
           export CC=gcc
           export CXX=g++
+          # On Linux, force find_package(Arrow) onto the system Arrow 26
+          # (libarrow.so.2600, required by the vendored icebug 13.5 prebuilt)
+          # instead of the pixi env's Arrow 25, which the root CMakeLists
+          # prepends to CMAKE_PREFIX_PATH. Scoped to Linux: macOS/Windows
+          # have no system Arrow at /usr.
+          ARROW_ROOT_FLAG=""
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            ARROW_ROOT_FLAG="-DArrow_ROOT=/usr"
+          fi
           export EXTRA_CMAKE_FLAGS="\
             -DOPENSSL_ROOT_DIR=/usr/lib64/openssl3 \
             -DOPENSSL_INCLUDE_DIR=/usr/include/openssl3 \
             -DOPENSSL_CRYPTO_LIBRARY=/usr/lib64/openssl3/libcrypto.so \
-            -DOPENSSL_SSL_LIBRARY=/usr/lib64/openssl3/libssl.so"
+            -DOPENSSL_SSL_LIBRARY=/usr/lib64/openssl3/libssl.so \
+            ${ARROW_ROOT_FLAG}"
           cmake -B build/release \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_EXTENSIONS="${EXTENSION_LIST}" \
