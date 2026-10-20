@@ -106,6 +106,15 @@ struct PLPMaxIterations {
     }
 };
 
+// Parallel k-core sampling (NetworKit::ParallelCoreDecomposition(G, normalized, useSampling)).
+// High-degree sampling reduces atomic contention on dense graphs; a validation failure
+// restarts the run without sampling, so results stay exact either way.
+struct KCoreUseSampling {
+    static constexpr const char* NAME = "usesampling";
+    static constexpr common::LogicalTypeID TYPE = common::LogicalTypeID::BOOL;
+    static constexpr bool DEFAULT_VALUE = true;
+};
+
 // Cut clustering (NetworKit::CutClustering(G, alpha)) takes alpha as a *required* constructor
 // argument, so the row declares it REQUIRED: CALL must pass alpha := .... DEFAULT_VALUE is
 // only filler for OptionalParam's storage; evaluateParams() rejects an unset required param.

@@ -3,7 +3,8 @@
 // gds_param_specs.h (+ function::DampingFactor/Tolerance, MaxIterations).
 //
 // Coverage map (NetworKit module -> rows here):
-//   centrality  PageRank, Betweenness, Degree, Closeness, Harmonic, Katz, Eigenvector, Core
+//   centrality  PageRank, Betweenness, Degree, Closeness, Harmonic, Katz, Eigenvector, Core,
+//             ParallelCore (SIGMOD'25 exact adaptive peeling, needs icebug >= 13.5)
 //   community   PLM (Louvain), ParallelLeidenView (Leiden), PLP, CutClustering
 //   components  ConnectedComponents
 //   distance    BFS (single-source distances), PageRank::forSources (personalized)
@@ -29,6 +30,7 @@
 #include <networkit/centrality/HarmonicCloseness.hpp>
 #include <networkit/centrality/KatzCentrality.hpp>
 #include <networkit/centrality/PageRank.hpp>
+#include <networkit/centrality/ParallelCoreDecomposition.hpp>
 #include <networkit/community/CutClustering.hpp>
 #include <networkit/community/PLM.hpp>
 #include <networkit/community/PLP.hpp>
@@ -178,6 +180,17 @@ function::function_set makeGDSCore() {
         });
 }
 
+function::function_set makeGDSParallelCore() {
+    return makeNodeScoreFunc<Normalized, KCoreUseSampling>("GDS_PARALLEL_CORE_DECOMPOSITION",
+        "core_number", GDSExtraKind::NONE, GDSGraphMode::UNDIRECTED,
+        [](const NetworKit::GraphR& g, common::offset_t, const auto& params, const auto&) {
+            NetworKit::ParallelCoreDecomposition algo(g, params.template get<Normalized>(),
+                params.template get<KCoreUseSampling>());
+            algo.run();
+            return algo.scores();
+        });
+}
+
 // --- New rows: community / components (Partition shape). ---
 
 function::function_set makeGDSConnectedComponents() {
@@ -251,6 +264,7 @@ const std::vector<GDSCatalogEntry>& getGDSCatalog() {
         {"GDS_KATZ", makeGDSKatz},
         {"GDS_EIGENVECTOR", makeGDSEigenvector},
         {"GDS_CORE_DECOMPOSITION", makeGDSCore},
+        {"GDS_PARALLEL_CORE_DECOMPOSITION", makeGDSParallelCore},
         {"GDS_CONNECTED_COMPONENTS", makeGDSConnectedComponents},
         {"GDS_PLP", makeGDSPlp},
         {"GDS_CUT_CLUSTERING", makeGDSCutClustering},

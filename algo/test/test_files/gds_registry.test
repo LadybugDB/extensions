@@ -67,6 +67,25 @@
 1|1.000000
 2|1.000000
 3|1.000000
+-LOG Parallel k-core (SIGMOD'25 exact adaptive peeling) agrees with the ParK oracle.
+-STATEMENT CALL GDS_PARALLEL_CORE_DECOMPOSITION('G') RETURN node.id, core_number ORDER BY node.id
+---- 4
+0|1.000000
+1|1.000000
+2|1.000000
+3|1.000000
+-STATEMENT CALL GDS_PARALLEL_CORE_DECOMPOSITION('G', usesampling := false) RETURN node.id, core_number ORDER BY node.id
+---- 4
+0|1.000000
+1|1.000000
+2|1.000000
+3|1.000000
+-STATEMENT CALL GDS_PARALLEL_CORE_DECOMPOSITION('G', normalized := true) RETURN node.id, core_number ORDER BY node.id
+---- 4
+0|0.333333
+1|0.333333
+2|0.333333
+3|0.333333
 -STATEMENT CALL GDS_CONNECTED_COMPONENTS('G') RETURN node.id, component_id ORDER BY node.id
 ---- 4
 0|0
