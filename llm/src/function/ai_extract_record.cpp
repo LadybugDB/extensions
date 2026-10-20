@@ -218,44 +218,79 @@ void writeFieldValue(ValueVector* fieldVec, uint64_t pos, yyjson_val* jsonVal,
 
     switch (fieldType.getLogicalTypeID()) {
     case LogicalTypeID::INT64: {
-        int64_t v = 0;
         if (yyjson_is_int(jsonVal)) {
-            v = yyjson_get_sint(jsonVal);
+            fieldVec->setValue<int64_t>(pos, yyjson_get_sint(jsonVal));
         } else if (yyjson_is_real(jsonVal)) {
-            v = static_cast<int64_t>(yyjson_get_real(jsonVal));
+            fieldVec->setValue<int64_t>(pos, static_cast<int64_t>(yyjson_get_real(jsonVal)));
         } else if (yyjson_is_str(jsonVal)) {
+            // Mistyped text (e.g. "abc" for an integer field) is NULL, not 0.
             try {
-                v = std::stoll(yyjson_get_str(jsonVal));
-            } catch (...) {}
+                std::string sv = yyjson_get_str(jsonVal);
+                size_t consumed = 0;
+                int64_t v = std::stoll(sv, &consumed);
+                while (consumed < sv.size() &&
+                       std::isspace(static_cast<unsigned char>(sv[consumed]))) {
+                    consumed++;
+                }
+                if (consumed != sv.size()) {
+                    throw std::invalid_argument("trailing characters");
+                }
+                fieldVec->setValue<int64_t>(pos, v);
+            } catch (...) {
+                fieldVec->setNull(pos, true);
+            }
+        } else {
+            fieldVec->setNull(pos, true);
         }
-        fieldVec->setValue<int64_t>(pos, v);
         break;
     }
     case LogicalTypeID::DOUBLE: {
-        double v = 0.0;
         if (yyjson_is_real(jsonVal)) {
-            v = yyjson_get_real(jsonVal);
+            fieldVec->setValue<double>(pos, yyjson_get_real(jsonVal));
         } else if (yyjson_is_int(jsonVal)) {
-            v = static_cast<double>(yyjson_get_sint(jsonVal));
+            fieldVec->setValue<double>(pos, static_cast<double>(yyjson_get_sint(jsonVal)));
         } else if (yyjson_is_str(jsonVal)) {
+            // Mistyped text is NULL, not 0.0.
             try {
-                v = std::stod(yyjson_get_str(jsonVal));
-            } catch (...) {}
+                std::string sv = yyjson_get_str(jsonVal);
+                size_t consumed = 0;
+                double v = std::stod(sv, &consumed);
+                while (consumed < sv.size() &&
+                       std::isspace(static_cast<unsigned char>(sv[consumed]))) {
+                    consumed++;
+                }
+                if (consumed != sv.size()) {
+                    throw std::invalid_argument("trailing characters");
+                }
+                fieldVec->setValue<double>(pos, v);
+            } catch (...) {
+                fieldVec->setNull(pos, true);
+            }
+        } else {
+            fieldVec->setNull(pos, true);
         }
-        fieldVec->setValue<double>(pos, v);
         break;
     }
     case LogicalTypeID::BOOL: {
-        bool v = false;
         if (yyjson_is_bool(jsonVal)) {
-            v = yyjson_get_bool(jsonVal);
+            fieldVec->setValue<bool>(pos, yyjson_get_bool(jsonVal));
+        } else if (yyjson_is_int(jsonVal)) {
+            fieldVec->setValue<bool>(pos, yyjson_get_sint(jsonVal) != 0);
         } else if (yyjson_is_str(jsonVal)) {
             std::string sv = yyjson_get_str(jsonVal);
             std::transform(sv.begin(), sv.end(), sv.begin(),
                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            v = (sv == "true" || sv == "1" || sv == "yes");
+            if (sv == "true" || sv == "1" || sv == "yes") {
+                fieldVec->setValue<bool>(pos, true);
+            } else if (sv == "false" || sv == "0" || sv == "no") {
+                fieldVec->setValue<bool>(pos, false);
+            } else {
+                // Unrecognized text (e.g. "maybe") is NULL, not false.
+                fieldVec->setNull(pos, true);
+            }
+        } else {
+            fieldVec->setNull(pos, true);
         }
-        fieldVec->setValue<bool>(pos, v);
         break;
     }
     case LogicalTypeID::LIST: {
@@ -465,6 +500,24 @@ std::string readLiteralArg(const ScalarBindFuncInput& input, uint64_t idx, const
     return ExpressionUtil::evaluateLiteral<std::string>(input.context, expr, LogicalType::STRING());
 }
 
+// Same rule as AI_EXTRACT: the endpoint must be an HTTP(S) base URL with no query,
+// fragment, whitespace or control characters. The provider re-checks at execution time;
+// failing here surfaces a bad literal at bind time instead of inside worker threads.
+void validateEndpoint(const std::string& endpoint) {
+    if (endpoint.empty() ||
+        (endpoint.rfind("http://", 0) != 0 && endpoint.rfind("https://", 0) != 0) ||
+        std::any_of(endpoint.begin(), endpoint.end(),
+            [](unsigned char c) { return std::iscntrl(c) || std::isspace(c); })) {
+        throw BinderException("AI_EXTRACT_RECORD endpoint must be a valid HTTP(S) base URL.");
+    }
+    const auto schemeEnd = endpoint.find("://") + 3;
+    const auto authorityEnd = endpoint.find_first_of("/?#", schemeEnd);
+    if (schemeEnd >= endpoint.size() || authorityEnd == schemeEnd ||
+        endpoint.find_first_of("?#") != std::string::npos) {
+        throw BinderException("AI_EXTRACT_RECORD endpoint must be a valid HTTP(S) base URL.");
+    }
+}
+
 std::unique_ptr<FunctionBindData> bindFunc(const ScalarBindFuncInput& input) {
     const char* fn = AIExtractRecord::name;
 
@@ -510,6 +563,7 @@ std::unique_ptr<FunctionBindData> bindFunc(const ScalarBindFuncInput& input) {
     while (!endpoint.empty() && endpoint.back() == '/') {
         endpoint.pop_back();
     }
+    validateEndpoint(endpoint);
 
     // Parse the schema and derive the return STRUCT type.
     const auto fields = parseSchema(schemaJson);
