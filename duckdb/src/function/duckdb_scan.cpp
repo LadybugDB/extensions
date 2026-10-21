@@ -80,8 +80,7 @@ std::string DuckDBScanBindData::getDescription() const {
     return getSQL();
 }
 
-DuckDBScanSharedState::DuckDBScanSharedState(
-    std::shared_ptr<duckdb::MaterializedQueryResult> queryResult)
+DuckDBScanSharedState::DuckDBScanSharedState(std::shared_ptr<duckdb::QueryResult> queryResult)
     : function::TableFuncSharedState{queryResult->RowCount()}, queryResult{std::move(queryResult)} {
 }
 

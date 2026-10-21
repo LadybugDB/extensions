@@ -37,7 +37,13 @@ public:
             std::move(columnNames), *this);
     }
 
-    std::unique_ptr<duckdb::MaterializedQueryResult> executeQuery(std::string query) const;
+    std::unique_ptr<duckdb::QueryResult> executeQuery(std::string query) const;
+
+    // DuckDB 2.0 executes the inner query while binding postgres_query, so a
+    // DDL/DML statement would run (or fail confusingly) during planning.
+    // Reject anything that is not a plain SELECT up front, preserving the
+    // historical contract that only column-returning SELECTs are accepted.
+    void validateSelectQuery(const std::string& query) const;
 
     void initRemoteFSSecrets(main::ClientContext* context) const {
         for (auto& fsConfig : httpfs_extension::S3FileSystemConfig::getAvailableConfigs()) {

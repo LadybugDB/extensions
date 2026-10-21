@@ -171,18 +171,18 @@ std::unique_ptr<TableFuncBindData> bindFuncHelper(main::ClientContext* context,
             dynamic_cast_checked<ExtraScanTableFuncBindInput*>(input->extraInput.get());
         returnColumnNames = scanInput->expectedColumnNames;
         if (scanInput->expectedColumnNames.empty()) {
-            for (auto name : result->names) {
-                returnColumnNames.push_back(name);
+            for (auto name : result->GetNames()) {
+                returnColumnNames.push_back(name.GetIdentifierName());
             }
         }
     }
-    for (auto type : result->types) {
+    for (auto type : result->GetTypes()) {
         returnTypes.push_back(
             duckdb_extension::DuckDBTypeConverter::convertDuckDBType(type.ToString()));
     }
     if (functionName != "ICEBERG_SCAN") {
-        for (auto name : result->names) {
-            returnColumnNames.push_back(name);
+        for (auto name : result->GetNames()) {
+            returnColumnNames.push_back(name.GetIdentifierName());
         }
     }
     DASSERT(returnTypes.size() == returnColumnNames.size());

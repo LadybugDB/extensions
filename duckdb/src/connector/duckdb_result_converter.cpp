@@ -2,6 +2,9 @@
 
 #include <numeric>
 
+#include "duckdb/common/vector/list_vector.hpp"
+#include "duckdb/common/vector/struct_vector.hpp"
+
 #include "common/type_utils.h"
 #include "common/types/types.h"
 
@@ -13,7 +16,7 @@ using namespace common;
 template<typename T>
 void convertDuckDBVectorToVector(duckdb::Vector& duckDBVector, ValueVector& result,
     uint64_t numValuesToCopy) {
-    auto duckDBData = (T*)duckDBVector.GetData();
+    auto duckDBData = (T*)duckdb::FlatVector::GetDataMutable(duckDBVector);
     auto validityMasks = duckdb::FlatVector::Validity(duckDBVector);
     memcpy(result.getData(), duckDBData, numValuesToCopy * result.getNumBytesPerValue());
     for (auto i = 0u; i < numValuesToCopy; i++) {
@@ -31,7 +34,8 @@ void convertDuckDBVectorToVector<list_entry_t>(duckdb::Vector& duckDBVector, Val
 template<>
 void convertDuckDBVectorToVector<string_t>(duckdb::Vector& duckDBVector, ValueVector& result,
     uint64_t numValuesToCopy) {
-    auto strs = reinterpret_cast<duckdb::string_t*>(duckDBVector.GetData());
+    auto strs =
+        reinterpret_cast<duckdb::string_t*>(duckdb::FlatVector::GetDataMutable(duckDBVector));
     auto validityMasks = duckdb::FlatVector::Validity(duckDBVector);
     for (auto i = 0u; i < numValuesToCopy; i++) {
         result.setNull(i, !validityMasks.RowIsValid(i));
@@ -63,9 +67,9 @@ void convertDuckDBVectorToVector<list_entry_t>(duckdb::Vector& duckDBVector, Val
     } break;
     case duckdb::LogicalTypeId::MAP:
     case duckdb::LogicalTypeId::LIST: {
-        memcpy(result.getData(), duckDBVector.GetData(),
+        memcpy(result.getData(), duckdb::FlatVector::GetData(duckDBVector),
             numValuesToCopy * result.getNumBytesPerValue());
-        auto listEntries = reinterpret_cast<duckdb::list_entry_t*>(duckDBVector.GetData());
+        auto listEntries = (duckdb::list_entry_t*)duckdb::FlatVector::GetDataMutable(duckDBVector);
         for (auto i = 0u; i < numValuesToCopy; i++) {
             result.setNull(i, !validityMasks.RowIsValid(i));
             if (!result.isNull(i)) {
@@ -82,7 +86,8 @@ void convertDuckDBVectorToVector<list_entry_t>(duckdb::Vector& duckDBVector, Val
     duckdb_conversion_func_t conversion_func;
     DuckDBResultConverter::getDuckDBVectorConversionFunc(dataVec->dataType.getPhysicalType(),
         conversion_func);
-    conversion_func(duckdb::ListVector::GetEntry(duckDBVector), *dataVec, numValuesInDataVec);
+    conversion_func(duckdb::ListVector::GetChildMutable(duckDBVector), *dataVec,
+        numValuesInDataVec);
 }
 
 template<>
@@ -93,7 +98,7 @@ void convertDuckDBVectorToVector<struct_entry_t>(duckdb::Vector& duckDBVector, V
     if (result.dataType.getLogicalTypeID() == LogicalTypeID::UNION) {
         // Special handling for union datatype, since duckdb stores tagId as INT8
         idx++;
-        auto duckDBData = (uint8_t*)duckdbChildrenVectors[0]->GetData();
+        auto duckDBData = duckdb::FlatVector::GetDataMutable(duckdbChildrenVectors[0]);
         auto validityMasks = duckdb::FlatVector::Validity(duckDBVector);
         for (auto i = 0u; i < numValuesToCopy; i++) {
             UnionVector::getTagVector(&result)->setValue(i, (uint16_t)duckDBData[i]);
@@ -106,7 +111,7 @@ void convertDuckDBVectorToVector<struct_entry_t>(duckdb::Vector& duckDBVector, V
         auto fieldVector = StructVector::getFieldVector(&result, idx);
         DuckDBResultConverter::getDuckDBVectorConversionFunc(
             fieldVector->dataType.getPhysicalType(), conversionFunc);
-        conversionFunc(*duckdbChildVector, *fieldVector, numValuesToCopy);
+        conversionFunc(duckdbChildVector, *fieldVector, numValuesToCopy);
     }
 }
 

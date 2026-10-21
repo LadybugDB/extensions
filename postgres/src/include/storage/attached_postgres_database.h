@@ -15,7 +15,7 @@ public:
               std::move(catalog), std::move(connector)},
           attachedCatalogNameInDuckDB{std::move(attachedCatalogNameInDuckDB)} {}
 
-    std::unique_ptr<duckdb::MaterializedQueryResult> executeQuery(const std::string& query) const {
+    std::unique_ptr<duckdb::QueryResult> executeQuery(const std::string& query) const {
         return connector->executeQuery(query);
     }
 

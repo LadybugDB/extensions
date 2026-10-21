@@ -106,9 +106,9 @@ struct DuckDBScanBindData : function::TableFuncBindData {
 };
 
 struct DuckDBScanSharedState final : function::TableFuncSharedState {
-    explicit DuckDBScanSharedState(std::shared_ptr<duckdb::MaterializedQueryResult> queryResult);
+    explicit DuckDBScanSharedState(std::shared_ptr<duckdb::QueryResult> queryResult);
 
-    std::shared_ptr<duckdb::MaterializedQueryResult> queryResult;
+    std::shared_ptr<duckdb::QueryResult> queryResult;
 };
 
 function::TableFunction getScanFunction(std::shared_ptr<DuckDBTableScanInfo> scanInfo);
