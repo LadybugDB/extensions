@@ -11,6 +11,7 @@
 #include "storage/attached_postgres_database.h"
 #include "storage/postgres_storage.h"
 #include <format>
+#include <unordered_set>
 
 using namespace lbug::function;
 using namespace lbug::main;
@@ -50,6 +51,9 @@ static std::unique_ptr<TableFuncBindData> bindFunc(const ClientContext* context,
     auto queryToExecuteInDuckDB =
         std::vformat(queryTemplate, std::make_format_args("*")) + " limit 1";
     auto& attachedPostgresDB = attachedDB->constCast<AttachedPostgresDatabase>();
+    // postgres_query executes the inner query at bind time in DuckDB 2.0+, so
+    // reject non-SELECT statements before any execution is attempted.
+    attachedPostgresDB.getConnector().validateSelectQuery(query);
     auto queryResult = attachedPostgresDB.executeQuery(queryToExecuteInDuckDB);
     std::vector<common::LogicalType> returnTypes;
     std::vector<std::string> columnNamesInPG;
@@ -57,6 +61,17 @@ static std::unique_ptr<TableFuncBindData> bindFunc(const ClientContext* context,
         columnNamesInPG.push_back(queryResult->ColumnName(i).GetIdentifierName());
         returnTypes.push_back(
             DuckDBTypeConverter::convertDuckDBType(queryResult->GetTypes()[i].ToString()));
+    }
+    // DuckDB 2.0 no longer rejects duplicate output column names from
+    // postgres_query, so enforce the historical contract here.
+    std::unordered_set<std::string> seenColumnNames;
+    for (auto& columnName : columnNamesInPG) {
+        auto lowerName = columnName;
+        StringUtils::toLower(lowerName);
+        if (!seenColumnNames.insert(lowerName).second) {
+            throw common::BinderException{std::format(
+                "table \"postgres_query\" has duplicate column name \"{}\"", columnName)};
+        }
     }
     auto returnColumnNames =
         TableFunction::extractYieldVariables(columnNamesInPG, input->yieldVariables);

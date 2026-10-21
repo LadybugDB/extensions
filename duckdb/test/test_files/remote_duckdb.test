@@ -33,7 +33,7 @@
 -LOAD_DYNAMIC_EXTENSION duckdb
 -STATEMENT ATTACH 'http://localhost/dataset/databases/duckdb_database/tinysnb132.db' as remoteTiny (dbtype duckdb, skip_unsupported_table=true);
 ---- error(regex)
-^.+ Error: Cannot open database "http://localhost/dataset/databases/duckdb_database/tinysnb132.db" in read-only mode: database does not exist$
+^.+ Error: Could not connect to server error for HTTP HEAD to 'http://localhost/dataset/databases/duckdb_database/tinysnb132.db'$
 
 -CASE AttachPublicS3Duckdb
 -SKIP
@@ -53,4 +53,4 @@ Attached database successfully.
 -STATEMENT ATTACH 's3://duckdb-blobs/databases/stations1.duckdb' as remoteTiny (dbtype duckdb, skip_unsupported_table=true);
 # Error type is determined by duckdb version.
 ---- error(regex)
-^.+ Error: Cannot open database "s3://duckdb-blobs/databases/stations1.duckdb" in read-only mode: database does not exist$
+^.+ Error: HTTP GET error reading 's3://duckdb-blobs/databases/stations1.duckdb' \(HTTP 403 Forbidden\)$
