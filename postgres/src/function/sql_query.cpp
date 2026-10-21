@@ -10,6 +10,7 @@
 #include "processor/execution_context.h"
 #include "storage/attached_postgres_database.h"
 #include "storage/postgres_storage.h"
+#include "common/string_utils.h"
 #include <format>
 #include <unordered_set>
 
