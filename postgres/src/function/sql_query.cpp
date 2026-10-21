@@ -53,10 +53,10 @@ static std::unique_ptr<TableFuncBindData> bindFunc(const ClientContext* context,
     auto queryResult = attachedPostgresDB.executeQuery(queryToExecuteInDuckDB);
     std::vector<common::LogicalType> returnTypes;
     std::vector<std::string> columnNamesInPG;
-    for (auto i = 0u; i < queryResult->names.size(); i++) {
-        columnNamesInPG.push_back(queryResult->ColumnName(i));
+    for (auto i = 0u; i < queryResult->ColumnCount(); i++) {
+        columnNamesInPG.push_back(queryResult->ColumnName(i).GetIdentifierName());
         returnTypes.push_back(
-            DuckDBTypeConverter::convertDuckDBType(queryResult->types[i].ToString()));
+            DuckDBTypeConverter::convertDuckDBType(queryResult->GetTypes()[i].ToString()));
     }
     auto returnColumnNames =
         TableFunction::extractYieldVariables(columnNamesInPG, input->yieldVariables);
