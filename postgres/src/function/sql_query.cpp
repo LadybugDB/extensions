@@ -10,9 +10,7 @@
 #include "processor/execution_context.h"
 #include "storage/attached_postgres_database.h"
 #include "storage/postgres_storage.h"
-#include "common/string_utils.h"
 #include <format>
-#include <unordered_set>
 
 using namespace lbug::function;
 using namespace lbug::main;
@@ -62,17 +60,6 @@ static std::unique_ptr<TableFuncBindData> bindFunc(const ClientContext* context,
         columnNamesInPG.push_back(queryResult->ColumnName(i).GetIdentifierName());
         returnTypes.push_back(
             DuckDBTypeConverter::convertDuckDBType(queryResult->GetTypes()[i].ToString()));
-    }
-    // DuckDB 2.0 no longer rejects duplicate output column names from
-    // postgres_query, so enforce the historical contract here.
-    std::unordered_set<std::string> seenColumnNames;
-    for (auto& columnName : columnNamesInPG) {
-        auto lowerName = columnName;
-        StringUtils::toLower(lowerName);
-        if (!seenColumnNames.insert(lowerName).second) {
-            throw common::BinderException{std::format(
-                "table \"postgres_query\" has duplicate column name \"{}\"", columnName)};
-        }
     }
     auto returnColumnNames =
         TableFunction::extractYieldVariables(columnNamesInPG, input->yieldVariables);
