@@ -185,6 +185,11 @@ jobs:
               ;;
           esac
 
+          # Pinned: 2.0.0 renamed release assets (libduckdb-*.zip ->
+          # duckdb-shared-libs-*.tar.gz) and dropped the amalgamated
+          # duckdb.hpp, whose headers now come from a source checkout.
+          echo "DUCKDB_VERSION=v2.0.0" >> "$GITHUB_ENV"
+
           # --- Ladybug artifact arch (maps runner arch to release names) ---
           case "${{ runner.arch }}" in
             X64|AMD64) echo "LBUG_ARTIFACT_ARCH=x86_64"  >> "$GITHUB_ENV" ;;
@@ -274,10 +279,16 @@ jobs:
       - name: Install DuckDB (Linux)
         if: runner.os == 'Linux'
         run: |
-          wget "https://github.com/duckdb/duckdb/releases/latest/download/libduckdb-${{ env.DUCKDB_ARCH }}.zip"
-          unzip "libduckdb-${{ env.DUCKDB_ARCH }}.zip" -d duckdb
-          cp duckdb/duckdb.h /usr/local/include/
-          cp duckdb/duckdb.hpp /usr/local/include/
+          wget "https://github.com/duckdb/duckdb/releases/download/${{ env.DUCKDB_VERSION }}/duckdb-shared-libs-${{ env.DUCKDB_ARCH }}.tar.gz"
+          mkdir -p duckdb && tar xzf "duckdb-shared-libs-${{ env.DUCKDB_ARCH }}.tar.gz" -C duckdb
+          # 2.0.0 dropped the amalgamated duckdb.hpp from release assets;
+          # fetch the C++ headers from source (C headers there are identical
+          # to the ones shipped in the tarball - verified by diff).
+          git clone -c advice.detachedHead=false --filter=blob:none --sparse --depth 1 --branch "${{ env.DUCKDB_VERSION }}" https://github.com/duckdb/duckdb duckdb-src
+          git -C duckdb-src sparse-checkout set src/include
+          cp -r duckdb-src/src/include/. duckdb/
+          cp duckdb/duckdb*.h duckdb/duckdb.hpp /usr/local/include/
+          cp -r duckdb/duckdb /usr/local/include/
           cp duckdb/${{ env.DUCKDB_LIB }} /usr/local/lib/
           ldconfig
           # CMake config so find_package(DuckDB) works
