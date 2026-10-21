@@ -34,18 +34,22 @@ inline std::string quoteDuckDBIdentifier(const std::string& value) {
     return result;
 }
 
-inline bool isPlaceholderSchema(duckdb::MaterializedQueryResult& result) {
-    if (result.RowCount() != 1) {
+// In DuckDB 2.0.0 QueryResult is a forward-only stream: Fetch() consumes.
+// Take the already-fetched first chunk (plus names/row count) instead of
+// fetching again so callers can keep streaming the remaining chunks.
+inline bool isPlaceholderSchema(const std::vector<duckdb::Identifier>& names,
+    const duckdb::DataChunk& firstChunk, duckdb::idx_t totalRowCount) {
+    if (totalRowCount != 1 || firstChunk.size() != 1) {
         return false;
     }
-    const auto nameColumn = std::find(result.names.begin(), result.names.end(), "column_name");
-    const auto typeColumn = std::find(result.names.begin(), result.names.end(), "data_type");
-    if (nameColumn == result.names.end() || typeColumn == result.names.end()) {
+    const auto nameColumn = std::find(names.begin(), names.end(), "column_name");
+    const auto typeColumn = std::find(names.begin(), names.end(), "data_type");
+    if (nameColumn == names.end() || typeColumn == names.end()) {
         return false;
     }
-    return result.GetValue(std::distance(result.names.begin(), nameColumn), 0)
+    return firstChunk.GetValue(std::distance(names.begin(), nameColumn), 0)
                    .GetValue<std::string>() == "__" &&
-           result.GetValue(std::distance(result.names.begin(), typeColumn), 0)
+           firstChunk.GetValue(std::distance(names.begin(), typeColumn), 0)
                    .GetValue<std::string>() == "UNKNOWN";
 }
 

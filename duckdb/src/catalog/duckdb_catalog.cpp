@@ -182,9 +182,9 @@ void DuckDBCatalog::createForeignRelTable(const std::string& tableName, bool int
 
     std::string srcTableName, dstTableName;
     std::string srcColName, dstColName;
-    for (auto i = 0u; i < fkResult->RowCount(); i++) {
-        auto colName = fkResult->GetValue(0, i).GetValue<std::string>();
-        auto refTable = fkResult->GetValue(1, i).GetValue<std::string>();
+    for (auto& row : *fkResult) {
+        auto colName = row.GetValue<std::string>(0);
+        auto refTable = row.GetValue<std::string>(1);
         auto lowerCol = colName;
         common::StringUtils::toLower(lowerCol);
         if (lowerCol == "src_id" || lowerCol.find("src") == 0) {
@@ -322,8 +322,12 @@ static bool getTableInfo(const DuckDBConnector& connector, const std::string& ta
     if (result->RowCount() == 0) {
         return false;
     }
-    if (isPlaceholderSchema(*result)) {
-        std::unique_ptr<duckdb::MaterializedQueryResult> schemaResult;
+    auto firstChunk = result->Fetch();
+    if (!firstChunk || firstChunk->size() == 0) {
+        return false;
+    }
+    if (isPlaceholderSchema(result->names, *firstChunk, result->RowCount())) {
+        std::unique_ptr<duckdb::QueryResult> schemaResult;
         try {
             schemaResult = connector.executeQuery(
                 std::format("SELECT * FROM {}.{}.{} LIMIT 0", quoteDuckDBIdentifier(catalogName),
@@ -335,7 +339,10 @@ static bool getTableInfo(const DuckDBConnector& connector, const std::string& ta
             throw;
         }
         columnTypes.reserve(schemaResult->types.size());
-        columnNames = schemaResult->names;
+        columnNames.reserve(schemaResult->names.size());
+        for (auto& name : schemaResult->names) {
+            columnNames.push_back(name.GetIdentifierName());
+        }
         for (auto& type : schemaResult->types) {
             try {
                 columnTypes.push_back(DuckDBTypeConverter::convertDuckDBType(type.ToString()));
@@ -350,17 +357,30 @@ static bool getTableInfo(const DuckDBConnector& connector, const std::string& ta
     }
     columnTypes.reserve(result->RowCount());
     columnNames.reserve(result->RowCount());
-    for (auto i = 0u; i < result->RowCount(); i++) {
-        try {
-            columnTypes.push_back(DuckDBTypeConverter::convertDuckDBType(
-                result->GetValue(0, i).GetValue<std::string>()));
-        } catch (common::BinderException& e) {
-            if (skipUnsupportedTable) {
-                return false;
+    // QueryResult is a forward-only stream: the first chunk was already
+    // fetched above for the placeholder check, so process it first.
+    auto processChunk = [&](const duckdb::DataChunk& chunk) {
+        for (auto i = 0u; i < chunk.size(); i++) {
+            try {
+                columnTypes.push_back(DuckDBTypeConverter::convertDuckDBType(
+                    chunk.GetValue(0, i).GetValue<std::string>()));
+            } catch (common::BinderException& e) {
+                if (skipUnsupportedTable) {
+                    return false;
+                }
+                throw;
             }
-            throw;
+            columnNames.push_back(chunk.GetValue(1, i).GetValue<std::string>());
         }
-        columnNames.push_back(result->GetValue(1, i).GetValue<std::string>());
+        return true;
+    };
+    if (!processChunk(*firstChunk)) {
+        return false;
+    }
+    while (auto chunk = result->Fetch()) {
+        if (chunk->size() != 0 && !processChunk(*chunk)) {
+            return false;
+        }
     }
     return true;
 }

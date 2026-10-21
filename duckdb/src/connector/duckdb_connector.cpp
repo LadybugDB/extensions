@@ -3,7 +3,7 @@
 namespace lbug {
 namespace duckdb_extension {
 
-std::unique_ptr<duckdb::MaterializedQueryResult> DuckDBConnector::executeQuery(
+std::unique_ptr<duckdb::QueryResult> DuckDBConnector::executeQuery(
     std::string query) const {
     DASSERT(instance != nullptr && connection != nullptr);
     auto result = connection->Query(query);

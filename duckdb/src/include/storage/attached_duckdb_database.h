@@ -55,8 +55,7 @@ public:
 
     const DuckDBConnector& getConnector() const { return *connector; }
 
-    std::unique_ptr<duckdb::MaterializedQueryResult> executeQuery(
-        const std::string& query) const override {
+    std::unique_ptr<duckdb::QueryResult> executeQuery(const std::string& query) const override {
         return connector->executeQuery(query);
     }
 
@@ -94,24 +93,44 @@ public:
                     escapeSingleQuotes(unqualified), filters);
             auto result = connector->executeQuery(query);
             if (result && result->RowCount() != 0) {
-                if (isPlaceholderSchema(*result)) {
+                // QueryResult is a forward-only stream: fetch the first chunk
+                // once and thread it through instead of re-reading the result.
+                auto chunk = result->Fetch();
+                if (!chunk || chunk->size() == 0) {
+                    continue;
+                }
+                if (isPlaceholderSchema(result->names, *chunk, result->RowCount())) {
                     // Use the catalog and schema of the matched table, including
                     // for two-part references outside DuckDB's search path.
                     const auto qualifiedName = std::format("{}.{}.{}",
-                        quoteDuckDBIdentifier(result->GetValue(2, 0).GetValue<std::string>()),
-                        quoteDuckDBIdentifier(result->GetValue(3, 0).GetValue<std::string>()),
+                        quoteDuckDBIdentifier(chunk->GetValue(2, 0).GetValue<std::string>()),
+                        quoteDuckDBIdentifier(chunk->GetValue(3, 0).GetValue<std::string>()),
                         quoteDuckDBIdentifier(unqualified));
                     try {
-                        return connector
-                            ->executeQuery(std::format("SELECT * FROM {} LIMIT 0", qualifiedName))
-                            ->names;
+                        auto schemaResult = connector->executeQuery(
+                            std::format("SELECT * FROM {} LIMIT 0", qualifiedName));
+                        std::vector<std::string> schemaColumnNames;
+                        schemaColumnNames.reserve(schemaResult->names.size());
+                        for (auto& name : schemaResult->names) {
+                            schemaColumnNames.push_back(name.GetIdentifierName());
+                        }
+                        return schemaColumnNames;
                     } catch (const common::Exception&) {
                         return {};
                     }
                 }
                 std::vector<std::string> columnNames;
-                for (auto i = 0u; i < result->RowCount(); i++) {
-                    columnNames.push_back(result->GetValue(0, i).GetValue<std::string>());
+                columnNames.reserve(result->RowCount());
+                auto appendFirstColumn = [&](const duckdb::DataChunk& c) {
+                    for (auto i = 0u; i < c.size(); i++) {
+                        columnNames.push_back(c.GetValue(0, i).GetValue<std::string>());
+                    }
+                };
+                appendFirstColumn(*chunk);
+                while (auto next = result->Fetch()) {
+                    if (next->size() != 0) {
+                        appendFirstColumn(*next);
+                    }
                 }
                 return columnNames;
             }

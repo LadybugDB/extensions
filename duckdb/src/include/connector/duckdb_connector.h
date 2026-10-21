@@ -37,7 +37,7 @@ public:
             std::move(columnNames), *this);
     }
 
-    std::unique_ptr<duckdb::MaterializedQueryResult> executeQuery(std::string query) const;
+    std::unique_ptr<duckdb::QueryResult> executeQuery(std::string query) const;
 
     void initRemoteFSSecrets(main::ClientContext* context) const {
         for (auto& fsConfig : httpfs_extension::S3FileSystemConfig::getAvailableConfigs()) {
