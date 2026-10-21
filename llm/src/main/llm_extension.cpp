@@ -19,6 +19,7 @@ void LlmExtension::load(main::ClientContext* context) {
 
     extension::ExtensionUtils::addScalarFunc<CreateEmbedding>(db);
     extension::ExtensionUtils::addScalarFunc<AIExtract>(db); /* AI Extract function*/
+    extension::ExtensionUtils::addScalarFunc<AIExtractRecord>(db); /* AI Extract Record function*/
 }
 
 } // namespace llm_extension

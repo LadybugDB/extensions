@@ -1,0 +1,149 @@
+-DATASET CSV empty-db
+
+--
+
+# Table, index, property and stopwords table names containing a quote survive CREATE,
+# EXPORT/IMPORT and DROP.
+-CASE QuotedNames
+-SKIP_IN_MEM
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE `Doc's`(id INT64 PRIMARY KEY, `it's body` STRING);
+---- ok
+-STATEMENT CREATE NODE TABLE `Stop's`(sw STRING PRIMARY KEY);
+---- ok
+-STATEMENT CREATE (:`Stop's` {sw: 'order'}), (:`Doc's` {id: 1, `it's body`: 'order shipped'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('Doc\'s', 'it\'s', ['it\'s body'], stopWords := 'Stop\'s');
+---- 1
+Index it's has been created.
+-STATEMENT CALL QUERY_FTS_INDEX('Doc\'s', 'it\'s', 'shipped') RETURN node.id;
+---- 1
+1
+-STATEMENT CALL QUERY_FTS_INDEX('Doc\'s', 'it\'s', 'order') RETURN node.id;
+---- 0
+-STATEMENT EXPORT DATABASE '${LBUG_EXPORT_DB_DIRECTORY}_fts/quoted_names'
+---- ok
+-IMPORT_DATABASE "${LBUG_EXPORT_DB_DIRECTORY}_fts/quoted_names"
+-STATEMENT IMPORT DATABASE '${LBUG_EXPORT_DB_DIRECTORY}_fts/quoted_names';
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('Doc\'s', 'it\'s', 'shipped') RETURN node.id;
+---- 1
+1
+-STATEMENT CALL QUERY_FTS_INDEX('Doc\'s', 'it\'s', 'order') RETURN node.id;
+---- 0
+-STATEMENT CALL DROP_FTS_INDEX('Doc\'s', 'it\'s');
+---- 1
+Index it's has been dropped.
+
+# A jieba_dict_dir containing a quote reaches the dictionary lookup instead of breaking the
+# generated tokenize macro.
+-CASE JiebaDictDirWithQuote
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE Doc(id INT64 PRIMARY KEY, body STRING);
+---- ok
+-STATEMENT CREATE (:Doc {id: 1, body: '北京'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('Doc', 'zh', ['body'], tokenizer := 'jieba', jieba_dict_dir := '/nonexistent/it\'s');
+---- error(regex)
+Binder exception: Cannot locate the jieba dictionary\. Missing files:[\s\S]*/nonexistent/it's/jieba\.dict\.utf8[\s\S]*
+
+# A jieba_dict_dir containing a quote survives EXPORT/IMPORT. The simple tokenizer never reads it,
+# so no dictionary is needed.
+-CASE JiebaDictDirWithQuoteExport
+-SKIP_IN_MEM
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE Doc(id INT64 PRIMARY KEY, body STRING);
+---- ok
+-STATEMENT CREATE (:Doc {id: 1, body: 'order shipped'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('Doc', 'idx', ['body'], jieba_dict_dir := '/nonexistent/it\'s');
+---- ok
+-STATEMENT EXPORT DATABASE '${LBUG_EXPORT_DB_DIRECTORY}_fts/jieba_dict_dir_quote'
+---- ok
+-IMPORT_DATABASE "${LBUG_EXPORT_DB_DIRECTORY}_fts/jieba_dict_dir_quote"
+-STATEMENT IMPORT DATABASE '${LBUG_EXPORT_DB_DIRECTORY}_fts/jieba_dict_dir_quote';
+---- ok
+-STATEMENT CALL SHOW_INDEXES() WHERE index_type = 'FTS' RETURN index_definition;
+---- 1
+CALL CREATE_FTS_INDEX('Doc', 'idx', ['body'], stemmer := 'english', stopWords := 'default', jieba_dict_dir := '/nonexistent/it\'s');
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'idx', 'shipped') RETURN node.id;
+---- 1
+1
+
+# Table, index, property and stopwords table names containing a backtick survive CREATE,
+# EXPORT/IMPORT and DROP.
+-CASE BacktickNames
+-SKIP_IN_MEM
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE `Doc``s`(id INT64 PRIMARY KEY, `it``s body` STRING);
+---- ok
+-STATEMENT CREATE NODE TABLE `Stop``s`(sw STRING PRIMARY KEY);
+---- ok
+-STATEMENT CREATE (:`Stop``s` {sw: 'order'}), (:`Doc``s` {id: 1, `it``s body`: 'order shipped'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('Doc`s', 'it`s', ['it`s body'], stopWords := 'Stop`s');
+---- 1
+Index it`s has been created.
+-STATEMENT CALL QUERY_FTS_INDEX('Doc`s', 'it`s', 'shipped') RETURN node.id;
+---- 1
+1
+-STATEMENT CALL QUERY_FTS_INDEX('Doc`s', 'it`s', 'order') RETURN node.id;
+---- 0
+-STATEMENT EXPORT DATABASE '${LBUG_EXPORT_DB_DIRECTORY}_fts/backtick_names'
+---- ok
+-IMPORT_DATABASE "${LBUG_EXPORT_DB_DIRECTORY}_fts/backtick_names"
+-STATEMENT IMPORT DATABASE '${LBUG_EXPORT_DB_DIRECTORY}_fts/backtick_names';
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('Doc`s', 'it`s', 'shipped') RETURN node.id;
+---- 1
+1
+-STATEMENT CALL QUERY_FTS_INDEX('Doc`s', 'it`s', 'order') RETURN node.id;
+---- 0
+-STATEMENT CALL DROP_FTS_INDEX('Doc`s', 'it`s');
+---- 1
+Index it`s has been dropped.
+
+# A CREATE that fails after building part of an index whose name contains a backtick leaves its
+# macro and build table behind; the next CREATE drops them.
+-CASE BacktickNameLeftovers
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE Doc(id INT64 PRIMARY KEY, body STRING);
+---- ok
+-STATEMENT CREATE (:Doc {id: 1, body: 'order shipped'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('Doc', 'it`s', ['body'], tokenizer := 'jieba', jieba_dict_dir := '/nonexistent');
+---- error(regex)
+Binder exception: Cannot locate the jieba dictionary\.[\s\S]*
+-STATEMENT CALL SHOW_MACROS() RETURN name, definition CONTAINS 'jieba';
+---- 1
+1_IT`S_TOKENIZE|True
+-STATEMENT CALL CREATE_FTS_INDEX('Doc', 'it`s', ['body']);
+---- 1
+Index it`s has been created.
+-STATEMENT CALL SHOW_MACROS() RETURN name, definition CONTAINS 'jieba';
+---- 1
+1_IT`S_TOKENIZE|False
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'it`s', 'shipped') RETURN node.id;
+---- 1
+1
+
+# The per-index copy of a stopwords file is named after the index, so it is quoted too.
+-CASE BacktickIndexStopWordsFile
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT COPY (RETURN 'order') TO '${LBUG_EXPORT_DB_DIRECTORY}_backtick_stopwords.csv' (header=false);
+---- ok
+-STATEMENT CREATE NODE TABLE Doc(id INT64 PRIMARY KEY, body STRING);
+---- ok
+-STATEMENT CREATE (:Doc {id: 1, body: 'order shipped'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('Doc', 'it`s', ['body'], stopWords := '${LBUG_EXPORT_DB_DIRECTORY}_backtick_stopwords.csv');
+---- 1
+Index it`s has been created.
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'it`s', 'order') RETURN node.id;
+---- 0
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'it`s', 'shipped') RETURN node.id;
+---- 1
+1
+-STATEMENT CALL DROP_FTS_INDEX('Doc', 'it`s');
+---- 1
+Index it`s has been dropped.

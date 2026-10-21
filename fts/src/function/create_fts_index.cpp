@@ -158,7 +158,7 @@ static std::string dropResidueStatements(ClientContext& context, table_id_t tabl
                             "creating a full text search index.",
                     tableName)};
         }
-        query += std::format("DROP TABLE IF EXISTS `{}`;", tableName);
+        query += std::format("DROP TABLE IF EXISTS {};", StringUtils::quoteIdentifier(tableName));
     };
     // Drop the rel table before the node tables it references.
     maybeDropTable(appearsInTableName, [&](catalog::TableCatalogEntry* entry) {
@@ -208,42 +208,33 @@ static std::string createStopWordsTable([[maybe_unused]] const ClientContext& co
     case StopWordsSource::DEFAULT: {
         // Always generate CREATE TABLE IF NOT EXISTS and MERGE statements.
         // They are idempotent and safe to execute multiple times during import.
-        query += std::format("CREATE NODE TABLE IF NOT EXISTS `{}` (sw STRING, PRIMARY KEY(sw));",
-            info.tableName);
+        query += std::format("CREATE NODE TABLE IF NOT EXISTS {} (sw STRING, PRIMARY KEY(sw));",
+            StringUtils::quoteIdentifier(info.tableName));
         std::string stopWordList = "[";
         for (auto& stopWord : StopWords::getDefaultStopWords()) {
             stopWordList += std::format("\"{}\",", stopWord);
         }
         stopWordList.back() = ']';
-        query += std::format("UNWIND {} AS word MERGE (s:`{}` {{sw: word}});", stopWordList,
-            info.tableName);
+        query += std::format("UNWIND {} AS word MERGE (s:{} {{sw: word}});", stopWordList,
+            StringUtils::quoteIdentifier(info.tableName));
     } break;
     case StopWordsSource::TABLE: {
-        query +=
-            std::format("CREATE NODE TABLE `{}` (sw STRING, PRIMARY KEY(sw));", info.tableName);
-        query += std::format("COPY `{}` FROM (MATCH (c:`{}`) RETURN c.*);", info.tableName,
-            info.stopWords);
+        query += std::format("CREATE NODE TABLE {} (sw STRING, PRIMARY KEY(sw));",
+            StringUtils::quoteIdentifier(info.tableName));
+        query += std::format("COPY {} FROM (MATCH (c:{}) RETURN c.*);",
+            StringUtils::quoteIdentifier(info.tableName),
+            StringUtils::quoteIdentifier(info.stopWords));
     } break;
     case StopWordsSource::FILE: {
-        query +=
-            std::format("CREATE NODE TABLE `{}` (sw STRING, PRIMARY KEY(sw));", info.tableName);
-        query += std::format("COPY `{}` FROM '{}';", info.tableName, info.stopWords);
+        query += std::format("CREATE NODE TABLE {} (sw STRING, PRIMARY KEY(sw));",
+            StringUtils::quoteIdentifier(info.tableName));
+        query += std::format("COPY {} FROM '{}';", StringUtils::quoteIdentifier(info.tableName),
+            FTSUtils::escapeCypherString(info.stopWords));
     } break;
     default:
         UNREACHABLE_CODE;
     }
     return query;
-}
-
-static std::string formatStrInCypher(const std::string& input) {
-    std::string result;
-    for (char c : input) {
-        if (c == '\\' || c == '\'') {
-            result += '\\';
-        }
-        result += c;
-    }
-    return result;
 }
 
 std::string createFTSIndexQuery(ClientContext& context, const TableFuncBindData& bindData) {
@@ -266,18 +257,17 @@ std::string createFTSIndexQuery(ClientContext& context, const TableFuncBindData&
         context.setUseInternalCatalogEntry(prevUseInternalCatalogEntry);
         throw;
     }
-    // Create the tokenize macro unless one already exists (a residue macro is reused;
-    // dropping it is avoided: macro-drop WAL replay is currently broken engine-side).
-    if (!catalog::Catalog::Get(context)->containsMacro(transaction::Transaction::Get(context),
-            FTSUtils::getTokenizeMacroName(tableID, indexName))) {
-        // TOKENIZE(text, tokenizer, extra_param)
-        query += std::format(R"(CREATE MACRO `{}`(query) AS
+    // An existing tokenize macro comes from IMPORT DATABASE, an interrupted CREATE, or an index of
+    // the same name dropped by an earlier version; it is replaced so the bulk build tokenizes with
+    // this index's options.
+    query += FTSUtils::dropTokenizeMacroQuery(context, tableID, indexName);
+    // TOKENIZE(text, tokenizer, extra_param)
+    query += std::format(R"(CREATE MACRO {}(query) AS
                             TOKENIZE(lower(regexp_replace(CAST(query as STRING), '{}', ' ', 'g')), '{}', '{}');)",
-            FTSUtils::getTokenizeMacroName(tableID, indexName),
-            formatStrInCypher(ftsBindData->createFTSConfig.ignorePattern),
-            ftsBindData->createFTSConfig.tokenizerInfo.tokenizer,
-            ftsBindData->createFTSConfig.tokenizerInfo.jiebaDictDir);
-    }
+        StringUtils::quoteIdentifier(FTSUtils::getTokenizeMacroName(tableID, indexName)),
+        FTSUtils::escapeCypherString(ftsBindData->createFTSConfig.ignorePattern),
+        FTSUtils::escapeCypherString(ftsBindData->createFTSConfig.tokenizerInfo.tokenizer),
+        FTSUtils::escapeCypherString(ftsBindData->createFTSConfig.tokenizerInfo.jiebaDictDir));
 
     // Create the stop words table if not exists, or the user is not using the default english
     // one.
@@ -286,79 +276,89 @@ std::string createFTSIndexQuery(ClientContext& context, const TableFuncBindData&
     // Create the terms_in_doc table which servers as a temporary table to store the
     // relationship between terms and docs.
     auto appearsInfoTableName = FTSUtils::getAppearsInfoTableName(tableID, indexName);
-    query += std::format("CREATE NODE TABLE `{}` (ID SERIAL, term string, docID INT64, primary "
+    query += std::format("CREATE NODE TABLE {} (ID SERIAL, term string, docID INT64, primary "
                          "key(ID));",
-        appearsInfoTableName);
+        StringUtils::quoteIdentifier(appearsInfoTableName));
     auto tableName = ftsBindData->tableName;
     auto tableEntry = catalog::Catalog::Get(context)->getTableCatalogEntry(
         transaction::Transaction::Get(context), tableName);
     for (auto& property : ftsBindData->propertyIDs) {
         auto propertyName = tableEntry->getProperty(property).getName();
-        query += std::format("COPY `{}` FROM "
-                             "(MATCH (b:`{}`) "
-                             "WITH `{}`(b.{}) AS tk, OFFSET(ID(b)) AS id "
+        query += std::format("COPY {} FROM "
+                             "(MATCH (b:{}) "
+                             "WITH {}(b.{}) AS tk, OFFSET(ID(b)) AS id "
                              "UNWIND tk AS t "
                              "WITH t AS t1, id AS id1 "
                              "WHERE t1 is NOT NULL AND SIZE(t1) > 0 AND "
-                             "NOT EXISTS {{MATCH (s:`{}` {{sw: t1}})}} "
+                             "NOT EXISTS {{MATCH (s:{} {{sw: t1}})}} "
                              "RETURN STEM(t1, '{}'), id1);",
-            appearsInfoTableName, tableName, FTSUtils::getTokenizeMacroName(tableID, indexName),
-            propertyName, ftsBindData->createFTSConfig.stopWordsTableInfo.tableName,
-            ftsBindData->createFTSConfig.stemmer);
+            StringUtils::quoteIdentifier(appearsInfoTableName),
+            StringUtils::quoteIdentifier(tableName),
+            StringUtils::quoteIdentifier(FTSUtils::getTokenizeMacroName(tableID, indexName)),
+            StringUtils::quoteIdentifier(propertyName),
+            StringUtils::quoteIdentifier(ftsBindData->createFTSConfig.stopWordsTableInfo.tableName),
+            FTSUtils::escapeCypherString(ftsBindData->createFTSConfig.stemmer));
     }
 
     auto docsTableName = FTSUtils::getDocsTableName(tableID, indexName);
     // Create the docs table which records the number of words in each document.
-    query += std::format("CREATE NODE TABLE `{}` (docID INT64, len UINT64, primary key(docID));",
-        docsTableName);
-    query += std::format("COPY `{}` FROM "
-                         "(MATCH (t:`{}`) "
+    query += std::format("CREATE NODE TABLE {} (docID INT64, len UINT64, primary key(docID));",
+        StringUtils::quoteIdentifier(docsTableName));
+    query += std::format("COPY {} FROM "
+                         "(MATCH (t:{}) "
                          "RETURN t.docID, CAST(count(t) AS UINT64)); ",
-        docsTableName, appearsInfoTableName);
+        StringUtils::quoteIdentifier(docsTableName),
+        StringUtils::quoteIdentifier(appearsInfoTableName));
 
     auto termsTableName = FTSUtils::getTermsTableName(tableID, indexName);
     // Create the dic table which records all distinct terms and their document frequency.
-    query += std::format("CREATE NODE TABLE `{}` (term STRING, df UINT64, PRIMARY KEY(term));",
-        termsTableName);
-    query += std::format("COPY `{}` FROM "
-                         "(MATCH (t:`{}`) "
+    query += std::format("CREATE NODE TABLE {} (term STRING, df UINT64, PRIMARY KEY(term));",
+        StringUtils::quoteIdentifier(termsTableName));
+    query += std::format("COPY {} FROM "
+                         "(MATCH (t:{}) "
                          "RETURN t.term, CAST(count(distinct t.docID) AS UINT64));",
-        termsTableName, appearsInfoTableName);
+        StringUtils::quoteIdentifier(termsTableName),
+        StringUtils::quoteIdentifier(appearsInfoTableName));
 
     auto appearsInTableName = FTSUtils::getAppearsInTableName(tableID, indexName);
     // Finally, create a terms table that records the documents in which the terms appear, along
     // with the frequency of each term.
-    query += std::format("CREATE REL TABLE `{}` (FROM `{}` TO `{}`, tf UINT64);",
-        appearsInTableName, termsTableName, docsTableName);
-    query += std::format("COPY `{}` FROM ("
-                         "MATCH (b:`{}`) "
+    query += std::format("CREATE REL TABLE {} (FROM {} TO {}, tf UINT64);",
+        StringUtils::quoteIdentifier(appearsInTableName),
+        StringUtils::quoteIdentifier(termsTableName), StringUtils::quoteIdentifier(docsTableName));
+    query += std::format("COPY {} FROM ("
+                         "MATCH (b:{}) "
                          "RETURN b.term, b.docID, CAST(count(*) as UINT64));",
-        appearsInTableName, appearsInfoTableName);
+        StringUtils::quoteIdentifier(appearsInTableName),
+        StringUtils::quoteIdentifier(appearsInfoTableName));
 
     // Drop the intermediate terms_in_doc table.
-    query += std::format("DROP TABLE `{}`;", appearsInfoTableName);
+    query += std::format("DROP TABLE {};", StringUtils::quoteIdentifier(appearsInfoTableName));
     std::string properties = "[";
     for (auto i = 0u; i < ftsBindData->propertyIDs.size(); i++) {
-        properties +=
-            std::format("'{}'", tableEntry->getProperty(ftsBindData->propertyIDs[i]).getName());
+        auto propertyName = tableEntry->getProperty(ftsBindData->propertyIDs[i]).getName();
+        properties += std::format("'{}'", FTSUtils::escapeCypherString(propertyName));
         if (i != ftsBindData->propertyIDs.size() - 1) {
             properties += ", ";
         }
     }
     properties += "]";
     std::string params;
-    params += std::format("stemmer := '{}', ", ftsBindData->createFTSConfig.stemmer);
+    params += std::format("stemmer := '{}', ",
+        FTSUtils::escapeCypherString(ftsBindData->createFTSConfig.stemmer));
     params += std::format("stopWords := '{}', ",
-        ftsBindData->createFTSConfig.stopWordsTableInfo.stopWords);
+        FTSUtils::escapeCypherString(ftsBindData->createFTSConfig.stopWordsTableInfo.stopWords));
     params += std::format("ignore_pattern := '{}', ",
-        formatStrInCypher(ftsBindData->createFTSConfig.ignorePattern));
-    params +=
-        std::format("tokenizer := '{}', ", ftsBindData->createFTSConfig.tokenizerInfo.tokenizer);
+        FTSUtils::escapeCypherString(ftsBindData->createFTSConfig.ignorePattern));
+    params += std::format("tokenizer := '{}', ",
+        FTSUtils::escapeCypherString(ftsBindData->createFTSConfig.tokenizerInfo.tokenizer));
     params += std::format("jieba_dict_dir := '{}'",
-        formatStrInCypher(ftsBindData->createFTSConfig.tokenizerInfo.jiebaDictDir));
-    query += std::format("CALL _CREATE_FTS_INDEX('{}', '{}', {}, {});", tableName, indexName,
+        FTSUtils::escapeCypherString(ftsBindData->createFTSConfig.tokenizerInfo.jiebaDictDir));
+    query += std::format("CALL _CREATE_FTS_INDEX('{}', '{}', {}, {});",
+        FTSUtils::escapeCypherString(tableName), FTSUtils::escapeCypherString(indexName),
         properties, params);
-    query += std::format("RETURN 'Index {} has been created.' as result;", ftsBindData->indexName);
+    query += std::format("RETURN 'Index {} has been created.' as result;",
+        FTSUtils::escapeCypherString(indexName));
     return query;
 }
 
@@ -433,6 +433,15 @@ static offset_t tableFunc(const TableFuncInput& input, TableFuncOutput&) {
         nodeTable->getNumTotalRows(transaction::Transaction::Get(*context.clientContext)));
     auto onDiskIndex = std::make_unique<FTSIndex>(std::move(indexInfo), std::move(storageInfo),
         std::move(ftsConfig), context.clientContext);
+    // A torn DROP_FTS_INDEX (process died before the drop was checkpointed) leaves the
+    // index holder in the NodeTable while its catalog entry is gone: WAL replay removes
+    // only the catalog entry, so a later CREATE sees a holder with no catalog entry (the
+    // "cross-set residue" state documented on NodeTable::addIndex). The catalog existence
+    // check has already passed at bind time, so any holder with this name is residue —
+    // clear it before installing the rebuilt index. dropIndex() tolerates both loaded and
+    // unloaded holders and retains the old one's page range for reclaim at the next
+    // checkpoint.
+    nodeTable->dropIndex(bindData.indexName);
     if (!context.clientContext->isInMemory()) {
         // We currently can't support FSM reclaiming when rolling back checkpoint
         // so we don't use the optimistic allocator here

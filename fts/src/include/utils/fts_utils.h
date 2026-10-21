@@ -26,6 +26,9 @@ struct FTSUtils {
 
     static bool hasWildcardPattern(const std::string& term);
 
+    // Escapes backslashes and single quotes for a single-quoted Cypher string literal.
+    static std::string escapeCypherString(const std::string& str);
+
     static std::vector<std::string> stemTerms(std::vector<std::string> terms,
         const FTSConfig& config, storage::MemoryManager* mm, storage::NodeTable* stopwordsTable,
         transaction::Transaction* tx, bool isConjunctive, bool isQuery);
@@ -68,6 +71,11 @@ struct FTSUtils {
     }
 
     static std::vector<std::string> tokenizeString(std::string& str, const FTSConfig& tokenizer);
+
+    // DROP MACRO IF EXISTS throws when the macro is missing, so the statement is only emitted for
+    // an existing macro.
+    static std::string dropTokenizeMacroQuery(const main::ClientContext& context,
+        common::table_id_t tableID, const std::string& indexName);
 
     // Returns a process-wide cached jieba instance for the given dictionary directory.
     // The first call for a directory loads the dictionaries (~0.5s); subsequent calls

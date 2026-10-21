@@ -1,0 +1,56 @@
+-DATASET CSV empty-db
+
+--
+
+# EXPORT DATABASE keeps ignore_pattern and tokenizer, so the imported index normalizes queries and
+# new rows the way the original did.
+-CASE ExportKeepsOptions
+-SKIP_IN_MEM
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT CREATE NODE TABLE Doc(id INT64 PRIMARY KEY, body STRING);
+---- ok
+-STATEMENT CREATE (:Doc {id: 1, body: 'order 12345'}), (:Doc {id: 2, body: '我来到北京清华大学'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('Doc', 'digits', ['body'], ignore_pattern := '[\\s!\']+', stemmer := 'porter');
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('Doc', 'zh', ['body'], tokenizer := 'jieba');
+---- ok
+-STATEMENT EXPORT DATABASE '${LBUG_EXPORT_DB_DIRECTORY}_fts/export_options'
+---- ok
+-IMPORT_DATABASE "${LBUG_EXPORT_DB_DIRECTORY}_fts/export_options"
+-STATEMENT IMPORT DATABASE '${LBUG_EXPORT_DB_DIRECTORY}_fts/export_options';
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'digits', '12345') RETURN node.id;
+---- 1
+1
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'zh', '北京清华') RETURN node.id;
+---- 1
+2
+-STATEMENT CREATE (:Doc {id: 3, body: '清华大学很好'});
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'zh', '清华') RETURN node.id ORDER BY node.id;
+---- 2
+2
+3
+-STATEMENT CREATE (:Doc {id: 4, body: 'ref 67890'});
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'digits', '67890') RETURN node.id;
+---- 1
+4
+
+# A stopwords file path is quoted correctly, even when it contains a quote.
+-CASE StopWordsPathWithQuote
+-LOAD_DYNAMIC_EXTENSION fts
+-STATEMENT COPY (RETURN 'order') TO '${LBUG_EXPORT_DB_DIRECTORY}_it\'s_stopwords.csv' (header=false);
+---- ok
+-STATEMENT CREATE NODE TABLE Doc(id INT64 PRIMARY KEY, body STRING);
+---- ok
+-STATEMENT CREATE (:Doc {id: 1, body: 'order shipped'});
+---- ok
+-STATEMENT CALL CREATE_FTS_INDEX('Doc', 'idx', ['body'], stopwords := '${LBUG_EXPORT_DB_DIRECTORY}_it\'s_stopwords.csv');
+---- ok
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'idx', 'order') RETURN node.id;
+---- 0
+-STATEMENT CALL QUERY_FTS_INDEX('Doc', 'idx', 'shipped') RETURN node.id;
+---- 1
+1
