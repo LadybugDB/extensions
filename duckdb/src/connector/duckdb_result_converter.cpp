@@ -98,7 +98,7 @@ void convertDuckDBVectorToVector<struct_entry_t>(duckdb::Vector& duckDBVector, V
         // Special handling for union datatype, since duckdb stores tagId as INT8
         idx++;
         auto duckDBData =
-            duckdb::FlatVector::GetDataMutable<uint8_t>(*duckdbChildrenVectors[0]);
+            duckdb::FlatVector::GetDataMutable<uint8_t>(duckdbChildrenVectors[0]);
         auto validityMasks = duckdb::FlatVector::Validity(duckDBVector);
         for (auto i = 0u; i < numValuesToCopy; i++) {
             UnionVector::getTagVector(&result)->setValue(i, (uint16_t)duckDBData[i]);
@@ -111,7 +111,7 @@ void convertDuckDBVectorToVector<struct_entry_t>(duckdb::Vector& duckDBVector, V
         auto fieldVector = StructVector::getFieldVector(&result, idx);
         DuckDBResultConverter::getDuckDBVectorConversionFunc(
             fieldVector->dataType.getPhysicalType(), conversionFunc);
-        conversionFunc(*duckdbChildVector, *fieldVector, numValuesToCopy);
+        conversionFunc(duckdbChildVector, *fieldVector, numValuesToCopy);
     }
 }
 

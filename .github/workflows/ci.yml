@@ -121,10 +121,14 @@ jobs:
 
     steps:
       # ── Source checkouts ──────────────────────────────────────────
+      # TEMPORARY: track the ladybug DuckDB-2.0.0 PR branch until it merges
+      # to main (it carries the AttachedDatabase::executeQuery base-class
+      # fix this CI needs). Revert to default branch afterwards.
       - name: Checkout ladybug
         uses: actions/checkout@v4
         with:
           repository: LadybugDB/ladybug
+          ref: fix-duckdb-osx-download
           fetch-depth: 1
           path: ladybug
 
