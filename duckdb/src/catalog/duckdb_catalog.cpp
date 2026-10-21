@@ -326,7 +326,7 @@ static bool getTableInfo(const DuckDBConnector& connector, const std::string& ta
     if (!firstChunk || firstChunk->size() == 0) {
         return false;
     }
-    if (isPlaceholderSchema(result->names, *firstChunk, result->RowCount())) {
+    if (isPlaceholderSchema(result->GetNames(), *firstChunk, result->RowCount())) {
         std::unique_ptr<duckdb::QueryResult> schemaResult;
         try {
             schemaResult = connector.executeQuery(
@@ -338,12 +338,12 @@ static bool getTableInfo(const DuckDBConnector& connector, const std::string& ta
             }
             throw;
         }
-        columnTypes.reserve(schemaResult->types.size());
-        columnNames.reserve(schemaResult->names.size());
-        for (auto& name : schemaResult->names) {
+        columnTypes.reserve(schemaResult->GetTypes().size());
+        columnNames.reserve(schemaResult->GetNames().size());
+        for (auto& name : schemaResult->GetNames()) {
             columnNames.push_back(name.GetIdentifierName());
         }
-        for (auto& type : schemaResult->types) {
+        for (auto& type : schemaResult->GetTypes()) {
             try {
                 columnTypes.push_back(DuckDBTypeConverter::convertDuckDBType(type.ToString()));
             } catch (common::BinderException&) {

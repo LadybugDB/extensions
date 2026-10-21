@@ -99,7 +99,7 @@ public:
                 if (!chunk || chunk->size() == 0) {
                     continue;
                 }
-                if (isPlaceholderSchema(result->names, *chunk, result->RowCount())) {
+                if (isPlaceholderSchema(result->GetNames(), *chunk, result->RowCount())) {
                     // Use the catalog and schema of the matched table, including
                     // for two-part references outside DuckDB's search path.
                     const auto qualifiedName = std::format("{}.{}.{}",
@@ -110,8 +110,8 @@ public:
                         auto schemaResult = connector->executeQuery(
                             std::format("SELECT * FROM {} LIMIT 0", qualifiedName));
                         std::vector<std::string> schemaColumnNames;
-                        schemaColumnNames.reserve(schemaResult->names.size());
-                        for (auto& name : schemaResult->names) {
+                        schemaColumnNames.reserve(schemaResult->GetNames().size());
+                        for (auto& name : schemaResult->GetNames()) {
                             schemaColumnNames.push_back(name.GetIdentifierName());
                         }
                         return schemaColumnNames;
