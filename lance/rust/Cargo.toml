@@ -1,0 +1,28 @@
+[package]
+name = "lance_ladybug_ffi"
+version = "0.1.0"
+publish = false
+edition = "2021"
+
+[lib]
+name = "lance_ladybug_ffi"
+crate-type = ["staticlib"]
+
+[profile.release]
+lto = "thin"
+strip = true
+panic = "abort"
+
+[profile.dev]
+panic = "abort"
+
+[dependencies]
+# Same Lance/Arrow versions as lance-duckdb main: the reader half of that
+# engine, without the DuckDBQFII/DataFusion query layer.
+lance = { version = "13.0.0", default-features = false, features = ["aws", "azure", "gcp", "oss", "huggingface"] }
+lance-core = "13.0.0"
+arrow = { version = "58.0.0", features = ["ffi"] }
+arrow-array = "58.0.0"
+arrow-schema = "58.0.0"
+futures = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

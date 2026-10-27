@@ -22,10 +22,9 @@ struct LanceConstants {
 
     static constexpr std::string_view DATASET_SUFFIX = ".lance";
 
-    // Node-table scan morsel sizing. Morsels are row ranges read with
-    // LIMIT/OFFSET, which lance-duckdb pushes into the Lance scan, so each
-    // morsel is one efficient range query. Bounded to keep per-morsel
-    // materialized DuckDB results small.
+    // Node-table scan morsels are row ranges read with limit/offset pushed
+    // into the Lance scan, so each morsel is one efficient range query.
+    // Bounded to keep per-morsel materialized results small.
     static constexpr uint64_t MORSEL_TARGET_ROWS = 8192;
     static constexpr uint64_t MAX_MORSELS = 4096;
 };

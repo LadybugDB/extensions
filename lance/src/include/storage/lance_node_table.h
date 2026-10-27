@@ -19,8 +19,7 @@ namespace lance_extension {
 // `<dir>/nodes_<table>.lance`, or a single `<file>.lance` dataset when storage
 // points at one directly.
 struct LanceNodeTableScanState final : storage::ColumnarNodeTableScanState {
-    std::shared_ptr<LanceConnector> connector;
-    std::string datasetPath;
+    std::shared_ptr<LanceDataset> dataset;
     std::unique_ptr<LanceReader> reader;
     // Current morsel: global row range [morselStart, morselStart + morselLimit).
     uint64_t morselStart = 0;
@@ -94,13 +93,13 @@ protected:
     common::row_idx_t getTotalRowCount(const transaction::Transaction* transaction) const override;
 
 private:
-    std::shared_ptr<LanceConnector> connector;
     std::string datasetPath;
-    mutable std::mutex schemaMutex;
+    mutable std::mutex datasetMutex;
+    mutable std::shared_ptr<LanceDataset> dataset;
     mutable std::vector<LanceDatasetColumn> datasetSchema;
     mutable std::atomic<common::row_idx_t> cachedRowCount{common::INVALID_ROW_IDX};
 
-    void ensureSchemaLoaded(main::ClientContext* context) const;
+    std::shared_ptr<LanceDataset> ensureDataset(main::ClientContext* context) const;
     void checkCompatibility(main::ClientContext* context) const;
     void initReaderForMorsel(transaction::Transaction* transaction,
         LanceNodeTableScanState& scanState) const;

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <iostream>
 #include <limits>
 #include <mutex>
 #include <queue>
@@ -35,9 +36,7 @@ LanceRelTable::LanceRelTable(RelGroupCatalogEntry* relGroupEntry, table_id_t fro
     table_id_t toTableID, const StorageManager* storageManager, MemoryManager* memoryManager,
     main::ClientContext* context)
     : ColumnarRelTableBase{relGroupEntry, fromTableID, toTableID, storageManager, memoryManager},
-      connector{std::make_shared<LanceConnector>()}, layout{LanceRelTableLayout::CSR} {
-    connector->connect("" /* inMemDB */, "" /* defaultCatalogName */, "" /* defaultSchemaName */,
-        context);
+      layout{LanceRelTableLayout::CSR} {
     const auto& storage = relGroupEntry->getStorage();
     if (LanceUtils::isSingleDatasetPath(storage)) {
         layout = LanceRelTableLayout::FLAT;
@@ -50,53 +49,74 @@ LanceRelTable::LanceRelTable(RelGroupCatalogEntry* relGroupEntry, table_id_t fro
     // Object-store datasets are validated lazily at scan time; local datasets fail fast
     // here, mirroring icebug-disk.
     if (common::LocalFileSystem::isLocalPath(indicesDatasetPath)) {
-        ensureSchemasLoaded(context);
+        ensureDataset(context);
         checkCompatibility(context);
     }
 }
 
-void LanceRelTable::ensureSchemasLoaded(main::ClientContext* context) const {
-    if (!indicesSchema.empty()) {
-        return;
+std::shared_ptr<LanceDataset> LanceRelTable::ensureDataset(main::ClientContext* context) const {
+    (void)context;
+    if (dataset) {
+        return dataset;
     }
-    std::lock_guard lock{schemaMutex};
-    if (!indicesSchema.empty()) {
-        return;
+    std::lock_guard lock{datasetMutex};
+    if (!dataset) {
+        dataset = std::make_shared<LanceDataset>(indicesDatasetPath);
+        indicesSchema = dataset->schema();
     }
-    indicesSchema = LanceReader::fetchSchema(*connector, context, indicesDatasetPath);
+    return dataset;
+}
+
+static void requireExactType(const std::string& datasetPath, const std::string& tableName,
+    const std::string& columnName, const LogicalType& datasetType, const LogicalType& catalogType) {
+    if (datasetType != catalogType) {
+        throw RuntimeException{"Lance dataset '" + datasetPath + "' column '" + columnName +
+                               "' has type " + datasetType.toString() + " but table '" + tableName +
+                               "' declares " + catalogType.toString()};
+    }
 }
 
 void LanceRelTable::checkCompatibility(main::ClientContext* context) const {
+    const auto version = dataset->versionString();
+    if (version.empty()) {
+        std::cerr << "Warning: " << indicesDatasetPath
+                  << ": Lance dataset is missing lance_version schema metadata; continuing "
+                     "without version compatibility check"
+                  << std::endl;
+    } else if (version != LanceConstants::CURRENT_VERSION) {
+        throw RuntimeException{
+            indicesDatasetPath +
+            ": current ladybug version does not support lance_version: " + version};
+    }
     if (indicesSchema.empty()) {
         throw RuntimeException{"Lance dataset '" + indicesDatasetPath + "' has no columns"};
     }
-    std::vector<LanceReader::ProjectedColumn> trial;
+    const auto& tableName = relGroupEntry->getName();
     if (layout == LanceRelTableLayout::FLAT) {
         if (indicesSchema.size() < 2) {
             throw RuntimeException{"Flat Lance rel dataset '" + indicesDatasetPath +
                                    "' requires source and target offset columns"};
         }
-        trial.push_back(
-            LanceReader::ProjectedColumn{indicesSchema[0].name, "BIGINT", LogicalType::INT64()});
-        trial.push_back(
-            LanceReader::ProjectedColumn{indicesSchema[1].name, "BIGINT", LogicalType::INT64()});
+        requireExactType(indicesDatasetPath, tableName, indicesSchema[0].name,
+            indicesSchema[0].ladybugType, LogicalType::INT64());
+        requireExactType(indicesDatasetPath, tableName, indicesSchema[1].name,
+            indicesSchema[1].ladybugType, LogicalType::INT64());
     } else {
-        // Column 0 is the destination node offset.
-        trial.push_back(
-            LanceReader::ProjectedColumn{indicesSchema[0].name, "BIGINT", LogicalType::INT64()});
-        auto indptrSchema = LanceReader::fetchSchema(*connector, context, indptrDatasetPath);
+        // Column 0 is the destination node offset; the indptr dataset holds one
+        // integer column with one entry per source node plus a sentinel.
+        requireExactType(indicesDatasetPath, tableName, indicesSchema[0].name,
+            indicesSchema[0].ladybugType, LogicalType::INT64());
+        auto indptrDataset = std::make_shared<LanceDataset>(indptrDatasetPath);
+        const auto indptrSchema = indptrDataset->schema();
         if (indptrSchema.empty()) {
             throw RuntimeException{
                 "Lance indptr dataset '" + indptrDatasetPath + "' has no columns"};
         }
-        auto conn = connector->newConnection(context);
-        connector->executeOn(*conn,
-            "SELECT CAST(" + LanceConnector::quoteIdent(indptrSchema[0].name) +
-                " AS BIGINT) FROM '" + LanceConnector::escapeLiteral(indptrDatasetPath) +
-                "' LIMIT 0");
+        requireExactType(indptrDatasetPath, tableName, indptrSchema[0].name,
+            indptrSchema[0].ladybugType, LogicalType::INT64());
     }
-    // Edge properties match by name; every present property must have a mappable type.
-    // Missing properties read as NULL, mirroring icebug-disk.
+    // Edge properties match by name and must match exactly; missing properties
+    // read as NULL.
     for (auto i = 0u; i < relGroupEntry->getNumProperties(); ++i) {
         const auto& prop = relGroupEntry->getProperty(i);
         if (prop.getType().getLogicalTypeID() == LogicalTypeID::INTERNAL_ID) {
@@ -107,22 +127,9 @@ void LanceRelTable::checkCompatibility(main::ClientContext* context) const {
         if (it == indicesSchema.end()) {
             continue;
         }
-        trial.push_back(LanceReader::ProjectedColumn{it->name,
-            LanceReader::toDuckDBCastSpelling(prop.getType()), prop.getType().copy()});
+        requireExactType(indicesDatasetPath, tableName, it->name, it->ladybugType, prop.getType());
     }
-    // Trial query over zero rows validates that every CAST binds.
-    std::string selectList;
-    for (auto& col : trial) {
-        if (!selectList.empty()) {
-            selectList += ", ";
-        }
-        selectList +=
-            "CAST(" + LanceConnector::quoteIdent(col.datasetName) + " AS " + col.castSpelling + ")";
-    }
-    auto conn = connector->newConnection(context);
-    connector->executeOn(*conn, "SELECT " + selectList + " FROM '" +
-                                    LanceConnector::escapeLiteral(indicesDatasetPath) +
-                                    "' LIMIT 0");
+    (void)context;
 }
 
 void LanceRelTable::ensureReader(Transaction* transaction,
@@ -134,13 +141,10 @@ void LanceRelTable::ensureReader(Transaction* transaction,
     if (!context) {
         throw RuntimeException("Invalid client context for Lance rel scan initialization");
     }
-    ensureSchemasLoaded(context);
+    auto lanceDataset = ensureDataset(context);
     // Projection: endpoint offset column(s) first, then edge properties present in the
     // dataset (by name), in catalog column order. outputToCached maps each requested
     // output position to its cached-batch position (-1 = NULL fill).
-    if (indicesSchema.empty()) {
-        throw RuntimeException{"Lance dataset '" + indicesDatasetPath + "' has no columns"};
-    }
     std::vector<LanceReader::ProjectedColumn> projection;
     std::vector<column_id_t> projColumnIDs;
     if (layout == LanceRelTableLayout::FLAT) {
@@ -149,14 +153,14 @@ void LanceRelTable::ensureReader(Transaction* transaction,
                                    "' requires source and target offset columns"};
         }
         projection.push_back(
-            LanceReader::ProjectedColumn{indicesSchema[0].name, "BIGINT", LogicalType::INT64()});
+            LanceReader::ProjectedColumn{indicesSchema[0].name, LogicalType::INT64()});
         projColumnIDs.push_back(INVALID_COLUMN_ID);
         projection.push_back(
-            LanceReader::ProjectedColumn{indicesSchema[1].name, "BIGINT", LogicalType::INT64()});
+            LanceReader::ProjectedColumn{indicesSchema[1].name, LogicalType::INT64()});
         projColumnIDs.push_back(INVALID_COLUMN_ID);
     } else {
         projection.push_back(
-            LanceReader::ProjectedColumn{indicesSchema[0].name, "BIGINT", LogicalType::INT64()});
+            LanceReader::ProjectedColumn{indicesSchema[0].name, LogicalType::INT64()});
         projColumnIDs.push_back(INVALID_COLUMN_ID);
     }
     for (auto i = 0u; i < relGroupEntry->getNumProperties(); ++i) {
@@ -169,12 +173,12 @@ void LanceRelTable::ensureReader(Transaction* transaction,
         if (it == indicesSchema.end()) {
             continue;
         }
-        projection.push_back(LanceReader::ProjectedColumn{it->name,
-            LanceReader::toDuckDBCastSpelling(prop.getType()), prop.getType().copy()});
+        projection.push_back(LanceReader::ProjectedColumn{it->name, prop.getType().copy()});
         projColumnIDs.push_back(relGroupEntry->getColumnID(i));
     }
-    scanState.reader = std::make_unique<LanceReader>(connector, indicesDatasetPath,
-        std::move(projection), context);
+    scanState.dataset = lanceDataset;
+    scanState.reader =
+        std::make_unique<LanceReader>(std::move(lanceDataset), std::move(projection));
     scanState.projColumnIDs = std::move(projColumnIDs);
     scanState.outputToCached.assign(scanState.columnIDs.size(), -1);
     for (size_t outCol = 0; outCol < scanState.columnIDs.size(); ++outCol) {
@@ -251,7 +255,6 @@ void LanceRelTable::initScanState(Transaction* transaction, TableScanState& scan
     // Range-limit the indices scan to the dataset rows that can contain edges of this
     // bound-node batch (CSR is sorted by source node). FWD only; BWD bound nodes are
     // targets scattered through the file. Mirrors IceDiskRelTable.
-    bool rangeLimited = false;
     if (layout == LanceRelTableLayout::CSR && lanceScanState.direction == RelDataDirection::FWD &&
         !indptrData.empty() && !lanceScanState.boundNodeOffsets.empty()) {
         common::offset_t minNode = std::numeric_limits<common::offset_t>::max();
@@ -264,7 +267,6 @@ void LanceRelTable::initScanState(Transaction* transaction, TableScanState& scan
             auto endIdx = std::min<uint64_t>((uint64_t)maxNode + 1, indptrData.size() - 1);
             startRow = (uint64_t)indptrData[minNode];
             numRows = (uint64_t)indptrData[endIdx] - startRow;
-            rangeLimited = true;
         }
     }
     lanceScanState.currentBatchStartOffset = static_cast<common::offset_t>(startRow);
@@ -291,15 +293,15 @@ void LanceRelTable::loadIndptrData(Transaction* transaction) const {
     }
     {
         auto context = transaction->getClientContext();
-        ensureSchemasLoaded(context);
-        auto indptrSchema = LanceReader::fetchSchema(*connector, context, indptrDatasetPath);
+        auto indptrDataset = std::make_shared<LanceDataset>(indptrDatasetPath);
+        const auto indptrSchema = indptrDataset->schema();
         if (indptrSchema.empty()) {
             throw RuntimeException("Indptr Lance dataset has no columns");
         }
         std::vector<LanceReader::ProjectedColumn> projection;
         projection.push_back(
-            LanceReader::ProjectedColumn{indptrSchema[0].name, "BIGINT", LogicalType::INT64()});
-        LanceReader reader(connector, indptrDatasetPath, std::move(projection), context);
+            LanceReader::ProjectedColumn{indptrSchema[0].name, LogicalType::INT64()});
+        LanceReader reader(indptrDataset, std::move(projection));
         reader.openRange(0, UINT64_MAX);
         auto memoryManager = MemoryManager::Get(*context);
         DataChunk chunk(1);
@@ -563,8 +565,7 @@ row_idx_t LanceRelTable::getTotalRowCount(const Transaction* transaction) const 
         return 0;
     }
     try {
-        const auto count =
-            static_cast<row_idx_t>(LanceReader::countRows(*connector, context, indicesDatasetPath));
+        const auto count = static_cast<row_idx_t>(ensureDataset(context)->countRows());
         cachedRowCount.store(count, std::memory_order_relaxed);
         return count;
     } catch (const std::exception&) {

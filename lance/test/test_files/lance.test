@@ -203,6 +203,11 @@ Runtime exception: Lance dataset '${LBUG_ROOT_DIRECTORY}/extension/lance/test/la
 ---- error
 Binder exception: Unsupported storage format 'foo'. Valid options are: icebug-disk, lance.
 
+-LOG WrongVersionFails
+-STATEMENT CREATE NODE TABLE t5(id INT32 PRIMARY KEY) WITH (storage = '${LBUG_ROOT_DIRECTORY}/extension/lance/test/lance_data/nodes_wrongversion.lance', format = 'lance')
+---- error
+Runtime exception: ${LBUG_ROOT_DIRECTORY}/extension/lance/test/lance_data/nodes_wrongversion.lance: current ladybug version does not support lance_version: v999
+
 -CASE LanceRemoteURIDeferred
 -LOAD_DYNAMIC_EXTENSION lance
 -LOG RemoteCreateSucceeds

@@ -47,15 +47,15 @@ COPY person FROM 'graph/nodes_user.lance' (file_format = 'lance');
 
 ## How it works
 
-**Lance I/O goes through DuckDB.** The extension embeds an in-memory DuckDB
-that loads the `lance` core extension — i.e. the exact engine built by
-[lance-duckdb](https://github.com/lance-duckdb) (this extension tracks what
-DuckDB `v2.0-cyanoptera` ships, the same line lance-duckdb `main` targets).
-Reads are range queries (`SELECT <casts> FROM '<path>.lance' LIMIT/OFFSET`)
-which lance-duckdb pushes into the Lance scan, so morsel and CSR range scans
-stay efficient. This mirrors how the `delta`/`iceberg` extensions reuse
-DuckDB's Delta/Iceberg extensions, and it means no Rust toolchain or Lance
-linkage is required to build or run this extension.
+**Lance I/O is native.** The extension links the Lance Rust crates directly
+(same versions as [lance-duckdb](https://github.com/lance-duckdb) `main`:
+Lance 13, Arrow 58) through a small C FFI (`rust/`: open/count/schema/scan
+to Arrow batches), with no DuckDB layer in between. Reads are dataset scans
+with projection + limit/offset pushed into Lance, so morsel and CSR range
+scans stay efficient; batches cross the FFI via the Arrow C data interface
+and decode with core's `ArrowConverter` (the same machinery backing
+`arrow://` tables). Building needs a Rust toolchain, protoc, and crates.io
+access (see `rust/`); the CMake build drives cargo automatically.
 
 **Storage layout mirrors icebug-disk** (`IceDiskNodeTable`/`IceDiskRelTable`
 are the templates for `LanceNodeTable`/`LanceRelTable`): positional node
@@ -70,7 +70,7 @@ properties read as NULL).
 **Plugging into core.** Storage table types cannot live behind a plain table
 function (graph traversal needs CSR extend, degree summaries, PK lookup), so
 core provides a small extension hook surface (see
-`src/include/storage/table/external_table_hooks.h`):
+`src/include/storage/table/external_table_hooks.h`, LadybugDB/ladybug#1445):
 
 - `StorageFormat::LANCE` + `ExternalTableHookRegistry` (factories + scan hooks,
   keyed by format and by table);
@@ -92,9 +92,9 @@ edge tables at query time. This extension takes the complementary,
 storage-first approach: the CSR (`indices` + `indptr`) is **materialized as
 Lance datasets on disk** (the icebug-disk layout translated to Lance), so
 graphs are portable files that any Lance reader can open, while traversal
-still resolves hops through CSR range lookups instead of joins. A native
-(Rust, zero-DuckDB) reader reusing lance-duckdb's `rust/` crates is the
-natural next step; the table layer is already decoupled behind `LanceReader`.
+still resolves hops through CSR range lookups instead of joins. Reads go
+through the extension's own native reader (`rust/` + `LanceReader`); a
+Rust-free build is not a goal.
 
 ## Regenerating test fixtures
 
@@ -102,16 +102,20 @@ natural next step; the table layer is already decoupled behind `LanceReader`.
 ./extension/lance/scripts/gen_test_data.sh
 ```
 
-regenerates `extension/lance/test/lance_data/` with the DuckDB CLI. Content
-mirrors `dataset/ice-disk-test` row-for-row.
+regenerates `extension/lance/test/lance_data/` with the extension's own Rust
+generator (`rust/examples/gen_fixtures.rs`, same Lance version as the reader).
+Content mirrors `dataset/ice-disk-test` row-for-row; every dataset is stamped
+with `lance_version = v1` schema metadata (plus a `v999` dataset for the
+version-mismatch error test).
 
 ## Limitations (v1)
 
 - Read-only tables; no `COPY ... TO ... (FORMAT lance)` write path yet (write
-  Lance datasets with DuckDB/pylance, or vote for the native writer).
-- `STRUCT`/`MAP`/`UNION` property columns are rejected at `CREATE` with a
-  clear error; scalars, `LIST`/`ARRAY` (incl. fixed-size vectors), temporal,
-  `UUID`, `DECIMAL`, and `BLOB` are supported.
+  Lance datasets with pylance/DuckDB, or vote for the native writer).
+- Declared property types must match the dataset exactly (no silent coercion;
+  endpoint offset columns must be `INT64`). Whatever core's Arrow converter
+  rejects (float16, time32/64, maps, ...) fails fast at `CREATE`; timezone-aware
+  timestamps and durations are rejected in the FFI for the same reason.
 - Object-store datasets skip validation at `CREATE` (credentials may be
   configured later) and fail at first scan, mirroring icebug-disk.
 - Semi-mask morsel skipping is not implemented (masks still filter); GDS

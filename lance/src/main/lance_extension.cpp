@@ -3,7 +3,6 @@
 #include "function/lance_scan.h"
 #include "main/client_context.h"
 #include "main/database.h"
-#include "main/duckdb_extension.h"
 #include "storage/lance_node_table.h"
 #include "storage/lance_rel_table.h"
 #include "storage/table/external_table_hooks.h"
@@ -14,7 +13,6 @@ namespace lance_extension {
 void LanceExtension::load(main::ClientContext* context) {
     auto& db = *context->getDatabase();
     extension::ExtensionUtils::addTableFunc<LanceScanFunction>(db);
-    duckdb_extension::DuckdbExtension::loadRemoteFSOptions(context);
     // Register Lance-backed table storage for StorageFormat::LANCE. The scan-state
     // rank (3) declares that Lance scan states extend the icebug-disk scan state and
     // therefore cover every lower-rank backend in shared multi-rel scans.

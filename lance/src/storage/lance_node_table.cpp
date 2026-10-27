@@ -1,6 +1,7 @@
 #include "storage/lance_node_table.h"
 
 #include <algorithm>
+#include <iostream>
 #include <mutex>
 
 #include "catalog/catalog_entry/node_table_catalog_entry.h"
@@ -30,64 +31,72 @@ LanceNodeTable::LanceNodeTable(const StorageManager* storageManager,
     const NodeTableCatalogEntry* nodeTableEntry, MemoryManager* memoryManager,
     main::ClientContext* context)
     : ColumnarNodeTableBase{storageManager, nodeTableEntry, memoryManager,
-          std::make_unique<LanceNodeTableScanSharedState>()},
-      connector{std::make_shared<LanceConnector>()} {
-    connector->connect("" /* inMemDB */, "" /* defaultCatalogName */, "" /* defaultSchemaName */,
-        context);
+          std::make_unique<LanceNodeTableScanSharedState>()} {
     const auto& storage = nodeTableEntry->getStorage();
     datasetPath = common::VirtualFileSystem::resolvePath(context,
         LanceUtils::constructNodeTablePath(storage, nodeTableEntry->getName()));
     // Object-store datasets are validated lazily at scan time (credentials may only be
     // configured later); local datasets fail fast here, mirroring icebug-disk.
     if (common::LocalFileSystem::isLocalPath(datasetPath)) {
-        ensureSchemaLoaded(context);
+        ensureDataset(context);
         checkCompatibility(context);
     }
 }
 
-void LanceNodeTable::ensureSchemaLoaded(main::ClientContext* context) const {
-    if (!datasetSchema.empty()) {
-        return;
+std::shared_ptr<LanceDataset> LanceNodeTable::ensureDataset(main::ClientContext* context) const {
+    (void)context;
+    if (dataset) {
+        return dataset;
     }
-    std::lock_guard lock{schemaMutex};
-    if (!datasetSchema.empty()) {
-        return;
+    std::lock_guard lock{datasetMutex};
+    if (!dataset) {
+        dataset = std::make_shared<LanceDataset>(datasetPath);
+        datasetSchema = dataset->schema();
     }
-    datasetSchema = LanceReader::fetchSchema(*connector, context, datasetPath);
+    return dataset;
 }
 
 void LanceNodeTable::checkCompatibility(main::ClientContext* context) const {
+    // Enforce the stamped schema version. Datasets without the marker predate
+    // versioning and keep working with a warning, mirroring icebug-disk.
+    const auto version = dataset->versionString();
+    if (version.empty()) {
+        std::cerr << "Warning: " << datasetPath
+                  << ": Lance dataset is missing lance_version schema metadata; continuing "
+                     "without version compatibility check"
+                  << std::endl;
+    } else if (version != LanceConstants::CURRENT_VERSION) {
+        throw RuntimeException{datasetPath + ": current ladybug version does not support " +
+                               "lance_version: " + version};
+    }
     // The primary key column must exist: node offsets are positional, but every filter
     // and lookup addresses nodes through the PK.
     const auto pkName = nodeTableCatalogEntry->getPrimaryKeyName();
-    const bool hasPK = std::any_of(datasetSchema.begin(), datasetSchema.end(),
+    const auto pkIt = std::find_if(datasetSchema.begin(), datasetSchema.end(),
         [&](const LanceDatasetColumn& col) { return col.name == pkName; });
-    if (!hasPK) {
+    if (pkIt == datasetSchema.end()) {
         throw RuntimeException{"Lance dataset '" + datasetPath + "' has no primary key column '" +
                                pkName + "' for node table '" + nodeTableCatalogEntry->getName() +
                                "'"};
     }
-    // Every catalog property present in the dataset must have a mappable type, and the
-    // full projection must bind (trial query over zero rows validates the CASTs).
-    std::string selectList;
+    // Declared properties present in the dataset must match exactly: values cross
+    // the FFI with dataset types, so any coercion would silently mistype them.
+    // Missing properties read as NULL, mirroring icebug-disk.
     for (auto i = 0u; i < nodeTableCatalogEntry->getNumProperties(); ++i) {
         const auto& prop = nodeTableCatalogEntry->getProperty(i);
         auto it = std::find_if(datasetSchema.begin(), datasetSchema.end(),
             [&](const LanceDatasetColumn& col) { return col.name == prop.getName(); });
         if (it == datasetSchema.end()) {
-            continue; // Missing properties read as NULL, mirroring icebug-disk.
+            continue;
         }
-        const auto spelling = LanceReader::toDuckDBCastSpelling(prop.getType());
-        if (!selectList.empty()) {
-            selectList += ", ";
+        if (it->ladybugType != prop.getType()) {
+            throw RuntimeException{"Lance dataset '" + datasetPath + "' column '" + it->name +
+                                   "' has type " + it->ladybugType.toString() +
+                                   " but node table '" + nodeTableCatalogEntry->getName() +
+                                   "' declares " + prop.getType().toString()};
         }
-        selectList += "CAST(" + LanceConnector::quoteIdent(it->name) + " AS " + spelling + ")";
     }
-    if (!selectList.empty()) {
-        auto conn = connector->newConnection(context);
-        connector->executeOn(*conn, "SELECT " + selectList + " FROM '" +
-                                        LanceConnector::escapeLiteral(datasetPath) + "' LIMIT 0");
-    }
+    (void)context;
 }
 
 void LanceNodeTable::initializeScanCoordination(const transaction::Transaction* transaction) {
@@ -115,23 +124,20 @@ void LanceNodeTable::initReaderForMorsel(Transaction* transaction,
     if (!context) {
         throw RuntimeException("Invalid client context for Lance node scan initialization");
     }
-    ensureSchemaLoaded(context);
+    auto lanceDataset = ensureDataset(context);
     if (!scanState.reader) {
-        // First init for this scan state: snapshot the requested columns and build the
-        // reader projection (dataset column + CAST spelling + catalog type per column).
+        // First init for this scan state: snapshot the requested columns. Columns are
+        // matched by name; dataset types were validated against the catalog at CREATE.
         std::vector<LanceReader::ProjectedColumn> projection;
         std::vector<column_id_t> readerColumnIDs;
         for (auto columnID : scanState.columnIDs) {
             if (columnID == INVALID_COLUMN_ID || columnID == ROW_IDX_COLUMN_ID) {
                 continue;
             }
-            // Find the catalog property behind this column ID.
             std::string propName;
-            const LogicalType* propType = nullptr;
             for (auto i = 0u; i < nodeTableCatalogEntry->getNumProperties(); ++i) {
                 if (nodeTableCatalogEntry->getColumnID(i) == columnID) {
                     propName = nodeTableCatalogEntry->getProperty(i).getName();
-                    propType = &nodeTableCatalogEntry->getProperty(i).getType();
                     break;
                 }
             }
@@ -143,8 +149,7 @@ void LanceNodeTable::initReaderForMorsel(Transaction* transaction,
             if (it == datasetSchema.end()) {
                 continue; // Filled with NULL below, mirroring icebug-disk.
             }
-            projection.push_back(LanceReader::ProjectedColumn{it->name,
-                LanceReader::toDuckDBCastSpelling(*propType), propType->copy()});
+            projection.push_back(LanceReader::ProjectedColumn{it->name, it->ladybugType.copy()});
             readerColumnIDs.push_back(columnID);
         }
         if (projection.empty()) {
@@ -154,11 +159,11 @@ void LanceNodeTable::initReaderForMorsel(Transaction* transaction,
                 throw RuntimeException{"Lance dataset '" + datasetPath + "' has no columns"};
             }
             projection.push_back(LanceReader::ProjectedColumn{datasetSchema[0].name,
-                LanceReader::toDuckDBCastSpelling(datasetSchema[0].ladybugType),
                 datasetSchema[0].ladybugType.copy()});
         }
+        scanState.dataset = lanceDataset;
         scanState.reader =
-            std::make_unique<LanceReader>(connector, datasetPath, std::move(projection), context);
+            std::make_unique<LanceReader>(std::move(lanceDataset), std::move(projection));
         scanState.readerColumnIDs = std::move(readerColumnIDs);
     }
     // Pull the next morsel from the shared state (mirrors IceDiskNodeTable: the
@@ -199,8 +204,8 @@ bool LanceNodeTable::scanInternal(Transaction* transaction, TableScanState& scan
     auto context = transaction->getClientContext();
     auto memoryManager = MemoryManager::Get(*context);
 
-    // Dataset column index per requested output position (INVALID_COLUMN_ID = NULL fill).
-    // Surrogate projection (no columns requested): single temp column, values discarded.
+    // Dataset column index per requested output position (surrogate projection when no
+    // columns were requested: single temp column, values discarded).
     const bool surrogate = lanceScanState.readerColumnIDs.empty();
     const auto numProjCols =
         surrogate ? 1 : static_cast<uint32_t>(lanceScanState.readerColumnIDs.size());
@@ -208,7 +213,6 @@ bool LanceNodeTable::scanInternal(Transaction* transaction, TableScanState& scan
     while (true) {
         scanState.resetOutVectors();
         DataChunk lanceDataChunk(numProjCols, scanState.outState);
-        // NOTE: projection column types are snapshotted from the reader below.
         auto projTypes = lanceScanState.reader->getProjectionTypes();
         for (auto i = 0u; i < numProjCols; ++i) {
             lanceDataChunk.insert(i,
@@ -289,8 +293,7 @@ row_idx_t LanceNodeTable::getTotalRowCount(const Transaction* transaction) const
         return 0;
     }
     try {
-        const auto count =
-            static_cast<row_idx_t>(LanceReader::countRows(*connector, context, datasetPath));
+        const auto count = static_cast<row_idx_t>(ensureDataset(context)->countRows());
         cachedRowCount.store(count, std::memory_order_relaxed);
         return count;
     } catch (const std::exception&) {
@@ -310,7 +313,9 @@ bool LanceNodeTable::isVisibleNoLock(const transaction::Transaction* transaction
 
 bool LanceNodeTable::lookupPK(const transaction::Transaction* transaction,
     common::ValueVector* keyVector, uint64_t vectorPos, common::offset_t& result) const {
-    // Same fast path as IceDiskNodeTable: INTERNAL_ID keys resolve directly to offsets.
+    // Lookup joins resolve INTERNAL_ID keys directly to offsets (same fast path as
+    // NodeTable::lookupPK). The base implementation checks in-memory node groups,
+    // which are empty for disk-resident tables, so handle it here via total row count.
     if (keyVector->dataType.getLogicalTypeID() == common::LogicalTypeID::INTERNAL_ID) {
         if (keyVector->isNull(vectorPos)) {
             return false;
