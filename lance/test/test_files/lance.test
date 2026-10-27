@@ -1,0 +1,225 @@
+-DATASET CSV empty
+--
+
+-CASE LanceScanDataset
+-LOAD_DYNAMIC_EXTENSION lance
+-LOG ScanNodesViaCall
+-STATEMENT CALL LANCE_SCAN('${LBUG_ROOT_DIRECTORY}/extension/lance/test/lance_data/nodes_user.lance') RETURN * ORDER BY id
+---- 4
+75|Noura|25
+100|Adam|30
+250|Karissa|40
+300|Zhang|50
+
+-LOG ScanNodesViaLoadFrom
+-STATEMENT LOAD FROM '${LBUG_ROOT_DIRECTORY}/extension/lance/test/lance_data/nodes_city.lance' (file_format='lance') RETURN * ORDER BY id
+---- 3
+500|Guelph|75000
+600|Kitchener|200000
+700|Waterloo|150000
+
+-LOG CopyNodesFromLance
+-STATEMENT CREATE NODE TABLE city_copy(id INT32 PRIMARY KEY, name STRING, population INT64)
+---- ok
+-STATEMENT COPY city_copy FROM '${LBUG_ROOT_DIRECTORY}/extension/lance/test/lance_data/nodes_city.lance' (file_format='lance')
+---- ok
+-STATEMENT MATCH (c:city_copy) RETURN c.name ORDER BY c.name
+---- 3
+Guelph
+Kitchener
+Waterloo
+
+-CASE LanceNodeTables
+-LOAD_DYNAMIC_EXTENSION lance
+-LOG CreateNodeTables
+-STATEMENT CREATE NODE TABLE user(id INT32 PRIMARY KEY, name STRING, age INT64) WITH (storage = '${LBUG_ROOT_DIRECTORY}/extension/lance/test/lance_data', format = 'lance')
+---- ok
+-STATEMENT CREATE NODE TABLE city(id INT32 PRIMARY KEY, name STRING, population INT64) WITH (storage = '${LBUG_ROOT_DIRECTORY}/extension/lance/test/lance_data', format = 'lance')
+---- ok
+
+-LOG ScanAllUsers
+-STATEMENT MATCH (a:user) RETURN a.name ORDER BY a.name
+---- 4
+Adam
+Karissa
+Noura
+Zhang
+
+-LOG FilterByPK
+-STATEMENT MATCH (a:user {id: 100}) RETURN a.name, a.age
+---- 1
+Adam|30
+
+-LOG FilterByProperty
+-STATEMENT MATCH (a:user) WHERE a.age > 30 RETURN a.name ORDER BY a.name
+---- 2
+Karissa
+Zhang
+
+-LOG CountUsers
+-STATEMENT MATCH (a:user) RETURN COUNT(*)
+---- 1
+4
+
+-CASE LanceRelTables
+-LOAD_DYNAMIC_EXTENSION lance
+-LOG CreateGraph
+-STATEMENT CREATE NODE TABLE user(id INT32 PRIMARY KEY, name STRING, age INT64) WITH (storage = '${LBUG_ROOT_DIRECTORY}/extension/lance/test/lance_data', format = 'lance')
+---- ok
+-STATEMENT CREATE NODE TABLE city(id INT32 PRIMARY KEY, name STRING, population INT64) WITH (storage = '${LBUG_ROOT_DIRECTORY}/extension/lance/test/lance_data', format = 'lance')
+---- ok
+-STATEMENT CREATE REL TABLE follows(FROM user TO user, since INT32) WITH (storage = '${LBUG_ROOT_DIRECTORY}/extension/lance/test/lance_data', format = 'lance')
+---- ok
+-STATEMENT CREATE REL TABLE livesin(FROM user TO city) WITH (storage = '${LBUG_ROOT_DIRECTORY}/extension/lance/test/lance_data', format = 'lance')
+---- ok
+
+-LOG OneHopWithProperty
+-STATEMENT MATCH (a:user)-[r:follows]->(b:user) RETURN a.name, b.name, r.since ORDER BY a.name, b.name
+---- 7
+Adam|Adam|2023
+Adam|Karissa|2020
+Adam|Zhang|2020
+Karissa|Adam|2022
+Karissa|Zhang|2021
+Noura|Adam|2023
+Zhang|Noura|2022
+
+-LOG BackwardHop
+-STATEMENT MATCH (u)<-[:follows]-(v) WHERE u.id = 300 RETURN v.name ORDER BY v.name
+---- 2
+Adam
+Karissa
+
+-LOG UndirectedHop
+-STATEMENT MATCH (a:user)-[:livesin]-(c:city) RETURN a.name, c.name ORDER BY a.name
+---- 4
+Adam|Waterloo
+Karissa|Waterloo
+Noura|Guelph
+Zhang|Kitchener
+
+-LOG TwoHopAcrossRels
+-STATEMENT MATCH (a:user {id: 100})-[:follows]->(b)-[:livesin]->(c:city) RETURN b.name, c.name ORDER BY b.name
+---- 3
+Adam|Waterloo
+Karissa|Waterloo
+Zhang|Kitchener
+
+-LOG LivesInEdges
+-STATEMENT MATCH (a:user)-[:livesin]->(c:city) RETURN a.name, c.name ORDER BY a.name
+---- 4
+Adam|Waterloo
+Karissa|Waterloo
+Noura|Guelph
+Zhang|Kitchener
+
+-LOG CountAllEdges
+-STATEMENT MATCH (a:user)-[r:follows]->(b:user) RETURN COUNT(*)
+---- 1
+7
+
+-LOG CountNonSelfEdges
+-STATEMENT MATCH (a:user)-[:follows]->(b:user) WHERE a.id <> b.id RETURN COUNT(*)
+---- 1
+6
+
+-LOG VariableLengthOneHop
+-STATEMENT MATCH (a:user {id: 100})-[:follows*1..1]->(b:user) RETURN b.name ORDER BY b.name
+---- 3
+Adam
+Karissa
+Zhang
+
+-LOG VariableLengthTwoHops
+-STATEMENT MATCH (a:user {id: 100})-[:follows*1..2]->(b:user) RETURN DISTINCT b.name ORDER BY b.name
+---- 4
+Adam
+Karissa
+Noura
+Zhang
+
+-CASE LanceFlatRelTable
+-LOAD_DYNAMIC_EXTENSION lance
+-LOG CreateFlatGraph
+-STATEMENT CREATE NODE TABLE user(id INT32 PRIMARY KEY, name STRING, age INT64) WITH (storage = '${LBUG_ROOT_DIRECTORY}/extension/lance/test/lance_data', format = 'lance')
+---- ok
+-STATEMENT CREATE REL TABLE fflat(FROM user TO user, since INT32) WITH (storage = '${LBUG_ROOT_DIRECTORY}/extension/lance/test/lance_data/rels_follows_flat.lance', format = 'lance')
+---- ok
+
+-LOG FlatOneHop
+-STATEMENT MATCH (a:user)-[r:fflat]->(b:user) RETURN a.name, b.name, r.since ORDER BY a.name, b.name
+---- 7
+Adam|Adam|2023
+Adam|Karissa|2020
+Adam|Zhang|2020
+Karissa|Adam|2022
+Karissa|Zhang|2021
+Noura|Adam|2023
+Zhang|Noura|2022
+
+-LOG FlatCount
+-STATEMENT MATCH (a:user)-[:fflat]->(b:user) WHERE a.id <> b.id RETURN COUNT(*)
+---- 1
+6
+
+-CASE LanceMixedTables
+-LOAD_DYNAMIC_EXTENSION lance
+-LOG CreateLanceNodeTable
+-STATEMENT CREATE NODE TABLE user(id INT32 PRIMARY KEY, name STRING, age INT64) WITH (storage = '${LBUG_ROOT_DIRECTORY}/extension/lance/test/lance_data', format = 'lance')
+---- ok
+-LOG CreateRegularNodeTable
+-STATEMENT CREATE NODE TABLE person(id INT64 PRIMARY KEY, name STRING)
+---- ok
+
+-LOG LanceRelWithRegularNodeFails
+-STATEMENT CREATE REL TABLE rel(FROM user TO person) WITH (storage = '${LBUG_ROOT_DIRECTORY}/extension/lance/test/lance_data', format = 'lance')
+---- error
+Binder exception: Cannot mix lance tables with non-lance tables in CREATE REL TABLE.
+
+-LOG RegularRelWithLanceNodeFails
+-STATEMENT CREATE REL TABLE rel2(FROM user TO user)
+---- error
+Binder exception: Cannot mix lance tables with non-lance tables in CREATE REL TABLE.
+
+-CASE LanceInvalidStorage
+-LOAD_DYNAMIC_EXTENSION lance
+-LOG MissingDatasetDirFails
+-STATEMENT CREATE NODE TABLE t(id INT64 PRIMARY KEY) WITH (storage = '/nonexistent/dir/that/does/not/exist', format = 'lance')
+---- error(regex)
+.*[Nn]o such file.*|.*[Cc]annot open.*|.*[Nn]ot found.*|.*nodes_t\.lance.*
+
+-LOG NotALanceDatasetFails
+-STATEMENT CREATE NODE TABLE t2(id INT64 PRIMARY KEY) WITH (storage = '${LBUG_ROOT_DIRECTORY}/src', format = 'lance')
+---- error(regex)
+.*[Nn]ot a Lance dataset.*|.*[Cc]annot open.*|.*nodes_t2\.lance.*
+
+-LOG MissingPKColumnFails
+-STATEMENT CREATE NODE TABLE t3(zzz INT32 PRIMARY KEY, name STRING) WITH (storage = '${LBUG_ROOT_DIRECTORY}/extension/lance/test/lance_data/nodes_user.lance', format = 'lance')
+---- error
+Runtime exception: Lance dataset '${LBUG_ROOT_DIRECTORY}/extension/lance/test/lance_data/nodes_user.lance' has no primary key column 'zzz' for node table 't3'
+
+-LOG UnknownFormatFails
+-STATEMENT CREATE NODE TABLE t4(id INT64 PRIMARY KEY) WITH (storage = '${LBUG_ROOT_DIRECTORY}/extension/lance/test/lance_data', format = 'foo')
+---- error
+Binder exception: Unsupported storage format 'foo'. Valid options are: icebug-disk, lance.
+
+-CASE LanceRemoteURIDeferred
+-LOAD_DYNAMIC_EXTENSION lance
+-LOG RemoteCreateSucceeds
+-STATEMENT CREATE NODE TABLE t(id INT64 PRIMARY KEY) WITH (storage = 's3://my-bucket/data', format = 'lance')
+---- ok
+-LOG RemoteScanFails
+-STATEMENT MATCH (n:t) RETURN *
+---- error(regex)
+.*Failed to open Lance dataset.*
+
+-CASE LanceReadOnly
+-LOAD_DYNAMIC_EXTENSION lance
+-LOG CreateLanceNodeTable
+-STATEMENT CREATE NODE TABLE user(id INT32 PRIMARY KEY, name STRING, age INT64) WITH (storage = '${LBUG_ROOT_DIRECTORY}/extension/lance/test/lance_data', format = 'lance')
+---- ok
+
+-LOG InsertIntoLanceTableFails
+-STATEMENT CREATE (a:user {id: 1, name: 'X', age: 1})
+---- error
+Runtime exception: Cannot insert into lance-backed node table
