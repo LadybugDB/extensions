@@ -120,5 +120,7 @@ version-mismatch error test).
   configured later) and fail at first scan, mirroring icebug-disk.
 - Semi-mask morsel skipping is not implemented (masks still filter); GDS
   vertex scans (`scanVertices`) over Lance tables are not supported.
+- Scan batches are sized for the default engine vector capacity (2048 rows);
+  custom `LBUG_VECTOR_CAPACITY_LOG2` builds below 11 are not supported.
 - `LOAD` the extension before creating Lance tables; the "load the extension"
   error otherwise points at the fix.
