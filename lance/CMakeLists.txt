@@ -1,11 +1,15 @@
-cmake_minimum_required(VERSION 3.14...3.29)
-
 # Set extension name here
 set(TARGET_NAME lance)
 
 set(EXTENSION_NAME ${TARGET_NAME}_extension)
 
-project(${TARGET_NAME})
+# NOTE: no project() call here (unlike a standalone build): defining a new
+# project would redefine PROJECT_SOURCE_DIR to this directory, and the
+# shared build_extension_lib() helper locates the extension output at
+# ${PROJECT_SOURCE_DIR}/extension/<name>/build. With project() the artifact
+# would land at extension/lance/extension/lance/build instead of
+# extension/lance/build, where the test runner's LOAD_DYNAMIC_EXTENSION
+# expects it.
 include_directories(src/include)
 
 # Build and link the Rust staticlib (lance_ladybug_ffi), following the
