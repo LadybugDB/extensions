@@ -87,6 +87,13 @@ file(GLOB_RECURSE RUST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/rust
 set(RUST_FFI_DEPENDS ${CMAKE_CURRENT_LIST_DIR}/rust/Cargo.toml
                      ${CMAKE_CURRENT_LIST_DIR}/rust/Cargo.lock ${RUST_SOURCES})
 
+# Fail fast at configure time when cargo is unavailable instead of dying
+# mid-build with a bare "no such file or directory" from the custom command.
+find_program(CARGO_EXECUTABLE cargo)
+if(NOT CARGO_EXECUTABLE)
+  message(FATAL_ERROR "cargo is required to build the lance extension (native Lance reader). Install the Rust toolchain, e.g. via rustup: https://rustup.rs")
+endif()
+
 set(RUST_CARGO_ENV CARGO_TARGET_DIR=${RUST_TARGET_DIR}
                    MACOSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET})
 if(NOT "$ENV{PROTOC}" STREQUAL "")
@@ -123,8 +130,8 @@ endif()
 if(CMAKE_CONFIGURATION_TYPES)
   add_custom_command(
     OUTPUT "${RUST_DEBUG_LIB}" "${RUST_RELEASE_LIB}"
-    COMMAND ${CMAKE_COMMAND} -E env ${RUST_CARGO_ENV} cargo build --manifest-path=${CMAKE_CURRENT_LIST_DIR}/rust/Cargo.toml --target=${RUST_PLATFORM_TARGET}
-    COMMAND ${CMAKE_COMMAND} -E env ${RUST_CARGO_ENV} cargo build --manifest-path=${CMAKE_CURRENT_LIST_DIR}/rust/Cargo.toml --release --target=${RUST_PLATFORM_TARGET}
+    COMMAND ${CMAKE_COMMAND} -E env ${RUST_CARGO_ENV} ${CARGO_EXECUTABLE} build --manifest-path=${CMAKE_CURRENT_LIST_DIR}/rust/Cargo.toml --target=${RUST_PLATFORM_TARGET}
+    COMMAND ${CMAKE_COMMAND} -E env ${RUST_CARGO_ENV} ${CARGO_EXECUTABLE} build --manifest-path=${CMAKE_CURRENT_LIST_DIR}/rust/Cargo.toml --release --target=${RUST_PLATFORM_TARGET}
     WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
     DEPENDS ${RUST_FFI_DEPENDS}
     VERBATIM)
@@ -136,7 +143,7 @@ else()
   if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     add_custom_command(
       OUTPUT "${RUST_DEBUG_LIB}"
-      COMMAND ${CMAKE_COMMAND} -E env ${RUST_CARGO_ENV} cargo build --manifest-path=${CMAKE_CURRENT_LIST_DIR}/rust/Cargo.toml --target=${RUST_PLATFORM_TARGET}
+      COMMAND ${CMAKE_COMMAND} -E env ${RUST_CARGO_ENV} ${CARGO_EXECUTABLE} build --manifest-path=${CMAKE_CURRENT_LIST_DIR}/rust/Cargo.toml --target=${RUST_PLATFORM_TARGET}
       WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
       DEPENDS ${RUST_FFI_DEPENDS}
       VERBATIM)
@@ -144,7 +151,7 @@ else()
   else()
     add_custom_command(
       OUTPUT "${RUST_RELEASE_LIB}"
-      COMMAND ${CMAKE_COMMAND} -E env ${RUST_CARGO_ENV} cargo build --manifest-path=${CMAKE_CURRENT_LIST_DIR}/rust/Cargo.toml --release --target=${RUST_PLATFORM_TARGET}
+      COMMAND ${CMAKE_COMMAND} -E env ${RUST_CARGO_ENV} ${CARGO_EXECUTABLE} build --manifest-path=${CMAKE_CURRENT_LIST_DIR}/rust/Cargo.toml --release --target=${RUST_PLATFORM_TARGET}
       WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
       DEPENDS ${RUST_FFI_DEPENDS}
       VERBATIM)

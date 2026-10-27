@@ -228,6 +228,44 @@ jobs:
           test -e /usr/lib64/libarrow.so.2600
           ldconfig -p | grep -q 'libarrow.so.2600'
 
+      # The lance extension builds a native reader (lance_ladybug_ffi) via
+      # Cargo. The manylinux container ships no Rust toolchain and no
+      # protoc (needed by prost-build through lance-core), so install both
+      # here before the CMake configure step.
+      - name: Install Rust toolchain and protoc (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -e
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal --default-toolchain stable
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cargo --version
+          # CMake maps matrix.arch to the Rust target triple; make sure the
+          # matching std target is installed (default toolchain already
+          # carries the native triple).
+          case "${{ matrix.arch }}" in
+            x86_64) rustup target add x86_64-unknown-linux-gnu ;;
+            aarch64|arm64) rustup target add aarch64-unknown-linux-gnu ;;
+          esac
+          if ! command -v protoc >/dev/null 2>&1; then
+            if ! dnf install -y protobuf-compiler; then
+              # Fallback: official protoc release (covers repos without the
+              # compiler package).
+              PROTOC_VERSION="29.3"
+              case "${{ matrix.arch }}" in
+                x86_64) PROTOC_ARCH="x86_64" ;;
+                aarch64|arm64) PROTOC_ARCH="aarch_64" ;;
+              esac
+              curl -LsSf -o /tmp/protoc.zip "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-${PROTOC_ARCH}.zip"
+              unzip -o /tmp/protoc.zip -d /usr/local bin/protoc 'include/*'
+              rm -f /tmp/protoc.zip
+            fi
+          fi
+          protoc --version
+
       - name: Shim libomp.so.5 -> installed libomp (Linux)
         if: runner.os == 'Linux'
         run: |
