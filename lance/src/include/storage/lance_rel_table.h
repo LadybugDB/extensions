@@ -22,6 +22,7 @@ enum class LanceRelTableLayout : uint8_t { CSR, FLAT };
 // multi-rel scans; see ExternalTableHooks::scanStateRank. The Parquet reader members
 // inherited from the icebug-disk state stay null; Lance reads go through `reader`.
 struct LanceRelTableScanState final : storage::IceDiskRelTableScanState {
+    std::shared_ptr<LanceDataset> dataset;
     std::unique_ptr<LanceReader> reader;
     // Maps scan-output positions to cached-batch positions (catalog column ID order is
     // not assumed to match dataset order; edge properties match by name).
@@ -70,18 +71,18 @@ protected:
         common::idx_t k) const override;
 
 private:
-    std::shared_ptr<LanceConnector> connector;
     LanceRelTableLayout layout;
     std::string indicesDatasetPath;
     std::string indptrDatasetPath;
-    mutable std::mutex schemaMutex;
+    mutable std::mutex datasetMutex;
+    mutable std::shared_ptr<LanceDataset> dataset;
     mutable std::vector<LanceDatasetColumn> indicesSchema;
     mutable std::mutex indptrDataMutex;
     mutable std::vector<common::offset_t> indptrData;
     mutable std::atomic<bool> indptrDataLoaded{false};
     mutable std::atomic<common::row_idx_t> cachedRowCount{common::INVALID_ROW_IDX};
 
-    void ensureSchemasLoaded(main::ClientContext* context) const;
+    std::shared_ptr<LanceDataset> ensureDataset(main::ClientContext* context) const;
     void checkCompatibility(main::ClientContext* context) const;
     void loadIndptrData(transaction::Transaction* transaction) const;
     void ensureReader(transaction::Transaction* transaction,

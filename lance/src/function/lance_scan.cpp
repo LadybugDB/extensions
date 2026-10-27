@@ -1,6 +1,13 @@
 #include "function/lance_scan.h"
 
-#include <format>
+#include <algorithm>
+
+#include "common/data_chunk/data_chunk.h"
+#include "common/exception/binder.h"
+#include "common/vector/value_vector.h"
+#include "function/table/bind_input.h"
+#include "processor/execution_context.h"
+#include "storage/buffer_manager/memory_manager.h"
 
 namespace lbug {
 namespace lance_extension {
@@ -14,56 +21,75 @@ static std::unique_ptr<TableFuncBindData> bindFunc(main::ClientContext* context,
     const auto* scanInput = input->extraInput ?
                                 input->extraInput->constPtrCast<ExtraScanTableFuncBindInput>() :
                                 nullptr;
-    auto connector = std::make_shared<LanceConnector>();
-    connector->connect("" /* inMemDB */, "" /* defaultCatalogName */, "" /* defaultSchemaName */,
-        context);
-    // DuckDB's lance extension resolves '<path>.lance' through its replacement scan.
-    std::string query = std::format("SELECT * FROM '{}'",
-        LanceConnector::escapeLiteral(input->getLiteralVal<std::string>(0)));
-    auto result = connector->executeQuery(query + " LIMIT 1");
+    const auto datasetPath = input->getLiteralVal<std::string>(0);
+    LanceDataset dataset{datasetPath};
+    const auto schema = dataset.schema();
     std::vector<LogicalType> returnTypes;
     std::vector<std::string> returnColumnNames =
         scanInput ? scanInput->expectedColumnNames : std::vector<std::string>{};
-    for (auto type : result->GetTypes()) {
-        returnTypes.push_back(
-            duckdb_extension::DuckDBTypeConverter::convertDuckDBType(type.ToString()));
-    }
-
     if (returnColumnNames.empty()) {
-        for (auto name : result->GetNames()) {
-            returnColumnNames.push_back(name.GetIdentifierName());
+        for (auto& col : schema) {
+            returnColumnNames.push_back(col.name);
+            returnTypes.push_back(col.ladybugType.copy());
+        }
+    } else {
+        for (auto& name : returnColumnNames) {
+            auto it = std::find_if(schema.begin(), schema.end(),
+                [&](const LanceDatasetColumn& col) { return col.name == name; });
+            if (it == schema.end()) {
+                throw BinderException{
+                    "Lance dataset '" + datasetPath + "' has no column '" + name + "'"};
+            }
+            returnTypes.push_back(it->ladybugType.copy());
         }
     }
     DASSERT(returnTypes.size() == returnColumnNames.size());
     returnColumnNames =
         TableFunction::extractYieldVariables(returnColumnNames, input->yieldVariables);
     auto columns = input->binder->createVariables(returnColumnNames, returnTypes);
-    return std::make_unique<LanceScanBindData>(std::move(query), connector,
-        duckdb_extension::DuckDBResultConverter{returnTypes}, columns, context);
+    return std::make_unique<LanceScanBindData>(datasetPath, std::move(returnColumnNames),
+        std::move(returnTypes), std::move(columns), context);
 }
 
 std::unique_ptr<TableFuncSharedState> initLanceScanSharedState(
     const TableFuncInitSharedStateInput& input) {
-    auto lanceScanBindData = input.bindData->constPtrCast<LanceScanBindData>();
-    auto queryResult = lanceScanBindData->connector->executeQuery(lanceScanBindData->query);
-    return std::make_unique<duckdb_extension::DuckDBScanSharedState>(std::move(queryResult));
+    auto bindData = input.bindData->constPtrCast<LanceScanBindData>();
+    auto dataset = std::make_shared<LanceDataset>(bindData->datasetPath);
+    std::vector<LanceReader::ProjectedColumn> projection;
+    for (auto i = 0u; i < bindData->columnNames.size(); ++i) {
+        projection.push_back(LanceReader::ProjectedColumn{bindData->columnNames[i],
+            bindData->columnTypes[i].copy()});
+    }
+    return std::make_unique<LanceScanSharedState>(std::move(dataset), std::move(projection));
 }
 
 offset_t tableFunc(const TableFuncInput& input, TableFuncOutput& output) {
-    auto sharedState = input.sharedState->ptrCast<duckdb_extension::DuckDBScanSharedState>();
-    auto lanceScanBindData = input.bindData->constPtrCast<LanceScanBindData>();
-    std::unique_ptr<duckdb::DataChunk> result;
-    try {
-        // Duckdb queryResult.fetch() is not thread safe, we have to acquire a lock there.
-        std::lock_guard lock{sharedState->mtx};
-        result = sharedState->queryResult->Fetch();
-    } catch (std::exception& e) {
+    auto sharedState = input.sharedState->ptrCast<LanceScanSharedState>();
+    std::lock_guard lock{sharedState->mtx};
+    auto projTypes = sharedState->reader.getProjectionTypes();
+    if (projTypes.empty()) {
         return 0;
     }
-    if (result == nullptr) {
+    auto* context = input.context->clientContext;
+    auto memoryManager = storage::MemoryManager::Get(*context);
+    DataChunk slice(projTypes.size());
+    for (auto i = 0u; i < projTypes.size(); ++i) {
+        slice.insert(i, std::make_shared<ValueVector>(projTypes[i].copy(), memoryManager));
+    }
+    slice.state->getSelVectorUnsafe().setToFiltered(0);
+    const auto rowsRead = sharedState->reader.next(slice);
+    if (rowsRead == 0) {
         return 0;
     }
-    lanceScanBindData->converter.convertDuckDBResultToVector(*result, output.dataChunk);
+    // Copy the slice into the output chunk (same types by construction).
+    for (auto i = 0u; i < projTypes.size(); ++i) {
+        auto& srcVector = slice.getValueVector(i);
+        auto& dstVector = output.dataChunk.getValueVectorMutable(i);
+        for (auto row = 0u; row < rowsRead; ++row) {
+            dstVector.copyFromVectorData(row, &srcVector, row);
+        }
+    }
+    output.dataChunk.state->getSelVectorUnsafe().setToUnfiltered(rowsRead);
     return output.dataChunk.state->getSelVector().getSelSize();
 }
 
