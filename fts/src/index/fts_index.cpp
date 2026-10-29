@@ -358,7 +358,7 @@ void FTSIndex::insertToTermsTable(Transaction* transaction,
             termsTable->update(transaction, ftsInsertState.termsTableState.termsTableUpdateState);
             termInfo.offset = termNodeID.offset;
         } else {
-            dfVector.setValue(0, 1);
+            dfVector.setValue<uint64_t>(0, 1);
             termsTable->insert(transaction, ftsInsertState.termsTableInsertState);
             termInfo.offset = termIDVector.getValue<nodeID_t>(0).offset;
         }
