@@ -72,14 +72,14 @@ function (graph traversal needs CSR extend, degree summaries, PK lookup), so
 core provides a small extension hook surface (see
 `src/include/storage/table/external_table_hooks.h`, LadybugDB/ladybug#1445):
 
-- `StorageFormat::LANCE` + `ExternalTableHookRegistry` (factories + scan hooks,
-  keyed by format and by table);
+- `ColumnarTableHookRegistry` (factories + scan hooks, registered under the
+  `"lance"` external format name and keyed by table);
 - the scan operators (`ScanNodeTable`, `ScanRelTable`, `ScanMultiRelTable`,
   `OnDiskGraph` for recursive traversal) create scan states and count morsels
   through the hooks, falling back to the legacy paths otherwise;
-- `LanceRelTableScanState` extends `IceDiskRelTableScanState` so one shared
+- `LanceRelTableScanState` extends `ColumnarRelTableScanState` so one shared
   state can scan lance, icebug-disk, Arrow, and native tables in multi-rel
-  scans (rank 3 in the coverage lattice).
+  scans (`supportsMixedColumnarScan`).
 
 No core query path changed behavior: all pre-existing icebug-disk/Arrow/native
 tests pass unmodified.

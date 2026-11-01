@@ -13,10 +13,12 @@ namespace lance_extension {
 void LanceExtension::load(main::ClientContext* context) {
     auto& db = *context->getDatabase();
     extension::ExtensionUtils::addTableFunc<LanceScanFunction>(db);
-    // Register Lance-backed table storage for StorageFormat::LANCE. The scan-state
-    // rank (3) declares that Lance scan states extend the icebug-disk scan state and
-    // therefore cover every lower-rank backend in shared multi-rel scans.
-    storage::ExternalTableHooks hooks;
+    // Register Lance-backed table storage under the "lance" external format name.
+    // supportsMixedColumnarScan declares that Lance scan states extend
+    // ColumnarRelTableScanState and therefore cover the in-core columnar backends
+    // in shared multi-rel scans.
+    storage::ColumnarTableHooks hooks;
+    hooks.formatName = "lance";
     hooks.createNodeTable = [](const storage::StorageManager* storageManager,
                                 const catalog::NodeTableCatalogEntry* nodeTableEntry,
                                 storage::MemoryManager* memoryManager, main::ClientContext* ctx) {
@@ -47,9 +49,8 @@ void LanceExtension::load(main::ClientContext* context) {
         return std::make_unique<LanceRelTableScanState>(*memoryManager, boundNodeIDVector,
             outVectors, std::move(outChunkState));
     };
-    hooks.scanStateRank = 3;
-    storage::ExternalTableHookRegistry::registerHooks(common::StorageFormat::LANCE,
-        std::move(hooks));
+    hooks.supportsMixedColumnarScan = true;
+    storage::ColumnarTableHookRegistry::registerHooks("lance", std::move(hooks));
 }
 
 } // namespace lance_extension

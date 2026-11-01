@@ -83,7 +83,7 @@ public:
         uint64_t vectorPos, common::offset_t& result) const override;
 
     const std::string& getDatasetPath() const { return datasetPath; }
-    // Morsel count for ScanNodeTableSharedState::initialize (via ExternalTableHooks).
+    // Morsel count for ScanNodeTableSharedState::initialize (via ColumnarTableHooks).
     common::node_group_idx_t getNumScanMorsels(const transaction::Transaction* transaction) const;
 
 protected:
