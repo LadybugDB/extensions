@@ -9,7 +9,6 @@
 #include "common/types/internal_id_util.h"
 #include "storage/lance_reader.h"
 #include "storage/table/columnar_rel_table_base.h"
-#include "storage/table/ice_disk_rel_table.h"
 #include "transaction/transaction.h"
 
 namespace lbug {
@@ -17,11 +16,11 @@ namespace lance_extension {
 
 enum class LanceRelTableLayout : uint8_t { CSR, FLAT };
 
-// Extends IceDiskRelTableScanState (rather than RelTableScanState directly) so a single
+// Extends ColumnarRelTableScanState (rather than RelTableScanState directly) so a single
 // shared scan state can serve lance, icebug-disk, Arrow, and native rel tables in
-// multi-rel scans; see ExternalTableHooks::scanStateRank. The Parquet reader members
-// inherited from the icebug-disk state stay null; Lance reads go through `reader`.
-struct LanceRelTableScanState final : storage::IceDiskRelTableScanState {
+// multi-rel scans; see ColumnarTableHooks::supportsMixedColumnarScan. The Parquet reader
+// members inherited from the columnar base stay null; Lance reads go through `reader`.
+struct LanceRelTableScanState final : storage::ColumnarRelTableScanState {
     std::shared_ptr<LanceDataset> dataset;
     std::unique_ptr<LanceReader> reader;
     // Maps scan-output positions to cached-batch positions (catalog column ID order is
@@ -34,9 +33,9 @@ struct LanceRelTableScanState final : storage::IceDiskRelTableScanState {
     LanceRelTableScanState(storage::MemoryManager& mm, common::ValueVector* nodeIDVector,
         std::vector<common::ValueVector*> outputVectors,
         std::shared_ptr<common::DataChunkState> outChunkState)
-        : storage::IceDiskRelTableScanState{mm, nodeIDVector, std::move(outputVectors),
+        : storage::ColumnarRelTableScanState{mm, nodeIDVector, std::move(outputVectors),
               std::move(outChunkState)} {}
-    // setToTable is inherited from IceDiskRelTableScanState: CSR column resolution against
+    // setToTable is inherited from ColumnarRelTableScanState: CSR column resolution against
     // the (empty) RelTableData scaffolding is safe for Lance tables exactly as for
     // icebug-disk tables; the Lance scan reads through `reader` instead.
 };

@@ -201,7 +201,7 @@ Runtime exception: Lance dataset '${LBUG_ROOT_DIRECTORY}/extension/lance/test/la
 -LOG UnknownFormatFails
 -STATEMENT CREATE NODE TABLE t4(id INT64 PRIMARY KEY) WITH (storage = '${LBUG_ROOT_DIRECTORY}/extension/lance/test/lance_data', format = 'foo')
 ---- error
-Binder exception: Unsupported storage format 'foo'. Valid options are: icebug-disk, lance.
+Runtime exception: Unsupported storage format option for node table: foo. If this format is provided by a Ladybug extension, load the extension and try again.
 
 -LOG WrongVersionFails
 -STATEMENT CREATE NODE TABLE t5(id INT32 PRIMARY KEY) WITH (storage = '${LBUG_ROOT_DIRECTORY}/extension/lance/test/lance_data/nodes_wrongversion.lance', format = 'lance')
