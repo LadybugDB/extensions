@@ -216,7 +216,7 @@ Runtime exception: ${LBUG_ROOT_DIRECTORY}/extension/lance/test/lance_data/nodes_
 -LOG RemoteScanFails
 -STATEMENT MATCH (n:t) RETURN *
 ---- error(regex)
-.*Failed to open Lance dataset.*
+[\s\S]*Failed to open Lance dataset[\s\S]*
 
 -CASE LanceReadOnly
 -LOAD_DYNAMIC_EXTENSION lance
