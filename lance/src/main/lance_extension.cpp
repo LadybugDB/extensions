@@ -31,7 +31,8 @@ void LanceExtension::load(main::ClientContext* context) {
         return std::make_unique<LanceRelTable>(relGroupEntry, fromTableID, toTableID,
             storageManager, memoryManager, ctx);
     };
-    hooks.createNodeScanState = [](storage::NodeTable* table, common::ValueVector* nodeIDVector,
+    hooks.createNodeScanState = []([[maybe_unused]] storage::NodeTable* table,
+                                    common::ValueVector* nodeIDVector,
                                     const std::vector<common::ValueVector*>& outVectors,
                                     std::shared_ptr<common::DataChunkState> outChunkState,
                                     storage::MemoryManager* memoryManager) {
@@ -42,7 +43,8 @@ void LanceExtension::load(main::ClientContext* context) {
                                   storage::NodeTable* table) {
         return table->ptrCast<LanceNodeTable>()->getNumScanMorsels(transaction);
     };
-    hooks.createRelScanState = [](storage::RelTable* table, common::ValueVector* boundNodeIDVector,
+    hooks.createRelScanState = []([[maybe_unused]] storage::RelTable* table,
+                                   common::ValueVector* boundNodeIDVector,
                                    const std::vector<common::ValueVector*>& outVectors,
                                    std::shared_ptr<common::DataChunkState> outChunkState,
                                    storage::MemoryManager* memoryManager) {
