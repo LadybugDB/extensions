@@ -724,6 +724,19 @@ SyncResult SyncEngine::sync(main::ClientContext* context, const std::string& dbP
             if (!execOk(inner, cdc::buildRelDdl(entry.target), out.error)) {
                 return out;
             }
+            // Rowid slot for replace-on-reuse upserts (see EDGE_RID_PROP):
+            // tables the sync creates carry it from buildRelDdl, but
+            // pre-existing native tables don't. Backfill it idempotently so
+            // the slot-clear DELETE and slot-carrying CREATE in the edge
+            // upserts bind on every mapped table. Pre-sync edges read NULL
+            // (correct: they are not sync-owned; endpoint deletes still
+            // cover them).
+            auto addSlot = std::format("ALTER TABLE {} ADD IF NOT EXISTS {} INT64",
+                cdc::quoteCypherIdent(entry.target.mapping->label),
+                cdc::quoteCypherIdent(cdc::EDGE_RID_PROP));
+            if (!execOk(inner, addSlot, out.error)) {
+                return out;
+            }
         }
 
         // WAL overlay fetcher: newest frame wins, then the DB file. Owned
