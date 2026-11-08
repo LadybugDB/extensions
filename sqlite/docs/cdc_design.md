@@ -38,9 +38,10 @@ The WAL frame index is the LSN:
   with nonzero commit size is a **commit boundary**. Only frames up to the
   last commit frame are visible; the uncommitted tail is never applied.
 - The replication cursor is `(walSalt1, walSalt2, appliedFrames)`,
-  persisted in the `__sqlite_cdc_cursor` node table. It is written **last**
-  (at-least-once semantics); replays are safe because applies are
-  idempotent and the cursor only moves forward.
+  persisted in the `__sqlite_cdc_cursor` node table. Each SQLite WAL commit
+  maps to one Ladybug transaction (batch statements + cursor advance commit
+  atomically), so a mid-tick failure leaves no partial rows and the next
+  tick replays whole batches idempotently; the cursor only moves forward.
 - Crash recovery = resume from the cursor. Uncommitted tail frames are
   re-read, never double-applied. Multi-commit batches apply atomically
   per commit for correctness, but converge identically when coalesced:
@@ -68,7 +69,8 @@ extension/sqlite/src/function/
   sync_engine     One tick: read WAL + DB bytes, load cursor, schemas, and
                   explicit mappings; tail/resolve via cdc/; execute through
                   a dedicated inner ClientContext (reusing the outer CALL's
-                  context self-deadlocks on its mutex); cursor last.
+                  context self-deadlocks on its mutex). Each WAL commit
+                  batch applies in one transaction (statements + cursor).
                   Resolver memory persists across CALLs (process-lifetime,
                   keyed by path; a zero cursor resets it).
   sync_functions  CALL sqlite_sync / sqlite_register_node /
