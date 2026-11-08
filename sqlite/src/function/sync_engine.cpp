@@ -818,6 +818,41 @@ SyncResult SyncEngine::sync(main::ClientContext* context, const std::string& dbP
             return true;
         };
 
+        // One SQLite WAL commit maps to one Ladybug transaction: the batch's
+        // statements plus its cursor advance commit atomically, so a mid-tick
+        // failure (e.g. a binder error on one edge table) leaves no partial
+        // rows behind — the next tick replays the whole batch idempotently.
+        // Stats only count committed work: snapshotted and restored on
+        // rollback. DDL above stays outside the transaction: it is
+        // replay-safe by construction (IF NOT EXISTS / one-shot healing).
+        auto applyBatchTx = [&](const cdc::OpBatch& batch, uint32_t salt1, uint32_t salt2,
+                                size_t applied) -> bool {
+            int64_t savedUpserted = out.stats.upserted;
+            int64_t savedDeleted = out.stats.deleted;
+            if (!execOk(inner, "BEGIN TRANSACTION", out.error)) {
+                return false;
+            }
+            auto rollback = [&]() {
+                std::string ignored;
+                execOk(inner, "ROLLBACK", ignored);
+                out.stats.upserted = savedUpserted;
+                out.stats.deleted = savedDeleted;
+            };
+            if (!applyBatch(batch)) {
+                rollback();
+                return false;
+            }
+            if (!execOk(inner, cdc::buildCursorUpsert(syncName, salt1, salt2, applied),
+                    out.error)) {
+                rollback();
+                return false;
+            }
+            if (!execOk(inner, "COMMIT", out.error)) {
+                return false;
+            }
+            return true;
+        };
+
         Overlay overlay{nullptr, 0, &dbBytes, pageSize};
         cdc::PageFetcher fetcher = [&](uint32_t pageNo) { return overlay.fetch(pageNo); };
         bool haveWal = !walBytes.empty();
@@ -863,7 +898,7 @@ SyncResult SyncEngine::sync(main::ClientContext* context, const std::string& dbP
                     out.error = r.error;
                     return out;
                 }
-                if (!applyBatch(r.batch)) {
+                if (!applyBatchTx(r.batch, clock.salt1, clock.salt2, clock.appliedFrames)) {
                     return out;
                 }
                 out.stats.status = "Bootstrapped from database file (no WAL)";
@@ -878,12 +913,12 @@ SyncResult SyncEngine::sync(main::ClientContext* context, const std::string& dbP
                 out.error = r.error;
                 return out;
             }
-            if (!applyBatch(r.batch)) {
-                return out;
-            }
             clock.salt1 = parsed.log.header.salt1;
             clock.salt2 = parsed.log.header.salt2;
             clock.appliedFrames = parsed.log.frames.size();
+            if (!applyBatchTx(r.batch, clock.salt1, clock.salt2, clock.appliedFrames)) {
+                return out;
+            }
             out.stats.status = "Reconciled after WAL restart";
         } else {
             // Page-1 dirt in the new window means DDL: reconcile instead.
@@ -902,10 +937,10 @@ SyncResult SyncEngine::sync(main::ClientContext* context, const std::string& dbP
                     out.error = r.error;
                     return out;
                 }
-                if (!applyBatch(r.batch)) {
+                clock.appliedFrames = parsed.log.frames.size();
+                if (!applyBatchTx(r.batch, clock.salt1, clock.salt2, clock.appliedFrames)) {
                     return out;
                 }
-                clock.appliedFrames = parsed.log.frames.size();
                 out.stats.status = "Reconciled around schema change";
             } else {
                 for (auto& commit : parsed.log.commits) {
@@ -922,10 +957,11 @@ SyncResult SyncEngine::sync(main::ClientContext* context, const std::string& dbP
                         out.error = r.error;
                         return out;
                     }
-                    if (!applyBatch(r.batch)) {
+                    clock.appliedFrames = commit.lastFrame + 1;
+                    if (!applyBatchTx(r.batch, parsed.log.header.salt1, parsed.log.header.salt2,
+                            clock.appliedFrames)) {
                         return out;
                     }
-                    clock.appliedFrames = commit.lastFrame + 1;
                 }
                 out.stats.status = "Applied incrementally";
             }
@@ -933,12 +969,8 @@ SyncResult SyncEngine::sync(main::ClientContext* context, const std::string& dbP
             clock.salt2 = parsed.log.header.salt2;
         }
         out.stats.appliedFrames = static_cast<int64_t>(clock.appliedFrames);
-        // Cursor last: crash-before-cursor replays idempotently.
-        auto cursor =
-            cdc::buildCursorUpsert(syncName, clock.salt1, clock.salt2, clock.appliedFrames);
-        if (!execOk(inner, cursor, out.error)) {
-            return out;
-        }
+        // The cursor advances inside each batch transaction above, so a
+        // crash mid-tick resumes from the last committed SQLite commit.
         out.ok = true;
         return out;
     } catch (const common::Exception& e) {
