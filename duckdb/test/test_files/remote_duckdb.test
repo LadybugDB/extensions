@@ -51,6 +51,8 @@ Attached database successfully.
 -LOAD_DYNAMIC_EXTENSION duckdb
 -LOAD_DYNAMIC_EXTENSION httpfs
 -STATEMENT ATTACH 's3://duckdb-blobs/databases/stations1.duckdb' as remoteTiny (dbtype duckdb, skip_unsupported_table=true);
-# Error type is determined by duckdb version.
+# Error text depends on DuckDB/httpfs version and on whether S3 reports the
+# missing key (403 Forbidden) or the missing bucket (database does not exist).
+# The duckdb-blobs bucket no longer exists, so accept either message.
 ---- error(regex)
-^.+ Error: HTTP GET error reading 's3://duckdb-blobs/databases/stations1.duckdb' .HTTP 403 Forbidden.[\s\S]*$
+^.+ Error:[\s\S]*s3://duckdb-blobs/databases/stations1\.duckdb[\s\S]*$
