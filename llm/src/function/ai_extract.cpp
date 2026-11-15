@@ -199,8 +199,10 @@ void execFunc(const std::vector<std::shared_ptr<ValueVector>>& parameters,
         {4, clientContext->getMaxNumThreadForExec(), static_cast<uint64_t>(jobs.size())});
     auto task = std::make_shared<ExtractTask>(std::max<uint64_t>(1, workerCount), jobs, bindData,
         clientContext, bindData.apiKey);
-    TaskScheduler::Get(*clientContext)
-        ->scheduleTaskAndWaitOrError(task, clientContext, true /* launchNewWorkerThread */);
+    // A thread running the query holds a scheduler slot and works on the task it waits for. A
+    // call folded at bind time usually holds none; it runs its one-row task in a free slot or
+    // waits for a worker.
+    TaskScheduler::Get(*clientContext)->scheduleTaskAndWaitOrError(task, clientContext);
 
     result.resetAuxiliaryBuffer();
     for (const auto& job : jobs) {
