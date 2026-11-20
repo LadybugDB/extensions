@@ -1,0 +1,36 @@
+-DATASET CSV empty
+
+--
+
+-CASE SteinerKCoreStub
+-LOAD_DYNAMIC_EXTENSION algo
+-STATEMENT CREATE NODE TABLE N(id INT64 PRIMARY KEY)
+---- ok
+-STATEMENT CREATE REL TABLE E(FROM N TO N)
+---- ok
+-STATEMENT CREATE (a:N{id:0}), (b:N{id:1}), (c:N{id:2}), (d:N{id:3})
+---- ok
+-STATEMENT MATCH (x:N{id:1}), (y:N{id:0}) CREATE (x)-[:E]->(y)
+---- ok
+-STATEMENT MATCH (x:N{id:2}), (y:N{id:0}) CREATE (x)-[:E]->(y)
+---- ok
+-STATEMENT MATCH (x:N{id:3}), (y:N{id:0}) CREATE (x)-[:E]->(y)
+---- ok
+-STATEMENT CALL PROJECT_GRAPH('G', ['N'], ['E'])
+---- ok
+-LOG Stub: bind validates the seed list, then tableFunc throws until the SCD-shape builder for icebug 13.6 SteinerKCore lands.
+-STATEMENT CALL GDS_STEINER_K_CORE('G', [1]) RETURN node.id, community_id, coreness
+---- error
+Runtime exception: GDS_STEINER_K_CORE is not yet implemented: the SCD-shape builder for icebug 13.6 NetworKit::SteinerKCore is pending.
+-LOG Alias resolves to the same stub.
+-STATEMENT CALL STEINER_K_CORE('G', [1]) RETURN node.id, community_id, coreness
+---- error
+Runtime exception: GDS_STEINER_K_CORE is not yet implemented: the SCD-shape builder for icebug 13.6 NetworKit::SteinerKCore is pending.
+-LOG Empty seed list is a binder error.
+-STATEMENT CALL GDS_STEINER_K_CORE('G', []) RETURN node.id, community_id, coreness
+---- error
+Binder exception: GDS_STEINER_K_CORE requires at least one seed node.
+-LOG Negative seeds are rejected at bind time.
+-STATEMENT CALL GDS_STEINER_K_CORE('G', [-1]) RETURN node.id, community_id, coreness
+---- error
+Binder exception: GDS_STEINER_K_CORE seed node offsets must be non-negative.

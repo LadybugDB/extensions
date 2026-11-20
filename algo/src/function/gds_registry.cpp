@@ -10,6 +10,8 @@
 //   distance    BFS (single-source distances), PageRank::forSources (personalized)
 //   embedding   Node2Vec (makeEmbeddingFunc also covers FastRP once the vendored prebuilt
 //               ships networkit/embedding/FastRP.hpp — the builder is double-instantiable)
+//   scd         SteinerKCore (icebug >= 13.6) — stubbed as GDS_STEINER_K_CORE in
+//               steiner_k_core.cpp until the batched multi-set SCD builder lands
 // Follow-up shapes (global scalars, edge scores, link prediction, SCD, generators, ...) need
 // new builders; rows for them do not fit make*Func and are rejected at design time, not with
 // a half-working CALL.
