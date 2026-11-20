@@ -10,14 +10,16 @@
 //   distance    BFS (single-source distances), PageRank::forSources (personalized)
 //   embedding   Node2Vec (makeEmbeddingFunc also covers FastRP once the vendored prebuilt
 //               ships networkit/embedding/FastRP.hpp — the builder is double-instantiable)
-//   scd         SteinerKCore (icebug >= 13.6) — single-seed GDS_STEINER_K_CORE in
-//               steiner_k_core.cpp (batched multi-set queries need an SCD-shape builder
-//               that does not fit make*Func, so they are future work)
-// Follow-up shapes (global scalars, edge scores, link prediction, SCD, generators, ...) need
+//   scd         SteinerKCore (icebug >= 13.6) — single-seed GDS_STEINER_K_CORE via
+//               makeSeedCommunityFunc (batched multi-set queries reuse the same shape
+//               with one row per (query, member), so they are future rows, not new files)
+// Follow-up shapes (global scalars, edge scores, link prediction, generators, ...) need
 // new builders; rows for them do not fit make*Func and are rejected at design time, not with
 // a half-working CALL.
 
 #include "function/gds_registry.h"
+
+#include <set>
 
 #include "catalog/catalog.h"
 #include "function/config/max_iterations_config.h"
@@ -41,7 +43,9 @@
 #include <networkit/components/ConnectedComponents.hpp>
 #include <networkit/distance/BFS.hpp>
 #include <networkit/embedding/Node2Vec.hpp>
+#include <networkit/graph/Graph.hpp>
 #include <networkit/graph/GraphR.hpp>
+#include <networkit/scd/SteinerKCore.hpp>
 
 namespace lbug {
 namespace algo_extension {
@@ -236,6 +240,25 @@ function::function_set makeGDSCutClustering() {
 
 // --- New rows: single-source distances (directed) and embeddings. ---
 
+// --- New rows: SCD seed queries (sparse member rows, not dense per-node). ---
+
+function::function_set makeGDSSteinerKCore() {
+    return makeSeedCommunityFunc<>("GDS_STEINER_K_CORE", "community_id", "coreness",
+        GDSGraphMode::UNDIRECTED,
+        [](const NetworKit::GraphR& g, const std::vector<uint64_t>& seeds, const auto&) {
+            NetworKit::Graph view(g);
+            NetworKit::SteinerKCore steiner(view);
+            const std::set<NetworKit::node> seedSet(seeds.begin(), seeds.end());
+            auto result = steiner.communities({seedSet});
+            SeedCommunityResult out;
+            out.score = static_cast<int64_t>(result.coreness[0]);
+            out.members.assign(result.communities[0].begin(), result.communities[0].end());
+            // Single seed set: one community, id 0 for every member.
+            out.communityIds.assign(out.members.size(), 0);
+            return out;
+        });
+}
+
 function::function_set makeGDSBfsDistance() {
     return makeNodeScoreFunc<>("GDS_BFS_DISTANCE", "distance", GDSExtraKind::SINGLE_SOURCE,
         GDSGraphMode::DIRECTED,
@@ -272,6 +295,7 @@ const std::vector<GDSCatalogEntry>& getGDSCatalog() {
         {"GDS_PLP", makeGDSPlp},
         {"GDS_CUT_CLUSTERING", makeGDSCutClustering},
         {"GDS_BFS_DISTANCE", makeGDSBfsDistance},
+        {"GDS_STEINER_K_CORE", makeGDSSteinerKCore},
     };
     return catalog;
 }

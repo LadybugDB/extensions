@@ -3,9 +3,9 @@
 // The GDS catalog: every icebug-backed table function in one place.
 //
 // Each row is {CALL name, builder}: the builder is a captureless factory returning the
-// row's function_set (built by makeNodeScoreFunc / makePartitionFunc / makeEmbeddingFunc
-// from gds_generic_algo.h). Wiring a new NetworKit algorithm is one row here — no new file,
-// no CMake edit, no extension-load edit.
+// row's function_set (built by makeNodeScoreFunc / makePartitionFunc / makeEmbeddingFunc /
+// makeSeedCommunityFunc from gds_generic_algo.h). Wiring a new NetworKit algorithm is one
+// row here — no new file, no CMake edit, no extension-load edit.
 //
 // Row checklist:
 //   - output column: "score" for scalar measures is not used; prefer the measure's name
@@ -13,7 +13,7 @@
 //   - parameter signature: list the GDSGenericParams specs matching the NetworKit
 //     constructor's defaults (see gds_param_specs.h). An empty list means no optional params.
 //   - extra args: NONE (CALL f('G')), SOURCE_LIST (CALL f('G', [...])), SINGLE_SOURCE
-//     (CALL f('G', src)).
+//     (CALL f('G', src)), SEED_SET (CALL f('G', [seeds]) for SCD seed queries).
 //   - graph mode: UNDIRECTED unless the algorithm is direction-sensitive (BFS, ...).
 
 #include <vector>

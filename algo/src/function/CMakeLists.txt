@@ -14,11 +14,7 @@ if (ICEBUG_ENABLED)
     # gds_registry.cpp is the only translation unit including NetworKit + Arrow headers:
     # one row per algorithm in the catalog table, no per-algorithm files. Linking the
     # imported targets to the object library propagates their compile flags + include dirs.
-    # steiner_k_core.cpp is the single-seed SCD function for icebug 13.6
-    # NetworKit::SteinerKCore (CALL GDS_STEINER_K_CORE('G', [seeds])); batched
-    # multi-set queries need an SCD-shape builder that does not fit make*Func in
-    # gds_generic_algo.h, so they stay future work.
-    list(APPEND _algo_function_sources gds_csr_bridge.cpp gds_registry.cpp steiner_k_core.cpp)
+    list(APPEND _algo_function_sources gds_csr_bridge.cpp gds_registry.cpp)
 endif ()
 
 add_library(lbug_algo_function

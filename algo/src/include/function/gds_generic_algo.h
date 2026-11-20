@@ -2,7 +2,8 @@
 
 // Generic builders behind the GDS registry (gds_registry.cpp).
 //
-// A registry row is one call to makeNodeScoreFunc / makePartitionFunc / makeEmbeddingFunc:
+// A registry row is one call to makeNodeScoreFunc / makePartitionFunc /
+// makeEmbeddingFunc / makeSeedCommunityFunc:
 //
 //   makeNodeScoreFunc<DampingFactor, Tolerance>(
 //       \"GDS_X\", \"score\", GDSExtraKind::NONE, GDSGraphMode::UNDIRECTED,
@@ -18,13 +19,16 @@
 // no new file, no CMake change, no extension-load change.
 //
 // Shapes:
-//   makeNodeScoreFunc  — double per node (centrality scores, SSSP distances, core numbers).
-//   makePartitionFunc  — int64 per node (community / component ids from a NetworKit Partition).
-//   makeEmbeddingFunc  — fixed-width float/double vector per node (Node2Vec, FastRP).
+//   makeNodeScoreFunc    — double per node (centrality scores, SSSP distances, core numbers).
+//   makePartitionFunc    — int64 per node (community / component ids from a NetworKit Partition).
+//   makeEmbeddingFunc    — fixed-width float/double vector per node (Node2Vec, FastRP).
+//   makeSeedCommunityFunc — one row per community member (SCD seed queries: member node +
+//                           community id + community score, e.g. SteinerKCore coreness).
 //
 // Algo-type dimensions expressed per row:
 //   GDSExtraKind  — NONE (graph name only), SOURCE_LIST (PPR-style LIST of rowids),
-//                   SINGLE_SOURCE (BFS-style single INT64 rowid).
+//                   SINGLE_SOURCE (BFS-style single INT64 rowid), SEED_SET (SCD-style
+//                   LIST of seed rowids).
 //   GDSGraphMode  — UNDIRECTED (symmetrized simple projection, zero-copy when possible),
 //                   DIRECTED (out/in CSR pair scanned from storage).
 
@@ -49,11 +53,11 @@
 namespace lbug {
 namespace algo_extension {
 
-enum class GDSExtraKind : uint8_t { NONE, SOURCE_LIST, SINGLE_SOURCE };
+enum class GDSExtraKind : uint8_t { NONE, SOURCE_LIST, SINGLE_SOURCE, SEED_SET };
 enum class GDSGraphMode : uint8_t { UNDIRECTED, DIRECTED };
 
 // Positional extra arguments after the graph name. SINGLE_SOURCE stores its one rowid in
-// sources[0]; SOURCE_LIST stores the whole list.
+// sources[0]; SOURCE_LIST and SEED_SET store the whole list (PPR sources / SCD seeds).
 struct GDSExtraArgs {
     std::vector<uint64_t> sources;
 };
@@ -86,6 +90,10 @@ inline void appendExtraSignature(GDSExtraKind kind, std::vector<common::LogicalT
         inputTypes.push_back(common::LogicalTypeID::LIST);
         paramNames.emplace_back("sources");
         paramTypes.push_back(common::LogicalType::LIST(common::LogicalType::INT64()));
+    } else if (kind == GDSExtraKind::SEED_SET) {
+        inputTypes.push_back(common::LogicalTypeID::LIST);
+        paramNames.emplace_back("seeds");
+        paramTypes.push_back(common::LogicalType::LIST(common::LogicalType::INT64()));
     } else if (kind == GDSExtraKind::SINGLE_SOURCE) {
         inputTypes.push_back(common::LogicalTypeID::INT64);
         paramNames.emplace_back("source");
@@ -96,7 +104,9 @@ inline void appendExtraSignature(GDSExtraKind kind, std::vector<common::LogicalT
 inline GDSExtraArgs bindExtraArgs(GDSExtraKind kind, const function::TableFuncBindInput* input,
     const char* funcName) {
     GDSExtraArgs extra;
-    if (kind == GDSExtraKind::SOURCE_LIST) {
+    const bool isSeedSet = kind == GDSExtraKind::SEED_SET;
+    const char* noun = isSeedSet ? "seed" : "source";
+    if (kind == GDSExtraKind::SOURCE_LIST || isSeedSet) {
         const auto& value = input->getValue(1);
         value.validateType(common::LogicalTypeID::LIST);
         extra.sources.reserve(common::NestedVal::getChildrenSize(&value));
@@ -106,13 +116,13 @@ inline GDSExtraArgs bindExtraArgs(GDSExtraKind kind, const function::TableFuncBi
             const auto source = child->getValue<int64_t>();
             if (source < 0) {
                 throw common::BinderException{
-                    std::string{funcName} + " source node offsets must be non-negative."};
+                    std::string{funcName} + " " + noun + " node offsets must be non-negative."};
             }
             extra.sources.push_back(static_cast<uint64_t>(source));
         }
         if (extra.sources.empty()) {
             throw common::BinderException{
-                std::string{funcName} + " requires at least one source node."};
+                std::string{funcName} + " requires at least one " + noun + " node."};
         }
     } else if (kind == GDSExtraKind::SINGLE_SOURCE) {
         const auto source = input->getLiteralVal<int64_t>(1);
@@ -137,12 +147,12 @@ inline void validateExtraArgs(const GDSExtraArgs& extra, common::offset_t numNod
     }
 }
 
-// Functions whose extras include nested types (SOURCE_LIST's LIST(INT64)) cannot use the
-// default input-type path: the binder builds LogicalTypes from the declared LogicalTypeIDs,
-// and a bare LIST ID has no child info. Infer the nested type from the CALL-site argument
-// instead (same mechanism as query_hnsw_index's ARRAY param).
+// Functions whose extras include nested types (SOURCE_LIST's / SEED_SET's LIST(INT64)) cannot
+// use the default input-type path: the binder builds LogicalTypes from the declared
+// LogicalTypeIDs, and a bare LIST ID has no child info. Infer the nested type from the
+// CALL-site argument instead (same mechanism as query_hnsw_index's ARRAY param).
 inline void setInferInputTypes(GDSExtraKind kind, function::TableFunction* func) {
-    if (kind == GDSExtraKind::SOURCE_LIST) {
+    if (kind == GDSExtraKind::SOURCE_LIST || kind == GDSExtraKind::SEED_SET) {
         func->inferInputTypes = [](const binder::expression_vector& params) {
             std::vector<common::LogicalType> types;
             types.push_back(common::LogicalType::STRING());
@@ -528,6 +538,186 @@ function::function_set makeEmbeddingFunc(std::string funcName, GDSExtraKind extr
         columns.push_back(nodeOutput->constCast<binder::NodeExpression>().getInternalID());
         columns.push_back(input->binder->createVariable("embedding",
             detail::EmbeddingLogicalType<FloatT>::get()));
+        return std::unique_ptr<function::TableFuncBindData>(std::make_unique<BindData>(
+            std::move(columns), std::move(graphEntry), binder::expression_vector{nodeOutput},
+            std::make_unique<Params>(input->optionalParamsLegacy), funcName, std::move(graphName),
+            std::move(extra), erasedRunner, mode));
+    };
+    detail::appendExtraSignature(extraKind, inputTypes, paramNames, paramTypes);
+    auto func = std::make_unique<function::TableFunction>(funcName, inputTypes);
+    detail::setInferInputTypes(extraKind, func.get());
+    func->parameterNames = std::move(paramNames);
+    func->parameterTypes = std::move(paramTypes);
+    func->bindFunc = std::move(bindFunc);
+    func->tableFunc = std::move(tableFunc);
+    func->initSharedStateFunc = function::GDSFunction::initSharedState;
+    func->initLocalStateFunc = function::TableFunction::initEmptyLocalState;
+    func->canParallelFunc = [] { return false; };
+    func->getLogicalPlanFunc = function::GDSFunction::getLogicalPlan;
+    func->getPhysicalPlanFunc = function::GDSFunction::getPhysicalPlan;
+    result.push_back(std::move(func));
+    return result;
+}
+
+// SCD result: community members with a per-member community id, plus the community score
+// (e.g. SteinerKCore coreness k) shared by the result. communityIds is parallel to
+// members (the query index; all 0 for single-seed queries), so batched multi-set queries
+// can reuse this shape with one row per (query, member).
+struct SeedCommunityResult {
+    std::vector<uint64_t> members;
+    std::vector<int64_t> communityIds;
+    int64_t score = 0;
+};
+
+namespace detail {
+
+// Emits one row per community member; non-members (and masked-out nodes) are skipped.
+// Unlike the dense per-node computes above, output cardinality is the community size,
+// not the node count.
+class SeedCommunityVertexCompute final : public function::GDSResultVertexCompute {
+public:
+    SeedCommunityVertexCompute(storage::MemoryManager* mm,
+        function::GDSFuncSharedState* sharedState, const std::vector<char>& isMember,
+        const std::vector<int64_t>& communityOf, int64_t score)
+        : GDSResultVertexCompute{mm, sharedState}, isMember{isMember}, communityOf{communityOf},
+          score{score} {
+        nodeIDVector = createVector(common::LogicalType::INTERNAL_ID());
+        communityIDVector = createVector(common::LogicalType::INT64());
+        scoreVector = createVector(common::LogicalType::INT64());
+    }
+
+    void beginOnTableInternal(common::table_id_t) override {}
+
+    void vertexCompute(common::offset_t startOffset, common::offset_t endOffset,
+        common::table_id_t tableID) override {
+        for (auto i = startOffset; i < endOffset; ++i) {
+            if (i >= isMember.size() || !isMember[i] || skip(i)) {
+                continue;
+            }
+            nodeIDVector->setValue<common::nodeID_t>(0, common::nodeID_t{i, tableID});
+            communityIDVector->setValue<int64_t>(0, communityOf[i]);
+            scoreVector->setValue<int64_t>(0, score);
+            localFT->append(vectors);
+        }
+    }
+
+    std::unique_ptr<VertexCompute> copy() override {
+        return std::make_unique<SeedCommunityVertexCompute>(mm, sharedState, isMember, communityOf,
+            score);
+    }
+
+private:
+    const std::vector<char>& isMember;
+    const std::vector<int64_t>& communityOf;
+    int64_t score;
+    std::unique_ptr<common::ValueVector> nodeIDVector;
+    std::unique_ptr<common::ValueVector> communityIDVector;
+    std::unique_ptr<common::ValueVector> scoreVector;
+};
+
+} // namespace detail
+
+// SCD seed-query output (CALL f('G', [seeds]) -> one row per community member).
+// Unlike the builders above the runner returns a sparse member list, not a dense per-node
+// vector: SeedCommunityResult{insights.members, insights.communityIds, insights.score}.
+template<typename... Specs, typename Runner>
+function::function_set makeSeedCommunityFunc(std::string funcName, std::string idColumn,
+    std::string scoreColumn, GDSGraphMode mode, Runner&& runner) {
+    using Params = GDSGenericParams<Specs...>;
+    using RunnerT = std::function<SeedCommunityResult(const NetworKit::GraphR&,
+        const std::vector<uint64_t>&, const Params&)>;
+    struct BindData final : public function::GDSBindData {
+        std::string funcName;
+        std::string graphName;
+        GDSExtraArgs extra;
+        RunnerT runner;
+        GDSGraphMode mode;
+
+        BindData(binder::expression_vector columns, graph::NativeGraphEntry graphEntry,
+            binder::expression_vector output, std::unique_ptr<function::OptionalParams> params,
+            std::string funcName, std::string graphName, GDSExtraArgs extra, RunnerT runner,
+            GDSGraphMode mode)
+            : function::GDSBindData{std::move(columns), std::move(graphEntry), std::move(output)},
+              funcName{std::move(funcName)}, graphName{std::move(graphName)},
+              extra{std::move(extra)}, runner{std::move(runner)}, mode{mode} {
+            this->optionalParams = std::move(params);
+        }
+
+        std::unique_ptr<function::TableFuncBindData> copy() const override {
+            return std::make_unique<BindData>(*this);
+        }
+    };
+    RunnerT erasedRunner = std::forward<Runner>(runner);
+    constexpr auto extraKind = GDSExtraKind::SEED_SET;
+    function::function_set result;
+    std::vector<common::LogicalTypeID> inputTypes{common::LogicalTypeID::STRING};
+    std::vector<std::string> paramNames{"graph_name"};
+    std::vector<common::LogicalType> paramTypes;
+    paramTypes.push_back(common::LogicalType::STRING());
+    auto tableFunc = [erasedRunner](const function::TableFuncInput& input,
+                         function::TableFuncOutput&) {
+        auto clientContext = input.context->clientContext;
+        auto transaction = transaction::Transaction::Get(*clientContext);
+        auto sharedState = input.sharedState->template ptrCast<function::GDSFuncSharedState>();
+        auto graph = sharedState->graph.get();
+        auto maxOffsetMap = graph->getMaxOffsetMap(transaction);
+        if (maxOffsetMap.size() != 1) {
+            throw common::BinderException{"GDS functions currently support single-node-table "
+                                          "graphs only."};
+        }
+        const auto tableID = maxOffsetMap.begin()->first;
+        const auto numNodes = maxOffsetMap.begin()->second;
+        auto mm = storage::MemoryManager::Get(*clientContext);
+        auto bindData = input.bindData->template constPtrCast<BindData>();
+        auto& params = bindData->optionalParams->template constCast<Params>();
+        for (const auto seed : bindData->extra.sources) {
+            if (seed >= numNodes) {
+                throw common::BinderException{bindData->funcName + " seed node offset " +
+                                              std::to_string(seed) +
+                                              " is out of range: the projected graph has " +
+                                              std::to_string(numNodes) + " nodes."};
+            }
+        }
+        SeedCommunityResult community;
+        if (bindData->mode == GDSGraphMode::DIRECTED) {
+            auto csr = buildDirectedCSR(graph, tableID, numNodes);
+            NetworKit::GraphR g(numNodes, /*directed=*/true, csr.outIndices, csr.outIndptr,
+                csr.inIndices, csr.inIndptr);
+            community = bindData->runner(g, bindData->extra.sources, params);
+        } else {
+            auto csr = buildUndirectedCSR(clientContext, bindData->graphName, graph, tableID,
+                numNodes, mm);
+            NetworKit::GraphR g(numNodes, /*directed=*/false, csr.indices, csr.indptr);
+            community = bindData->runner(g, bindData->extra.sources, params);
+        }
+        std::vector<char> isMember(numNodes, 0);
+        std::vector<int64_t> communityOf(numNodes, -1);
+        const auto count =
+            std::min<size_t>(community.members.size(), community.communityIds.size());
+        for (auto i = 0u; i < count; ++i) {
+            if (community.members[i] < static_cast<uint64_t>(numNodes)) {
+                isMember[community.members[i]] = 1;
+                communityOf[community.members[i]] = community.communityIds[i];
+            }
+        }
+        auto outputVC = std::make_unique<detail::SeedCommunityVertexCompute>(mm, sharedState,
+            isMember, communityOf, community.score);
+        function::GDSUtils::runVertexCompute(input.context, function::GDSDensityState::DENSE, graph,
+            *outputVC);
+        sharedState->factorizedTablePool.mergeLocalTables();
+        return 0;
+    };
+    auto bindFunc = [funcName, idColumn, scoreColumn, mode, erasedRunner](
+                        main::ClientContext* context, const function::TableFuncBindInput* input) {
+        auto graphName = input->getLiteralVal<std::string>(0);
+        auto extra = detail::bindExtraArgs(extraKind, input, funcName.c_str());
+        auto graphEntry = function::GDSFunction::bindGraphEntry(*context, graphName);
+        auto nodeOutput =
+            function::GDSFunction::bindNodeOutput(*input, graphEntry.getNodeEntries());
+        binder::expression_vector columns;
+        columns.push_back(nodeOutput->constCast<binder::NodeExpression>().getInternalID());
+        columns.push_back(input->binder->createVariable(idColumn, common::LogicalType::INT64()));
+        columns.push_back(input->binder->createVariable(scoreColumn, common::LogicalType::INT64()));
         return std::unique_ptr<function::TableFuncBindData>(std::make_unique<BindData>(
             std::move(columns), std::move(graphEntry), binder::expression_vector{nodeOutput},
             std::make_unique<Params>(input->optionalParamsLegacy), funcName, std::move(graphName),

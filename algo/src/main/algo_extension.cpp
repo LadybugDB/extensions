@@ -6,7 +6,6 @@
 #include "main/client_context.h"
 #if defined(ICEBUG_ENABLED)
 #include "function/gds_registry.h"
-#include "function/steiner_k_core.h"
 #endif
 
 namespace lbug {
@@ -44,10 +43,6 @@ void AlgoExtension::load(main::ClientContext* context) {
     // Every icebug-backed GDS_* function comes from the registry table (gds_registry.cpp):
     // adding an algorithm is one row there, nothing to wire up here.
     registerGDSFunctions(db);
-    // Single-seed k-core community search on icebug 13.6 NetworKit::SteinerKCore
-    // (batched multi-set queries are future work; see steiner_k_core.h).
-    ExtensionUtils::addTableFunc<SteinerKCoreFunction>(db);
-    ExtensionUtils::addTableFuncAlias<SteinerKCoreAliasFunction>(db);
 #endif
     ExtensionUtils::addTableFunc<KCoreDecompositionFunction>(db);
     ExtensionUtils::addTableFuncAlias<KCoreDecompositionAliasFunction>(db);
