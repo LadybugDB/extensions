@@ -1,18 +1,15 @@
 #pragma once
 
-// Stub for the icebug 13.6 k-core community search (NetworKit::SteinerKCore).
+// Single-seed k-core community search backed by icebug 13.6
+// NetworKit::SteinerKCore::communities().
 //
-// The C++ API (include/networkit/scd/SteinerKCore.hpp) is batched multi-set SCD:
-//   Communities communities(const std::vector<std::set<node>>& s);
-// which does not fit the existing per-node builders in gds_generic_algo.h
-// (makeNodeScoreFunc / makePartitionFunc / makeEmbeddingFunc). Wiring the real
-// implementation needs a new SCD-shape builder (graph + seed-set list in,
-// per-(query, member) rows out). Until that builder lands, this TableFunction
-// exists so the CALL signature is reserved and tests have a pinning point —
-// bind succeeds, tableFunc throws a clear "not yet implemented" error.
-//
-// Expected final shape (TBD): CALL GDS_STEINER_K_CORE('G', [seed, ...])
-// returns (node, community_id, coreness) for the community of the seed set.
+// CALL GDS_STEINER_K_CORE('G', [seeds]) (alias STEINER_K_CORE) returns one row
+// per community member: (node, community_id, coreness). Single seed set only,
+// so every member shares community_id 0 and the community's coreness k — the
+// connected component of the k-core containing the seeds, for the largest such
+// k. Batched multi-set queries (one community per seed set) are future work;
+// they need an SCD-shape builder that does not fit the per-node make*Func
+// builders in gds_generic_algo.h.
 
 #include "function/function.h"
 

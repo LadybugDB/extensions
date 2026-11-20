@@ -1,21 +1,32 @@
-// Stub for the icebug 13.6 SteinerKCore k-core community search.
-// See src/include/function/steiner_k_core.h for why this is a stub and what the
-// final shape should be. Bind validates the CALL signature; tableFunc throws until
-// the SCD-shape builder (graph + seed-set list in, per-member rows out) lands.
+// Single-seed k-core community search backed by icebug 13.6
+// NetworKit::SteinerKCore::communities().
+//
+// CALL GDS_STEINER_K_CORE('G', [seeds]) returns one row per community member:
+// (node, community_id, coreness). Single seed set only: every member shares
+// community_id 0 and the community's coreness k — the connected component of
+// the k-core containing the seeds, for the largest such k. Batched multi-set
+// queries (one community per seed set) are future work; they need an SCD-shape
+// builder that does not fit the per-node make*Func builders in
+// gds_generic_algo.h.
 #include "function/steiner_k_core.h"
+
+#include <set>
+#include <vector>
 
 #include "binder/binder.h"
 #include "common/exception/binder.h"
-#include "common/exception/runtime.h"
 #include "common/types/value/nested.h"
 #include "function/algo_function.h"
 #include "function/gds/gds.h"
+#include "function/gds/gds_utils.h"
+#include "function/gds/gds_vertex_compute.h"
+#include "function/gds_csr_bridge.h"
 #include "function/table/bind_input.h"
 #include "processor/execution_context.h"
+#include "transaction/transaction.h"
 
 #if defined(ICEBUG_ENABLED)
-// Prove the 13.6 prebuilt / source build ships the new algorithm. No API use yet —
-/// the SCD builder will call NetworKit::SteinerKCore::communities().
+#include <networkit/graph/GraphR.hpp>
 #include <networkit/scd/SteinerKCore.hpp>
 #endif
 
@@ -34,11 +45,12 @@ namespace {
 struct SteinerKCoreBindData final : public GDSBindData {
     // Seed row offsets as given in the CALL-site LIST(INT64).
     std::vector<int64_t> seeds;
+    std::string graphName;
 
     SteinerKCoreBindData(expression_vector columns, graph::NativeGraphEntry graphEntry,
-        expression_vector output, std::vector<int64_t> seeds)
+        expression_vector output, std::vector<int64_t> seeds, std::string graphName)
         : GDSBindData{std::move(columns), std::move(graphEntry), std::move(output)},
-          seeds{std::move(seeds)} {}
+          seeds{std::move(seeds)}, graphName{std::move(graphName)} {}
 
     std::unique_ptr<TableFuncBindData> copy() const override {
         return std::make_unique<SteinerKCoreBindData>(*this);
@@ -67,13 +79,89 @@ std::vector<int64_t> bindSeeds(const TableFuncBindInput* input) {
     return seeds;
 }
 
-static offset_t tableFunc(const TableFuncInput&, TableFuncOutput&) {
-    // SCD-shape builder TBD: bridge the projected graph to NetworKit::GraphR, run
-    // NetworKit::SteinerKCore::communities() over the bound seed sets, and stream
-    // (node, community_id, coreness) rows. See steiner_k_core.h.
-    throw RuntimeException{std::string{SteinerKCoreFunction::name} +
-                           " is not yet implemented: the SCD-shape builder for icebug 13.6 "
-                           "NetworKit::SteinerKCore is pending."};
+// Emits one row per community member; non-members (and masked-out nodes) are skipped.
+class SteinerKCoreResultVertexCompute final : public GDSResultVertexCompute {
+public:
+    SteinerKCoreResultVertexCompute(MemoryManager* mm, GDSFuncSharedState* sharedState,
+        const std::vector<char>& isMember, int64_t coreness)
+        : GDSResultVertexCompute{mm, sharedState}, isMember{isMember}, coreness{coreness} {
+        nodeIDVector = createVector(LogicalType::INTERNAL_ID());
+        communityIDVector = createVector(LogicalType::INT64());
+        corenessVector = createVector(LogicalType::INT64());
+    }
+
+    void beginOnTableInternal(table_id_t) override {}
+
+    void vertexCompute(offset_t startOffset, offset_t endOffset, table_id_t tableID) override {
+        for (auto i = startOffset; i < endOffset; ++i) {
+            if (i >= isMember.size() || !isMember[i] || skip(i)) {
+                continue;
+            }
+            nodeIDVector->setValue<nodeID_t>(0, nodeID_t{i, tableID});
+            // Single seed set: one community, id 0; coreness k shared by all members.
+            communityIDVector->setValue<int64_t>(0, 0);
+            corenessVector->setValue<int64_t>(0, coreness);
+            localFT->append(vectors);
+        }
+    }
+
+    std::unique_ptr<VertexCompute> copy() override {
+        return std::make_unique<SteinerKCoreResultVertexCompute>(mm, sharedState, isMember,
+            coreness);
+    }
+
+private:
+    const std::vector<char>& isMember;
+    int64_t coreness;
+    std::unique_ptr<ValueVector> nodeIDVector;
+    std::unique_ptr<ValueVector> communityIDVector;
+    std::unique_ptr<ValueVector> corenessVector;
+};
+
+static offset_t tableFunc(const TableFuncInput& input, TableFuncOutput&) {
+    auto clientContext = input.context->clientContext;
+    auto transaction = transaction::Transaction::Get(*clientContext);
+    auto sharedState = input.sharedState->ptrCast<GDSFuncSharedState>();
+    auto graph = sharedState->graph.get();
+    auto maxOffsetMap = graph->getMaxOffsetMap(transaction);
+    if (maxOffsetMap.size() != 1) {
+        throw BinderException{"GDS functions currently support single-node-table "
+                              "graphs only."};
+    }
+    const auto tableID = maxOffsetMap.begin()->first;
+    const auto numNodes = maxOffsetMap.begin()->second;
+    auto mm = MemoryManager::Get(*clientContext);
+    auto bindData = input.bindData->constPtrCast<SteinerKCoreBindData>();
+    for (const auto seed : bindData->seeds) {
+        if (static_cast<common::offset_t>(seed) >= numNodes) {
+            throw BinderException{std::string{SteinerKCoreFunction::name} + " seed node offset " +
+                                  std::to_string(seed) +
+                                  " is out of range: the projected graph has " +
+                                  std::to_string(numNodes) + " nodes."};
+        }
+    }
+    std::set<NetworKit::node> seedSet;
+    for (const auto seed : bindData->seeds) {
+        seedSet.insert(static_cast<NetworKit::node>(seed));
+    }
+    auto csr = buildUndirectedCSR(clientContext, bindData->graphName, graph, tableID, numNodes, mm);
+    NetworKit::GraphR rawGraph(static_cast<NetworKit::count>(numNodes), /*directed=*/false,
+        csr.indices, csr.indptr);
+    NetworKit::Graph networKitGraph(rawGraph);
+    NetworKit::SteinerKCore steiner(networKitGraph);
+    auto result = steiner.communities({seedSet});
+    const auto coreness = static_cast<int64_t>(result.coreness[0]);
+    std::vector<char> isMember(numNodes, 0);
+    for (const auto v : result.communities[0]) {
+        if (v < static_cast<NetworKit::node>(numNodes)) {
+            isMember[v] = 1;
+        }
+    }
+    auto outputVC =
+        std::make_unique<SteinerKCoreResultVertexCompute>(mm, sharedState, isMember, coreness);
+    GDSUtils::runVertexCompute(input.context, GDSDensityState::DENSE, graph, *outputVC);
+    sharedState->factorizedTablePool.mergeLocalTables();
+    return 0;
 }
 
 static constexpr char COMMUNITY_ID_COLUMN_NAME[] = "community_id";
@@ -91,7 +179,7 @@ static std::unique_ptr<TableFuncBindData> bindFunc(main::ClientContext* context,
         input->binder->createVariable(COMMUNITY_ID_COLUMN_NAME, LogicalType::INT64()));
     columns.push_back(input->binder->createVariable(CORENESS_COLUMN_NAME, LogicalType::INT64()));
     return std::make_unique<SteinerKCoreBindData>(std::move(columns), std::move(graphEntry),
-        expression_vector{nodeOutput}, std::move(seeds));
+        expression_vector{nodeOutput}, std::move(seeds), graphName);
 }
 
 } // namespace

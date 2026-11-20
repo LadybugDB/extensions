@@ -2,7 +2,7 @@
 
 --
 
--CASE SteinerKCoreStub
+-CASE SteinerKCoreSingleSeed
 -LOAD_DYNAMIC_EXTENSION algo
 -STATEMENT CREATE NODE TABLE N(id INT64 PRIMARY KEY)
 ---- ok
@@ -18,14 +18,34 @@
 ---- ok
 -STATEMENT CALL PROJECT_GRAPH('G', ['N'], ['E'])
 ---- ok
--LOG Stub: bind validates the seed list, then tableFunc throws until the SCD-shape builder for icebug 13.6 SteinerKCore lands.
--STATEMENT CALL GDS_STEINER_K_CORE('G', [1]) RETURN node.id, community_id, coreness
----- error
-Runtime exception: GDS_STEINER_K_CORE is not yet implemented: the SCD-shape builder for icebug 13.6 NetworKit::SteinerKCore is pending.
--LOG Alias resolves to the same stub.
--STATEMENT CALL STEINER_K_CORE('G', [1]) RETURN node.id, community_id, coreness
----- error
-Runtime exception: GDS_STEINER_K_CORE is not yet implemented: the SCD-shape builder for icebug 13.6 NetworKit::SteinerKCore is pending.
+-LOG Star centered at 0: the whole graph is the 1-core, so seed {1} yields all nodes with k=1.
+-STATEMENT CALL GDS_STEINER_K_CORE('G', [1]) RETURN node.id, community_id, coreness ORDER BY node.id
+---- 4
+0|0|1
+1|0|1
+2|0|1
+3|0|1
+-LOG Hub seed resolves to the same community.
+-STATEMENT CALL GDS_STEINER_K_CORE('G', [0]) RETURN node.id, community_id, coreness ORDER BY node.id
+---- 4
+0|0|1
+1|0|1
+2|0|1
+3|0|1
+-LOG Multi-seed query in one set: {1, 2} are connected in the 1-core, same community.
+-STATEMENT CALL GDS_STEINER_K_CORE('G', [1, 2]) RETURN node.id, community_id, coreness ORDER BY node.id
+---- 4
+0|0|1
+1|0|1
+2|0|1
+3|0|1
+-LOG Alias resolves to the same implementation.
+-STATEMENT CALL STEINER_K_CORE('G', [1]) RETURN node.id, community_id, coreness ORDER BY node.id
+---- 4
+0|0|1
+1|0|1
+2|0|1
+3|0|1
 -LOG Empty seed list is a binder error.
 -STATEMENT CALL GDS_STEINER_K_CORE('G', []) RETURN node.id, community_id, coreness
 ---- error
@@ -34,3 +54,7 @@ Binder exception: GDS_STEINER_K_CORE requires at least one seed node.
 -STATEMENT CALL GDS_STEINER_K_CORE('G', [-1]) RETURN node.id, community_id, coreness
 ---- error
 Binder exception: GDS_STEINER_K_CORE seed node offsets must be non-negative.
+-LOG Out-of-range seeds are rejected once the projected graph size is known.
+-STATEMENT CALL GDS_STEINER_K_CORE('G', [99]) RETURN node.id, community_id, coreness
+---- error
+Binder exception: GDS_STEINER_K_CORE seed node offset 99 is out of range: the projected graph has 4 nodes.
