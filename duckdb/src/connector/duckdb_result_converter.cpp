@@ -2,11 +2,11 @@
 
 #include <numeric>
 
-#include "duckdb/common/vector/list_vector.hpp"
-#include "duckdb/common/vector/struct_vector.hpp"
-
 #include "common/type_utils.h"
 #include "common/types/types.h"
+#include "duckdb/common/vector/array_vector.hpp"
+#include "duckdb/common/vector/list_vector.hpp"
+#include "duckdb/common/vector/struct_vector.hpp"
 
 namespace lbug {
 namespace duckdb_extension {
@@ -86,8 +86,10 @@ void convertDuckDBVectorToVector<list_entry_t>(duckdb::Vector& duckDBVector, Val
     duckdb_conversion_func_t conversion_func;
     DuckDBResultConverter::getDuckDBVectorConversionFunc(dataVec->dataType.getPhysicalType(),
         conversion_func);
-    conversion_func(duckdb::ListVector::GetChildMutable(duckDBVector), *dataVec,
-        numValuesInDataVec);
+    auto& childVector = duckDBVector.GetType().id() == duckdb::LogicalTypeId::ARRAY ?
+                            duckdb::ArrayVector::GetChildMutable(duckDBVector) :
+                            duckdb::ListVector::GetChildMutable(duckDBVector);
+    conversion_func(childVector, *dataVec, numValuesInDataVec);
 }
 
 template<>

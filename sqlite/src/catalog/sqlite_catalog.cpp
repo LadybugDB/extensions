@@ -17,6 +17,7 @@
 #include "main/client_context.h"
 #include "main/database.h"
 #include "storage/storage_manager.h"
+#include "transaction/transaction.h"
 #include <format>
 
 namespace lbug {
@@ -111,9 +112,10 @@ void SqliteCatalog::createForeignTable(const std::string& tableName) {
         mainTableEntry->addProperty(definition);
     }
     mainTableEntry->setReferencedEntry(attachedEntry);
-    context_->getDatabase()->getCatalog()->addTableEntry(std::move(mainTableEntry));
-    auto mainEntry = context_->getDatabase()->getCatalog()->getTableCatalogEntry(
-        &transaction::DUMMY_TRANSACTION, tableName);
+    auto* transaction = transaction::Transaction::Get(*context_);
+    context_->getDatabase()->getCatalog()->addTableEntry(transaction, std::move(mainTableEntry));
+    auto mainEntry =
+        context_->getDatabase()->getCatalog()->getTableCatalogEntry(transaction, tableName);
     lbug::storage::StorageManager::Get(*context_)->createTable(mainEntry);
 }
 
@@ -145,13 +147,14 @@ void SqliteCatalog::createForeignRelTable(const std::string& tableName) {
     }
 
     auto* catalog = context_->getDatabase()->getCatalog();
-    if (!catalog->containsTable(&transaction::DUMMY_TRANSACTION, srcTableName) ||
-        !catalog->containsTable(&transaction::DUMMY_TRANSACTION, dstTableName)) {
+    auto* transaction = transaction::Transaction::Get(*context_);
+    if (!catalog->containsTable(transaction, srcTableName) ||
+        !catalog->containsTable(transaction, dstTableName)) {
         createForeignTable(tableName);
         return;
     }
-    auto* srcEntry = catalog->getTableCatalogEntry(&transaction::DUMMY_TRANSACTION, srcTableName);
-    auto* dstEntry = catalog->getTableCatalogEntry(&transaction::DUMMY_TRANSACTION, dstTableName);
+    auto* srcEntry = catalog->getTableCatalogEntry(transaction, srcTableName);
+    auto* dstEntry = catalog->getTableCatalogEntry(transaction, dstTableName);
     if (srcEntry == nullptr || dstEntry == nullptr) {
         createForeignTable(tableName);
         return;
@@ -228,9 +231,9 @@ void SqliteCatalog::createForeignRelTable(const std::string& tableName) {
     for (auto& def : propertyDefinitions) {
         relGroupEntry->addProperty(def);
     }
-    context_->getDatabase()->getCatalog()->addTableEntry(std::move(relGroupEntry));
-    auto mainEntry = context_->getDatabase()->getCatalog()->getTableCatalogEntry(
-        &transaction::DUMMY_TRANSACTION, tableName);
+    context_->getDatabase()->getCatalog()->addTableEntry(transaction, std::move(relGroupEntry));
+    auto mainEntry =
+        context_->getDatabase()->getCatalog()->getTableCatalogEntry(transaction, tableName);
     if (mainEntry) {
         storage::StorageManager::Get(*context_)->createTable(mainEntry);
     }
