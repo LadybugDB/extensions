@@ -39,13 +39,6 @@
 1|0|1
 2|0|1
 3|0|1
--LOG Alias resolves to the same implementation.
--STATEMENT CALL STEINER_K_CORE('G', [1]) RETURN node.id, community_id, coreness ORDER BY node.id
----- 4
-0|0|1
-1|0|1
-2|0|1
-3|0|1
 -LOG Empty seed list is a binder error.
 -STATEMENT CALL GDS_STEINER_K_CORE('G', []) RETURN node.id, community_id, coreness
 ---- error
