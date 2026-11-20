@@ -468,7 +468,10 @@ void execFunc(const std::vector<std::shared_ptr<ValueVector>>& parameters,
         std::min<uint64_t>({4, ctx->getMaxNumThreadForExec(), static_cast<uint64_t>(jobs.size())});
     auto task = std::make_shared<ExtractRecordTask>(std::max<uint64_t>(1, workerCount), jobs,
         bindData, ctx, apiKey);
-    TaskScheduler::Get(*ctx)->scheduleTaskAndWaitOrError(task, ctx, true);
+    // A thread running the query holds a scheduler slot and works on the task it waits for. A
+    // call folded at bind time usually holds none; it runs its one-row task in a free slot or
+    // waits for a worker.
+    TaskScheduler::Get(*ctx)->scheduleTaskAndWaitOrError(task, ctx);
 
     // Write results back into the STRUCT child vectors.
     result.resetAuxiliaryBuffer();
