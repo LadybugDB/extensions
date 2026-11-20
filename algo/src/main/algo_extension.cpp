@@ -44,8 +44,8 @@ void AlgoExtension::load(main::ClientContext* context) {
     // Every icebug-backed GDS_* function comes from the registry table (gds_registry.cpp):
     // adding an algorithm is one row there, nothing to wire up here.
     registerGDSFunctions(db);
-    // SCD-shape stub for icebug 13.6 NetworKit::SteinerKCore (bind validates, tableFunc
-    // throws until the batched multi-set SCD builder lands; see steiner_k_core.h).
+    // Single-seed k-core community search on icebug 13.6 NetworKit::SteinerKCore
+    // (batched multi-set queries are future work; see steiner_k_core.h).
     ExtensionUtils::addTableFunc<SteinerKCoreFunction>(db);
     ExtensionUtils::addTableFuncAlias<SteinerKCoreAliasFunction>(db);
 #endif
