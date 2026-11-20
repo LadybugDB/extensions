@@ -17,6 +17,7 @@
 #include "main/database.h"
 #include "storage/buffer_manager/memory_manager.h"
 #include "storage/pg_client_storage.h"
+#include "transaction/transaction.h"
 
 namespace lbug {
 namespace pg_client_extension {
@@ -208,11 +209,12 @@ void PgClientCatalog::createForeignNodeTable(const std::string& tableName) {
     // Link the shadow entry to the foreign entry so planners can find the scan function
     mainTableEntry->setReferencedEntry(attachedEntryPtr);
 
-    context_->getDatabase()->getCatalog()->addTableEntry(std::move(mainTableEntry));
+    auto* transaction = transaction::Transaction::Get(*context_);
+    context_->getDatabase()->getCatalog()->addTableEntry(transaction, std::move(mainTableEntry));
 
     // Register in the storage manager so the query planner can find this table
-    auto* mainEntry = context_->getDatabase()->getCatalog()->getTableCatalogEntry(
-        &transaction::DUMMY_TRANSACTION, tableName);
+    auto* mainEntry =
+        context_->getDatabase()->getCatalog()->getTableCatalogEntry(transaction, tableName);
     if (mainEntry) {
         storage::StorageManager::Get(*context_)->createTable(mainEntry);
     }
@@ -343,16 +345,17 @@ void PgClientCatalog::createForeignRelTable(const std::string& tableName) {
         relGroupEntry->addProperty(def);
     }
 
-    context_->getDatabase()->getCatalog()->addTableEntry(std::move(relGroupEntry));
+    auto* relTransaction = transaction::Transaction::Get(*context_);
+    context_->getDatabase()->getCatalog()->addTableEntry(relTransaction, std::move(relGroupEntry));
 
     // Set up storage for the rel table so the planner can find it. This
     // instantiates a ForeignRelTable, which lazily creates the scan function's
     // shared state on the first initScanState and shares it across all
     // worker threads (morsel-driven parallelism).
-    auto mainEntry = context_->getDatabase()->getCatalog()->getTableCatalogEntry(
-        &transaction::DUMMY_TRANSACTION, tableName);
-    if (mainEntry) {
-        storage::StorageManager::Get(*context_)->createTable(mainEntry);
+    auto relMainEntry =
+        context_->getDatabase()->getCatalog()->getTableCatalogEntry(relTransaction, tableName);
+    if (relMainEntry) {
+        storage::StorageManager::Get(*context_)->createTable(relMainEntry);
     }
 }
 

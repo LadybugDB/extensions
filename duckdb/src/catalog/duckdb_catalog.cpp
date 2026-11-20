@@ -17,6 +17,7 @@
 #include "function/duckdb_scan.h"
 #include "storage/duckdb_storage.h"
 #include "storage/storage_manager.h"
+#include "transaction/transaction.h"
 #include <format>
 
 namespace lbug {
@@ -159,9 +160,10 @@ void DuckDBCatalog::createForeignTable(const std::string& tableName) {
         mainTableEntry->addProperty(definition);
     }
     mainTableEntry->setReferencedEntry(attachedEntry);
-    context_->getDatabase()->getCatalog()->addTableEntry(std::move(mainTableEntry));
-    auto mainEntry = context_->getDatabase()->getCatalog()->getTableCatalogEntry(
-        &transaction::DUMMY_TRANSACTION, info->tableName);
+    auto* transaction = transaction::Transaction::Get(*context_);
+    context_->getDatabase()->getCatalog()->addTableEntry(transaction, std::move(mainTableEntry));
+    auto mainEntry =
+        context_->getDatabase()->getCatalog()->getTableCatalogEntry(transaction, info->tableName);
     lbug::storage::StorageManager::Get(*context_)->createTable(mainEntry);
 }
 
@@ -212,13 +214,14 @@ void DuckDBCatalog::createForeignRelTable(const std::string& tableName, bool int
     // be checked first: getTableCatalogEntry() throws when the table is
     // missing, and a rel table may reference tables that were not registered.
     auto* catalog = context_->getDatabase()->getCatalog();
-    if (!catalog->containsTable(&transaction::DUMMY_TRANSACTION, srcTableName) ||
-        !catalog->containsTable(&transaction::DUMMY_TRANSACTION, dstTableName)) {
+    auto* transaction = transaction::Transaction::Get(*context_);
+    if (!catalog->containsTable(transaction, srcTableName) ||
+        !catalog->containsTable(transaction, dstTableName)) {
         createForeignTable(tableName);
         return;
     }
-    auto* srcEntry = catalog->getTableCatalogEntry(&transaction::DUMMY_TRANSACTION, srcTableName);
-    auto* dstEntry = catalog->getTableCatalogEntry(&transaction::DUMMY_TRANSACTION, dstTableName);
+    auto* srcEntry = catalog->getTableCatalogEntry(transaction, srcTableName);
+    auto* dstEntry = catalog->getTableCatalogEntry(transaction, dstTableName);
     if (srcEntry == nullptr || dstEntry == nullptr) {
         createForeignTable(tableName);
         return;
@@ -300,10 +303,10 @@ void DuckDBCatalog::createForeignRelTable(const std::string& tableName, bool int
         relGroupEntry->addProperty(def);
     }
 
-    context_->getDatabase()->getCatalog()->addTableEntry(std::move(relGroupEntry));
+    context_->getDatabase()->getCatalog()->addTableEntry(transaction, std::move(relGroupEntry));
 
-    auto mainEntry = context_->getDatabase()->getCatalog()->getTableCatalogEntry(
-        &transaction::DUMMY_TRANSACTION, tableName);
+    auto mainEntry =
+        context_->getDatabase()->getCatalog()->getTableCatalogEntry(transaction, tableName);
     if (mainEntry) {
         storage::StorageManager::Get(*context_)->createTable(mainEntry);
     }

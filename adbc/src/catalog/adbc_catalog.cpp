@@ -44,9 +44,10 @@ void ADBCCatalog::createForeignTable(const std::string& tableName) {
             binder::ColumnDefinition{columnNames[i], columnTypes[i].copy()}});
     }
     mainTableEntry->setReferencedEntry(attachedEntryPtr);
-    context->getDatabase()->getCatalog()->addTableEntry(std::move(mainTableEntry));
-    auto mainEntry = context->getDatabase()->getCatalog()->getTableCatalogEntry(
-        &transaction::DUMMY_TRANSACTION, tableName);
+    auto* transaction = transaction::Transaction::Get(*context);
+    context->getDatabase()->getCatalog()->addTableEntry(transaction, std::move(mainTableEntry));
+    auto mainEntry =
+        context->getDatabase()->getCatalog()->getTableCatalogEntry(transaction, tableName);
     lbug::storage::StorageManager::Get(*context)->createTable(mainEntry);
 }
 

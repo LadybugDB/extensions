@@ -59,9 +59,24 @@ common::LogicalType DuckDBTypeConverter::convertDuckDBType(std::string typeStr) 
     } else if (typeStr == "VARCHAR" || typeStr == "CHAR" || typeStr == "BPCHAR" ||
                typeStr == "TEXT" || typeStr == "STRING") {
         return LogicalType{LogicalTypeID::STRING};
-    } else if (typeStr.ends_with("[]")) {
-        auto innerType = convertDuckDBType(typeStr.substr(0, typeStr.size() - 2));
-        return LogicalType::LIST(innerType.copy());
+    } else if (typeStr.ends_with(']')) {
+        // Peel the outermost trailing dimension first so that nested fixed-size
+        // types (e.g. INTEGER[2][2]) and fixed-size STRUCT/MAP/UNION arrays
+        // (e.g. STRUCT(x INTEGER)[2]) resolve correctly. An empty pair ([]) is
+        // a variable-length LIST, otherwise it is a fixed-size ARRAY.
+        auto leftBracketPos = typeStr.rfind('[');
+        if (leftBracketPos == std::string::npos) {
+            throw BinderException{std::format("Unsupported duckdb type: {}.", typeStr)};
+        }
+        auto inside = typeStr.substr(leftBracketPos + 1, typeStr.size() - leftBracketPos - 2);
+        inside = common::StringUtils::ltrim(inside);
+        inside = common::StringUtils::rtrim(inside);
+        auto innerType = convertDuckDBType(typeStr.substr(0, leftBracketPos));
+        if (inside.empty()) {
+            return LogicalType::LIST(innerType.copy());
+        }
+        auto numValuesInList = std::strtoll(inside.c_str(), nullptr, 0);
+        return LogicalType::ARRAY(innerType.copy(), numValuesInList);
     } else if (typeStr.starts_with("STRUCT")) {
         return LogicalType::STRUCT(parseStructTypeInfo(typeStr));
     } else if (typeStr.starts_with("UNION")) {
@@ -74,14 +89,6 @@ common::LogicalType DuckDBTypeConverter::convertDuckDBType(std::string typeStr) 
         auto keyValueTypes = StringUtils::splitComma(mapTypeStr);
         return LogicalType::MAP(convertDuckDBType(keyValueTypes[0]),
             convertDuckDBType(keyValueTypes[1]));
-    } else if (typeStr.ends_with(']')) {
-        auto leftBracketPos = typeStr.find('[');
-        auto rightBracketPos = typeStr.find(']');
-        auto numValuesInList = std::strtoll(
-            typeStr.substr(leftBracketPos + 1, rightBracketPos - leftBracketPos - 1).c_str(),
-            nullptr, 0);
-        auto innerType = convertDuckDBType(typeStr.substr(0, leftBracketPos));
-        return LogicalType::ARRAY(innerType.copy(), numValuesInList);
     } else if (typeStr.starts_with("DECIMAL")) {
         auto decimalInfoLeftBracket = typeStr.find('(');
         auto decimalInfoSeparator = typeStr.find(',');
