@@ -32,8 +32,9 @@ void InMemGDSUtils::runParallelCompute(InMemParallelCompute& vc, common::offset_
     const auto task =
         std::make_shared<InMemParallelComputeTask>(maxThreads, vc, sharedState, tableId);
     sharedState->morselDispatcher.init(maxOffset);
-    common::TaskScheduler::Get(*clientContext)
-        ->scheduleTaskAndWaitOrError(task, context, true /* launchNewWorkerThread */);
+    // Algorithms run inside a task, so this thread holds a scheduler slot and works on the task
+    // it waits for rather than starting a thread to take its place.
+    common::TaskScheduler::Get(*clientContext)->scheduleTaskAndWaitOrError(task, context);
 }
 } // namespace algo_extension
 } // namespace lbug
